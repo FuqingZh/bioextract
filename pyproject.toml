@@ -1,0 +1,26 @@
+[project]
+name = "bioextract"
+version = "0.1.0"
+description = "Library-first extraction helpers for bioinformatics resource snapshots."
+authors = [
+    {name = "FuqingZh", email = "fu.qing.zhang.work@gmail.com"},
+]
+dependencies = [
+    "polars>=1.39.3",
+]
+requires-python = ">=3.14"
+readme = "README.md"
+license = {text = "MIT"}
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+
+[tool.pdm]
+distribution = true
+
+[tool.pdm.dev-dependencies]
+dev = [
+    "pytest>=9.0.2",
+]
