@@ -6,6 +6,7 @@ import platform
 import random
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import polars as pl
@@ -62,9 +63,7 @@ def _write_links(
             idx_a = rng.randrange(num_proteins)
             idx_b = rng.randrange(num_proteins)
             score = rng.randint(150, 999)
-            handle.write(
-                f"9606.ENSP{idx_a:011d} 9606.ENSP{idx_b:011d} {score}\n"
-            )
+            handle.write(f"9606.ENSP{idx_a:011d} 9606.ENSP{idx_b:011d} {score}\n")
 
 
 def _create_group_queries(
@@ -117,7 +116,7 @@ def _extract_edges_repeated_single_queries(
     return pl.concat(df_edges_grouped).sort(["GroupId", "StringIdA", "StringIdB"])
 
 
-def _run_case(label: str, fn_case) -> dict[str, object]:
+def _run_case(label: str, fn_case: Callable[[], pl.DataFrame]) -> dict[str, object]:
     time_started = time.perf_counter()
     df_edges = fn_case()
     elapsed_seconds = time.perf_counter() - time_started

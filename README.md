@@ -11,7 +11,7 @@ Library-first extraction helpers for bioinformatics resource snapshots.
 ```python
 from bioextract.stringdb import StringDb, StringResourceLimits
 
-result = (
+selection = (
     StringDb.from_files(
         file_aliases="9606.protein.aliases.v12.0.txt.gz",
         file_links="9606.protein.links.v12.0.txt.gz",
@@ -19,11 +19,15 @@ result = (
     )
     .select_ids(["P04637", "EGFR", "CDK2"])
     .with_score_min(400)
-    .extract_result()
 )
 
-print(result.df_edges)
-print(result.metrics.num_edges)
+df_mapping = selection.extract_string_mapping()
+df_unmapped = selection.extract_unmapped_input_ids()
+df_edges = selection.extract_edges()
+
+print(df_mapping)
+print(df_unmapped)
+print(df_edges)
 ```
 
 ```python
