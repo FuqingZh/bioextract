@@ -18,6 +18,9 @@ from .spec import OmniPathResourceLimits
 from .util import (
     extract_enzsub_frame,
     extract_interactions_frame,
+    has_any_enzsub_modification as has_any_enzsub_modification_in_file,
+    has_any_enzsub_relation as has_any_enzsub_relation_in_file,
+    has_any_interaction_relation as has_any_interaction_relation_in_file,
 )
 
 __all__ = [
@@ -117,6 +120,31 @@ class OmniPathDb:
         if self.snapshot.file_interactions is not None:
             resources.add("interactions")
         return frozenset(resources)
+
+    def has_any_enzsub_relation(self) -> bool:
+        """Report whether the dataset contains any valid enzsub relation."""
+        if self.snapshot.file_enzsub is None:
+            raise ValueError("Cannot inspect OmniPath enzsub without enzsub file")
+        return has_any_enzsub_relation_in_file(file_enzsub=self.snapshot.file_enzsub)
+
+    def has_any_interaction_relation(self) -> bool:
+        """Report whether the dataset contains any valid interaction relation."""
+        if self.snapshot.file_interactions is None:
+            raise ValueError(
+                "Cannot inspect OmniPath interactions without interactions file"
+            )
+        return has_any_interaction_relation_in_file(
+            file_interactions=self.snapshot.file_interactions
+        )
+
+    def has_any_enzsub_modification(self, modification: str) -> bool:
+        """Report whether the dataset contains any valid enzsub relation for a modification."""
+        if self.snapshot.file_enzsub is None:
+            raise ValueError("Cannot inspect OmniPath enzsub without enzsub file")
+        return has_any_enzsub_modification_in_file(
+            file_enzsub=self.snapshot.file_enzsub,
+            modification=modification,
+        )
 
     def select_ids(self, ids: Iterable[str]) -> OmniPathSelection:
         """Create a single-query selection from input IDs."""
