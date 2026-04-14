@@ -168,21 +168,16 @@ def extract_enzsub_frame(
             schema=SCHEMA_GROUP_ENZSUB if cols_group_id else SCHEMA_ENZSUB
         )
 
-    lf_enzsub = scan_enzsub(file_enzsub)
-    validate_required_cols(
-        cols_available=lf_enzsub.collect_schema().names(),
-        cols_required=SCHEMA_ENZSUB_RAW.keys(),
-        context="OmniPath enzsub file",
-    )
-    lf_base = _create_enzsub_base_lazy_frame(lf_enzsub)
+    lf_base = _create_validated_enzsub_base_lazy_frame(file_enzsub)
+    lf_input_ids = df_input_ids.lazy()
 
     lf_source = lf_base.join(
-        df_input_ids.lazy().rename({"InputId": "SourceId"}),
+        lf_input_ids.rename({"InputId": "SourceId"}),
         on="SourceId",
         how="inner",
     )
     lf_target = lf_base.join(
-        df_input_ids.lazy().rename({"InputId": "TargetId"}),
+        lf_input_ids.rename({"InputId": "TargetId"}),
         on="TargetId",
         how="inner",
     )
@@ -207,21 +202,16 @@ def extract_interactions_frame(
             schema=SCHEMA_GROUP_INTERACTIONS if cols_group_id else SCHEMA_INTERACTIONS
         )
 
-    lf_interactions = scan_interactions(file_interactions)
-    validate_required_cols(
-        cols_available=lf_interactions.collect_schema().names(),
-        cols_required=SCHEMA_INTERACTIONS_RAW.keys(),
-        context="OmniPath interactions file",
-    )
-    lf_base = _create_interactions_base_lazy_frame(lf_interactions)
+    lf_base = _create_validated_interactions_base_lazy_frame(file_interactions)
+    lf_input_ids = df_input_ids.lazy()
 
     lf_source = lf_base.join(
-        df_input_ids.lazy().rename({"InputId": "SourceId"}),
+        lf_input_ids.rename({"InputId": "SourceId"}),
         on="SourceId",
         how="inner",
     )
     lf_target = lf_base.join(
-        df_input_ids.lazy().rename({"InputId": "TargetId"}),
+        lf_input_ids.rename({"InputId": "TargetId"}),
         on="TargetId",
         how="inner",
     )
@@ -229,21 +219,24 @@ def extract_interactions_frame(
     return _concat_matched_frames(
         lf_left=lf_source,
         lf_right=lf_target,
-        cols_unique=cols_group + [
+        cols_unique=cols_group
+        + [
             "SourceId",
             "TargetId",
             "IsDirected",
             "IsStimulation",
             "IsInhibition",
         ],
-        cols_sort=cols_group + [
+        cols_sort=cols_group
+        + [
             "SourceId",
             "TargetId",
             "IsDirected",
             "IsStimulation",
             "IsInhibition",
         ],
-        cols_select=cols_group + [
+        cols_select=cols_group
+        + [
             "SourceId",
             "TargetId",
             "IsDirected",
