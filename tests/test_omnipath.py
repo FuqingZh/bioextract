@@ -224,6 +224,62 @@ def test_extract_plain_and_gzip_inputs(tmp_path: Path) -> None:
         assert selection.extract_interactions().height == 1
 
 
+def test_dataset_existence_helpers_smoke(tmp_path: Path) -> None:
+    file_enzsub = tmp_path / "enzsub.tsv"
+    file_interactions = tmp_path / "interactions.tsv"
+    _write_demo_omnipath_files(
+        file_enzsub=file_enzsub,
+        file_interactions=file_interactions,
+    )
+
+    db = OmniPathDb.from_files(
+        file_enzsub=file_enzsub,
+        file_interactions=file_interactions,
+    )
+
+    assert db.has_any_enzsub_relation() is True
+    assert db.has_any_interaction_relation() is True
+    assert db.has_any_enzsub_modification("phosphorylation") is True
+    assert db.has_any_enzsub_modification(" PhOsPhoRYLation ") is True
+    assert db.has_any_enzsub_modification("ubiquitination") is False
+
+
+def test_dataset_existence_helpers_return_false_for_no_valid_rows(tmp_path: Path) -> None:
+    file_enzsub = tmp_path / "enzsub.tsv"
+    file_interactions = tmp_path / "interactions.tsv"
+    _write_text_or_gzip(
+        file_enzsub,
+        "\n".join(
+            [
+                "enzyme\tsubstrate\tresidue_type\tresidue_offset\tmodification",
+                "\tBAD\tS\t136\tphosphorylation",
+            ]
+        )
+        + "\n",
+        should_gzip=False,
+    )
+    _write_text_or_gzip(
+        file_interactions,
+        "\n".join(
+            [
+                "source\ttarget\tis_directed\tis_stimulation\tis_inhibition",
+                "\tERBB2\tTrue\tTrue\tFalse",
+            ]
+        )
+        + "\n",
+        should_gzip=False,
+    )
+
+    db = OmniPathDb.from_files(
+        file_enzsub=file_enzsub,
+        file_interactions=file_interactions,
+    )
+
+    assert db.has_any_enzsub_relation() is False
+    assert db.has_any_interaction_relation() is False
+    assert db.has_any_enzsub_modification("phosphorylation") is False
+
+
 def test_with_resources_constrains_extraction_and_reuses_cache(tmp_path: Path) -> None:
     file_enzsub = tmp_path / "enzsub.tsv"
     file_interactions = tmp_path / "interactions.tsv"
@@ -350,6 +406,16 @@ def test_extract_rejects_missing_required_resource_file(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="without enzsub file"):
         selection_inter_only.with_enzsub().extract_enzsub()
 
+    db_enzsub_only = OmniPathDb.from_files(file_enzsub=file_enzsub)
+    db_inter_only = OmniPathDb.from_files(file_interactions=file_interactions)
+
+    with pytest.raises(ValueError, match="without interactions file"):
+        db_enzsub_only.has_any_interaction_relation()
+    with pytest.raises(ValueError, match="without enzsub file"):
+        db_inter_only.has_any_enzsub_relation()
+    with pytest.raises(ValueError, match="without enzsub file"):
+        db_inter_only.has_any_enzsub_modification("phosphorylation")
+
 
 def test_extract_rejects_missing_required_columns(tmp_path: Path) -> None:
     file_enzsub = tmp_path / "enzsub.tsv"
@@ -374,6 +440,29 @@ def test_extract_rejects_missing_required_columns(tmp_path: Path) -> None:
         selection.extract_enzsub()
     with pytest.raises(ValueError, match="interactions file"):
         selection.extract_interactions()
+
+    db = OmniPathDb.from_files(
+        file_enzsub=file_enzsub,
+        file_interactions=file_interactions,
+    )
+
+    with pytest.raises(ValueError, match="enzsub file"):
+        db.has_any_enzsub_relation()
+    with pytest.raises(ValueError, match="enzsub file"):
+        db.has_any_enzsub_modification("phosphorylation")
+    with pytest.raises(ValueError, match="interactions file"):
+        db.has_any_interaction_relation()
+
+
+def test_dataset_existence_helpers_reject_empty_modification_after_normalization(
+    tmp_path: Path,
+) -> None:
+    file_enzsub = tmp_path / "enzsub.tsv"
+    _write_demo_omnipath_files(file_enzsub=file_enzsub)
+    db = OmniPathDb.from_files(file_enzsub=file_enzsub)
+
+    with pytest.raises(ValueError, match="non-empty string after normalization"):
+        db.has_any_enzsub_modification("   ")
 
 
 def test_extract_unmapped_with_single_selected_resource(tmp_path: Path) -> None:
