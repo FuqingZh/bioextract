@@ -16,8 +16,10 @@ from .constant import (
 )
 
 
-def _normalize_bool_expr(col_name: str, *, alias: str) -> pl.Expr:
-    expr_raw = pl.col(col_name).cast(pl.String).str.strip_chars().str.to_lowercase()
+def _normalize_bool_expr(*col_names: str) -> pl.Expr:
+    expr_raw = (
+        pl_sel.by_name(*col_names).cast(pl.String).str.strip_chars().str.to_lowercase()
+    )
     return (
         pl.when(expr_raw.is_in(["true", "1"]))
         .then(pl.lit(True))
@@ -25,7 +27,7 @@ def _normalize_bool_expr(col_name: str, *, alias: str) -> pl.Expr:
         .then(pl.lit(False))
         .otherwise(None)
         .cast(pl.Boolean)
-        .alias(alias)
+        .name.keep()
     )
 
 
