@@ -2,12 +2,14 @@ from importlib import import_module
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
-__all__ = ["stringdb"]
+__all__ = ["omnipath", "stringdb"]
 
 if TYPE_CHECKING:
+    import bioextract.omnipath as omnipath
     import bioextract.stringdb as stringdb
 
 _ALIAS_MODULES: dict[str, str] = {
+    "omnipath": "bioextract.omnipath",
     "stringdb": "bioextract.stringdb",
 }
 

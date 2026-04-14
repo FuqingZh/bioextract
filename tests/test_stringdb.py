@@ -7,7 +7,8 @@ import polars as pl
 import pytest
 
 from bioextract.stringdb import StringDb, StringResourceLimits
-from bioextract.stringdb.util import create_group_input_frames
+from bioextract.stringdb.constant import SCHEMA_GROUP_INPUT_IDS, SCHEMA_GROUPS
+from bioextract._shared import create_group_input_frames
 
 
 def _write_text_or_gzip(file_out: Path, content: str, *, should_gzip: bool) -> None:
@@ -108,7 +109,9 @@ def test_create_group_input_frames_preserves_group_contract() -> None:
             " B ": [" EGFR ", " ", "EGFR"],
             "A": ["sp|P04637|P53_HUMAN", "TP53", "P04637"],
             "C": [],
-        }
+        },
+        schema_groups=SCHEMA_GROUPS,
+        schema_group_input_ids=SCHEMA_GROUP_INPUT_IDS,
     )
     df_groups = group_input_frames.df_groups
     df_group_input_ids = group_input_frames.df_input_ids
@@ -127,7 +130,11 @@ def test_create_group_input_frames_preserves_group_contract() -> None:
     ]
 
     with pytest.raises(ValueError, match="unique after normalization"):
-        create_group_input_frames({"A": ["TP53"], " A ": ["EGFR"]})
+        create_group_input_frames(
+            {"A": ["TP53"], " A ": ["EGFR"]},
+            schema_groups=SCHEMA_GROUPS,
+            schema_group_input_ids=SCHEMA_GROUP_INPUT_IDS,
+        )
 
 
 def test_stringdb_single_query_smoke(tmp_path: Path) -> None:

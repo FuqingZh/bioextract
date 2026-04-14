@@ -4,31 +4,37 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import polars as pl
+from polars._typing import SchemaDict
 
+from bioextract._shared import (
+    create_group_input_frames,
+    create_input_id_frame,
+    validate_count_limit,
+    validate_file_size,
+    validate_required_cols,
+)
 from bioextract.stringdb.spec import StringResourceLimits
 
 from .constant import (
     DEFAULT_SOURCE_RANK_MAP,
     SCHEMA_ALIASES,
+    SCHEMA_EDGES,
+    SCHEMA_GROUP_EDGES,
+    SCHEMA_GROUP_INPUT_IDS,
     SCHEMA_GROUP_STRING_MAPPING,
+    SCHEMA_GROUPS,
     SCHEMA_LINKS,
     SCHEMA_PROTEIN_MAP,
+    SCHEMA_UNMAPPED,
     StringDbVersion,
 )
-
 from .util import (
-    create_group_input_frames,
-    create_input_id_frame,
-    extract_edges_frame,
-    extract_group_edges_frame,
-    extract_group_string_mapping_frame,
-    extract_string_mapping_frame,
+    create_edges_lazy_frame,
+    create_string_mapping_lazy_frame,
     infer_alias_id_col,
     scan_aliases,
+    scan_links,
     validate_alias_required_cols,
-    validate_file_size,
-    validate_group_count,
-    validate_input_id_count,
 )
 
 __all__ = [
@@ -197,10 +203,11 @@ class StringDb:
             ValueError: If the normalized input-ID count exceeds the configured
                 dataset limits.
         """
-        df_input_ids = create_input_id_frame(ids)
-        validate_input_id_count(
-            num_input_ids=df_input_ids.height,
-            limits=self.limits,
+        df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
+        validate_count_limit(
+            count=df_input_ids.height,
+            limit_max=self.limits.num_input_ids_max,
+            label="Normalized input ID count",
         )
         return StringSelection(
             dataset=self,
@@ -235,14 +242,20 @@ class StringDb:
                 exceeds the configured limit, or if the total normalized
                 input-ID count exceeds the configured limit.
         """
-        grp_in_frames = create_group_input_frames(group_to_ids)
-        validate_group_count(
-            num_groups=grp_in_frames.df_groups.height,
-            limits=self.limits,
+        grp_in_frames = create_group_input_frames(
+            group_to_ids,
+            schema_groups=SCHEMA_GROUPS,
+            schema_group_input_ids=SCHEMA_GROUP_INPUT_IDS,
         )
-        validate_input_id_count(
-            num_input_ids=grp_in_frames.df_input_ids.height,
-            limits=self.limits,
+        validate_count_limit(
+            count=grp_in_frames.df_groups.height,
+            limit_max=self.limits.num_groups_max,
+            label="Group count",
+        )
+        validate_count_limit(
+            count=grp_in_frames.df_input_ids.height,
+            limit_max=self.limits.num_input_ids_max,
+            label="Normalized input ID count",
         )
         return StringSelection(
             dataset=self,
@@ -309,6 +322,26 @@ class StringSelection:
         """
         return self._df_groups is not None
 
+    @property
+    def _col_group_id(self) -> tuple[str, ...]:
+        """Return the name of the group ID column when in grouped mode.
+
+        Returns:
+            A singleton tuple containing the name of the group ID column when
+            `is_grouped` is `True`; otherwise an empty tuple.
+        """
+        return ("GroupId",) if self.is_grouped else ()
+
+    @property
+    def _schema_string_map_result(self) -> SchemaDict:
+        """Return the expected schema for the mapping table output."""
+        return SCHEMA_GROUP_STRING_MAPPING if self.is_grouped else SCHEMA_PROTEIN_MAP
+
+    @property
+    def _schema_edges_result(self) -> SchemaDict:
+        """Return the expected schema for the edges table output."""
+        return SCHEMA_GROUP_EDGES if self.is_grouped else SCHEMA_EDGES
+
     def with_score_min(self, thr_score_min: int) -> StringSelection:
         """Create a new selection with a different minimum STRING score.
 
@@ -353,33 +386,28 @@ class StringSelection:
             return self._df_protein_map
 
         if self._df_input_ids.height == 0:
-            self._df_protein_map = pl.DataFrame(
-                schema=(
-                    SCHEMA_GROUP_STRING_MAPPING
-                    if self.is_grouped
-                    else SCHEMA_PROTEIN_MAP
-                )
-            )
+            self._df_protein_map = pl.DataFrame(schema=self._schema_string_map_result)
             return self._df_protein_map
 
-        if self.is_grouped:
-            self._df_protein_map = extract_group_string_mapping_frame(
-                file_aliases=self.dataset.alias_schema.file_alias,
-                df_input_ids=self._df_input_ids,
+        lf_aliases = scan_aliases(
+            self.dataset.alias_schema.file_alias, version=self.dataset.snapshot.version
+        )
+        lf_input_ids = self._df_input_ids.lazy()
+        col_group_id = list(self._col_group_id)
+        self._df_protein_map = (
+            create_string_mapping_lazy_frame(
+                lf_aliases=lf_aliases,
+                lf_input_ids=lf_input_ids,
                 source_rank_map=self.dataset.source_rank_map,
                 col_string_id_aliases=self.dataset.alias_schema.col_string_id,
                 has_source_aliases=self.dataset.alias_schema.has_source,
-                version=self.dataset.snapshot.version,
+                cols_partition=col_group_id + ["InputId", "StringId"],
+                cols_sort_prefix=col_group_id + ["InputId", "StringId"],
+                cols_select_out=col_group_id + ["InputId", "StringId", "MapSource"],
             )
-        else:
-            self._df_protein_map = extract_string_mapping_frame(
-                file_aliases=self.dataset.alias_schema.file_alias,
-                df_input_ids=self._df_input_ids,
-                source_rank_map=self.dataset.source_rank_map,
-                col_string_id_aliases=self.dataset.alias_schema.col_string_id,
-                has_source_aliases=self.dataset.alias_schema.has_source,
-                version=self.dataset.snapshot.version,
-            )
+            .sort(col_group_id + ["InputId", "StringId", "MapSource"])
+            .collect()
+        )
 
         return self._df_protein_map
 
@@ -396,10 +424,7 @@ class StringSelection:
             through the aliases table.
         """
         if self._df_unmapped is None:
-            cols_index = ["InputId"]
-            if self.is_grouped:
-                cols_index = ["GroupId"] + cols_index
-
+            cols_index = list(self._col_group_id) + ["InputId"]
             df_mapped_input_ids = self.extract_string_mapping().select(cols_index)
             self._df_unmapped = (
                 self._df_input_ids.join(
@@ -428,32 +453,49 @@ class StringSelection:
         """
         if self.dataset.snapshot.file_links is None:
             raise ValueError("Cannot extract STRING edges without links file")
-        if self._df_edges is None:
-            if self.is_grouped:
-                self._df_edges = extract_group_edges_frame(
-                    file_links=self.dataset.snapshot.file_links,
-                    df_string_ids=self._extract_string_ids(),
-                    thr_score_min=self.thr_score_min,
-                    version=self.dataset.snapshot.version,
-                )
-            else:
-                self._df_edges = extract_edges_frame(
-                    file_links=self.dataset.snapshot.file_links,
-                    df_string_ids=self._extract_string_ids(),
-                    thr_score_min=self.thr_score_min,
-                    version=self.dataset.snapshot.version,
-                )
+        if self._df_edges is not None:
+            return self._df_edges
+
+        col_group_id = list(self._col_group_id)
+        df_string_ids = self._extract_string_ids()
+        if df_string_ids.height == 0:
+            self._df_edges = pl.DataFrame(schema=self._schema_edges_result)
+            return self._df_edges
+        lf_string_ids = df_string_ids.lazy()
+
+        version_link = self.dataset.snapshot.version
+        lf_links = scan_links(self.dataset.snapshot.file_links, version=version_link)
+        validate_required_cols(
+            cols_available=lf_links.collect_schema().names(),
+            cols_required=SCHEMA_LINKS[version_link].keys(),
+            context=f"STRING links file for version {version_link}",
+        )
+        self._df_edges = (
+            create_edges_lazy_frame(
+                lf_links=lf_links,
+                lf_string_ids_a=lf_string_ids.rename({"StringId": "StringIdA"}),
+                lf_string_ids_b=lf_string_ids.rename({"StringId": "StringIdB"}),
+                thr_score_min=self.thr_score_min,
+                cols_join_left_a="StringIdA",
+                cols_join_right_a="StringIdA",
+                cols_join_left_b=col_group_id + ["StringIdB"],
+                cols_join_right_b=col_group_id + ["StringIdB"],
+                cols_partition=col_group_id + ["_Lo", "_Hi"],
+                cols_select_out=col_group_id + ["StringIdA", "StringIdB", "Score"],
+            )
+            .sort(col_group_id + ["StringIdA", "StringIdB"])
+            .collect()
+        )
+
         return self._df_edges
 
     def _extract_string_ids(self) -> pl.DataFrame:
-        cols_select = ["StringId"]
-        if self.is_grouped:
-            cols_select = ["GroupId"] + cols_select
+        cols_select = list(self._col_group_id) + ["StringId"]
         if self._df_string_ids is None:
             self._df_string_ids = (
                 self.extract_string_mapping()
                 .select(cols_select)
-                .unique(cols_select)
+                .unique()
                 .sort(cols_select)
             )
         return self._df_string_ids

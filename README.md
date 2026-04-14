@@ -49,7 +49,52 @@ df_group_edges = (
 )
 ```
 
+## OmniPath
+
+```python
+from bioextract.omnipath import OmniPathDb
+
+selection = (
+    OmniPathDb.from_files(
+        file_enzsub="enzsub.tsv.gz",
+        file_interactions="interactions.tsv.gz",
+    )
+    .select_ids(["P31749", "AKT1", "BAD"])
+    .with_enzsub()
+)
+
+df_enzsub = selection.extract_enzsub()
+df_unmapped = selection.extract_unmapped_input_ids()
+
+print(df_enzsub)
+print(df_unmapped)
+```
+
+```python
+from bioextract.omnipath import OmniPathDb
+
+df_group_interactions = (
+    OmniPathDb.from_files(file_interactions="interactions.tsv.gz")
+    .select_groups(
+        {
+            "TumorA": ["AKT1", "MTOR"],
+            "TumorB": ["EGFR", "ERBB2"],
+        }
+    )
+    .with_interactions()
+    .extract_interactions()
+)
+```
+
 ## Development
 
 - `PYTHONPATH=src pytest`
 - `PYTHONPATH=src python scripts/benchmark_stringdb.py`
+
+## Release
+
+- GitHub Actions now provides:
+  - `.github/workflows/py-ci.yml` for test-and-build checks on push and pull request
+  - `.github/workflows/publish.yml` for tag-triggered PyPI publishing
+- Release tags must be canonical PEP 440 versions such as `0.1.1`
+- The publish workflow expects PyPI trusted publishing to be configured for the `pypi` environment

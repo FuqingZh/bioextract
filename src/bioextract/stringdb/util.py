@@ -1,30 +1,18 @@
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 
 import polars as pl
 import polars.selectors as pl_sel
 
-from bioextract.stringdb.spec import GroupInputFrames, StringResourceLimits
+from bioextract._shared import (
+    RE_UNIPROT_PIPE,
+)
 
 from .constant import (
     SCHEMA_ALIASES,
-    SCHEMA_EDGES,
-    SCHEMA_GROUP_STRING_MAPPING,
-    SCHEMA_GROUPS,
     SCHEMA_LINKS,
-    SCHEMA_GROUP_EDGES,
-    SCHEMA_GROUP_INPUT_IDS,
-    RE_UNIPROT_PIPE,
     SCHEMA_PROTEIN_MAP,
-    SCHEMA_UNMAPPED,
 )
-
-
-def _normalize_input_id(value: str) -> str:
-    value = value.strip()
-    if (match_pipe := RE_UNIPROT_PIPE.match(value)) is not None:
-        return match_pipe.group(1).strip()
-    return value
 
 
 def _normalize_input_id_expr(col_name: str) -> pl.Expr:
@@ -57,62 +45,6 @@ def scan_links(file_links: Path, version: str) -> pl.LazyFrame:
     )
 
 
-def validate_file_size(
-    *,
-    file_path: Path,
-    size_max: int | None,
-    label: str,
-) -> None:
-    if size_max is None:
-        return
-    file_size = file_path.stat().st_size
-    if file_size > size_max:
-        raise ValueError(
-            f"{label} exceeds configured size limit: "
-            f"path={file_path}, size_bytes={file_size}, limit_bytes={size_max}"
-        )
-
-
-def validate_input_id_count(
-    *,
-    num_input_ids: int,
-    limits: StringResourceLimits,
-) -> None:
-    if limits.num_input_ids_max is None:
-        return
-    if num_input_ids > limits.num_input_ids_max:
-        raise ValueError(
-            "Normalized input ID count exceeds configured limit: "
-            f"count={num_input_ids}, limit={limits.num_input_ids_max}"
-        )
-
-
-def validate_group_count(
-    *,
-    num_groups: int,
-    limits: StringResourceLimits,
-) -> None:
-    if limits.num_groups_max is None:
-        return
-    if num_groups > limits.num_groups_max:
-        raise ValueError(
-            f"Group count exceeds configured limit: count={num_groups}, "
-            f"limit={limits.num_groups_max}"
-        )
-
-
-def validate_group_ids(group_ids: list[str]) -> None:
-    group_ids_seen: set[str] = set()
-    for _id in group_ids:
-        if not _id:
-            raise ValueError("GroupId must be a non-empty string after normalization")
-        if _id in group_ids_seen:
-            raise ValueError(
-                f"GroupId values must be unique after normalization: {_id!r}"
-            )
-        group_ids_seen.add(_id)
-
-
 def validate_alias_required_cols(cols_available: list[str], version: str) -> None:
     cols_expected = set(SCHEMA_ALIASES[version])
     if "alias" not in cols_expected or "alias" not in cols_available:
@@ -136,75 +68,6 @@ def infer_alias_id_col(cols_available: list[str], *, version: str) -> str:
         )
 
     return col_string_id
-
-
-def validate_links_columns(cols_available: list[str], *, version: str) -> None:
-    cols_required = set(SCHEMA_LINKS[version])
-    if not cols_required.issubset(cols_available):
-        raise ValueError(
-            f"STRING links file for version {version} must contain columns "
-            f"{sorted(cols_required)}; available={cols_available}"
-        )
-
-
-def create_input_id_frame(input_ids: Iterable[str]) -> pl.DataFrame:
-    ids_normalized: list[str] = []
-    for _id in input_ids:
-        if input_id_normalized := _normalize_input_id(str(_id)):
-            ids_normalized.append(input_id_normalized)
-
-    if not ids_normalized:
-        return pl.DataFrame(schema=SCHEMA_UNMAPPED)
-
-    return (
-        pl.DataFrame({"InputId": ids_normalized}, schema=SCHEMA_UNMAPPED)
-        .unique(subset=["InputId"])
-        .sort("InputId")
-    )
-
-
-def create_group_input_frames(
-    group_to_ids: Mapping[str, Iterable[str]],
-) -> GroupInputFrames:
-    group_ids_normalized: list[str] = []
-    group_ids_col: list[str] = []
-    input_ids_col: list[str] = []
-
-    for _grp_id, _ids in group_to_ids.items():
-        group_id = str(_grp_id).strip()
-        group_ids_normalized.append(group_id)
-        for _id in _ids:
-            if input_id_normalized := _normalize_input_id(str(_id)):
-                group_ids_col.append(group_id)
-                input_ids_col.append(input_id_normalized)
-
-    validate_group_ids(group_ids_normalized)
-
-    if group_ids_normalized:
-        df_groups = pl.DataFrame(
-            {"GroupId": group_ids_normalized}, schema=SCHEMA_GROUPS
-        ).sort("GroupId")
-    else:
-        df_groups = pl.DataFrame(schema=SCHEMA_GROUPS)
-
-    if not input_ids_col:
-        return GroupInputFrames(
-            df_groups=df_groups,
-            df_input_ids=pl.DataFrame(schema=SCHEMA_GROUP_INPUT_IDS),
-        )
-
-    df_group_input_ids = (
-        pl.DataFrame(
-            {
-                "GroupId": group_ids_col,
-                "InputId": input_ids_col,
-            },
-            schema=SCHEMA_GROUP_INPUT_IDS,
-        )
-        .unique()
-        .sort("GroupId", "InputId")
-    )
-    return GroupInputFrames(df_groups=df_groups, df_input_ids=df_group_input_ids)
 
 
 def create_unknown_source_rank(base: int, add: int = 100) -> int:
@@ -298,36 +161,6 @@ def extract_string_mapping_frame(
     )
 
 
-def extract_group_string_mapping_frame(
-    *,
-    file_aliases: Path,
-    df_input_ids: pl.DataFrame,
-    source_rank_map: Mapping[str, int],
-    col_string_id_aliases: str,
-    has_source_aliases: bool,
-    version: str = "v12.0",
-) -> pl.DataFrame:
-    if df_input_ids.height == 0:
-        return pl.DataFrame(schema=SCHEMA_GROUP_STRING_MAPPING)
-
-    lf_aliases = scan_aliases(file_aliases, version=version)
-    lf_input_ids = df_input_ids.lazy()
-    return (
-        create_string_mapping_lazy_frame(
-            lf_aliases=lf_aliases,
-            lf_input_ids=lf_input_ids,
-            source_rank_map=source_rank_map,
-            col_string_id_aliases=col_string_id_aliases,
-            has_source_aliases=has_source_aliases,
-            cols_partition=["GroupId", "InputId", "StringId"],
-            cols_sort_prefix=["GroupId", "InputId", "StringId"],
-            cols_select_out=["GroupId", "InputId", "StringId", "MapSource"],
-        )
-        .sort(["GroupId", "InputId", "StringId", "MapSource"])
-        .collect()
-    )
-
-
 def create_edges_lazy_frame(
     *,
     lf_links: pl.LazyFrame,
@@ -380,66 +213,3 @@ def create_edges_lazy_frame(
         .rename({"_Lo": "StringIdA", "_Hi": "StringIdB"})
         .select(cols_select_out)
     )
-
-
-def extract_edges_frame(
-    *,
-    file_links: Path,
-    df_string_ids: pl.DataFrame,
-    thr_score_min: int,
-    version: str = "v12.0",
-) -> pl.DataFrame:
-    if df_string_ids.height == 0:
-        return pl.DataFrame(schema=SCHEMA_EDGES)
-
-    lf_links = scan_links(file_links, version=version)
-    cols_available = lf_links.collect_schema().names()
-    validate_links_columns(cols_available, version=version)
-    return (
-        create_edges_lazy_frame(
-            lf_links=lf_links,
-            lf_string_ids_a=df_string_ids.lazy().rename({"StringId": "StringIdA"}),
-            lf_string_ids_b=df_string_ids.lazy().rename({"StringId": "StringIdB"}),
-            thr_score_min=thr_score_min,
-            cols_join_left_a="StringIdA",
-            cols_join_right_a="StringIdA",
-            cols_join_left_b="StringIdB",
-            cols_join_right_b="StringIdB",
-            cols_partition=["_Lo", "_Hi"],
-            cols_select_out=["StringIdA", "StringIdB", "Score"],
-        )
-        .sort(["StringIdA", "StringIdB"])
-        .collect()
-    )
-
-
-def extract_group_edges_frame(
-    *,
-    file_links: Path,
-    df_string_ids: pl.DataFrame,
-    thr_score_min: int,
-    version: str = "v12.0",
-) -> pl.DataFrame:
-    if df_string_ids.height == 0:
-        return pl.DataFrame(schema=SCHEMA_GROUP_EDGES)
-
-    lf_links = scan_links(file_links, version=version)
-    cols_available = lf_links.collect_schema().names()
-    validate_links_columns(cols_available, version=version)
-    return (
-        create_edges_lazy_frame(
-            lf_links=lf_links,
-            lf_string_ids_a=df_string_ids.lazy().rename({"StringId": "StringIdA"}),
-            lf_string_ids_b=df_string_ids.lazy().rename({"StringId": "StringIdB"}),
-            thr_score_min=thr_score_min,
-            cols_join_left_a="StringIdA",
-            cols_join_right_a="StringIdA",
-            cols_join_left_b=["GroupId", "StringIdB"],
-            cols_join_right_b=["GroupId", "StringIdB"],
-            cols_partition=["GroupId", "_Lo", "_Hi"],
-            cols_select_out=["GroupId", "StringIdA", "StringIdB", "Score"],
-        )
-        .sort(["GroupId", "StringIdA", "StringIdB"])
-        .collect()
-    )
-
