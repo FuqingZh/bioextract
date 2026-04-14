@@ -7,6 +7,7 @@ from bioextract._shared import validate_required_cols
 
 from .constant import (
     COLS_RENAMED_ENZSUB,
+    COLS_RENAMED_INTERACTIONS,
     SCHEMA_ENZSUB,
     SCHEMA_ENZSUB_RAW,
     SCHEMA_GROUP_ENZSUB,
@@ -48,6 +49,7 @@ def scan_interactions(file_interactions: Path) -> pl.LazyFrame:
         null_values=["", "-"],
     )
 
+
 def _create_enzsub_base_lazy_frame(lf_enzsub: pl.LazyFrame) -> pl.LazyFrame:
     return (
         lf_enzsub.select(
@@ -73,22 +75,68 @@ def _create_interactions_base_lazy_frame(lf_interactions: pl.LazyFrame) -> pl.La
     return (
         lf_interactions.select(
             [
-                pl.col("source")
+                pl_sel.by_name("source", "target")
                 .cast(pl.String)
                 .str.strip_chars()
                 .replace("", None)
-                .alias("SourceId"),
-                pl.col("target")
-                .cast(pl.String)
-                .str.strip_chars()
-                .replace("", None)
-                .alias("TargetId"),
-                _normalize_bool_expr("is_directed", alias="IsDirected"),
-                _normalize_bool_expr("is_stimulation", alias="IsStimulation"),
-                _normalize_bool_expr("is_inhibition", alias="IsInhibition"),
+                .name.keep(),
+                _normalize_bool_expr(
+                    "is_directed",
+                    "is_stimulation",
+                    "is_inhibition",
+                ),
             ]
         )
+        .rename(COLS_RENAMED_INTERACTIONS)
         .drop_nulls(["SourceId", "TargetId"])
+    )
+
+
+def _create_validated_enzsub_base_lazy_frame(file_enzsub: Path) -> pl.LazyFrame:
+    lf_enzsub = scan_enzsub(file_enzsub)
+    validate_required_cols(
+        cols_available=lf_enzsub.collect_schema().names(),
+        cols_required=SCHEMA_ENZSUB_RAW.keys(),
+        context="OmniPath enzsub file",
+    )
+    return _create_enzsub_base_lazy_frame(lf_enzsub)
+
+
+def _create_validated_interactions_base_lazy_frame(
+    file_interactions: Path,
+) -> pl.LazyFrame:
+    lf_interactions = scan_interactions(file_interactions)
+    validate_required_cols(
+        cols_available=lf_interactions.collect_schema().names(),
+        cols_required=SCHEMA_INTERACTIONS_RAW.keys(),
+        context="OmniPath interactions file",
+    )
+    return _create_interactions_base_lazy_frame(lf_interactions)
+
+
+def _has_any_rows(lf: pl.LazyFrame) -> bool:
+    return lf.limit(1).collect().height > 0
+
+
+def has_any_enzsub_relation(*, file_enzsub: Path) -> bool:
+    return _has_any_rows(_create_validated_enzsub_base_lazy_frame(file_enzsub))
+
+
+def has_any_interaction_relation(*, file_interactions: Path) -> bool:
+    return _has_any_rows(
+        _create_validated_interactions_base_lazy_frame(file_interactions)
+    )
+
+
+def has_any_enzsub_modification(*, file_enzsub: Path, modification: str) -> bool:
+    modification_normalized = str(modification).strip().lower()
+    if not modification_normalized:
+        raise ValueError("Modification must be a non-empty string after normalization")
+
+    return _has_any_rows(
+        _create_validated_enzsub_base_lazy_frame(file_enzsub).filter(
+            pl.col("Modification").eq(modification_normalized)
+        )
     )
 
 
