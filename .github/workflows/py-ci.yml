@@ -20,11 +20,11 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: "3.13"
           cache: pip
 
       - name: Install tooling
-        run: python -m pip install -U pip pdm build twine
+        run: python -m pip install -U pip uv pdm build twine
 
       - name: Sync dependencies
         run: pdm sync -G dev --no-self
