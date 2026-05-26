@@ -92,9 +92,7 @@ def test_extract_mapping_and_unmapped_single_selection(tmp_path: Path) -> None:
             "ReactomeUrl": "https://reactome.org/PathwayBrowser/#/R-HSA-6798695",
         },
     ]
-    assert selection.extract_unmapped_input_ids().to_dicts() == [
-        {"InputId": "MISSING"}
-    ]
+    assert selection.extract_unmapped_input_ids().to_dicts() == [{"InputId": "MISSING"}]
 
 
 def test_grouped_selection_preserves_groups(tmp_path: Path) -> None:
@@ -232,9 +230,7 @@ def test_mapping_only_snapshot_supports_annotation_and_term2gene(
 
 def test_pathway_only_snapshot_supports_term2name(tmp_path: Path) -> None:
     _, file_pathways, _ = write_reactome_fixture(tmp_path)
-    db = ReactomeDb.from_files(file_pathways=file_pathways).with_species(
-        "Homo sapiens"
-    )
+    db = ReactomeDb.from_files(file_pathways=file_pathways).with_species("Homo sapiens")
 
     assert db.extract_term2name().height == 3
     assert set(db.build_tidy().frames) == {"pathway", "term2name"}

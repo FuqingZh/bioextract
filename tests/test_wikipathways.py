@@ -86,9 +86,7 @@ def test_single_and_grouped_selection(tmp_path: Path) -> None:
             "Url": "https://www.wikipathways.org/instance/WP106",
         },
     ]
-    assert selection.extract_unmapped_input_ids().to_dicts() == [
-        {"InputId": "MISSING"}
-    ]
+    assert selection.extract_unmapped_input_ids().to_dicts() == [{"InputId": "MISSING"}]
 
     grouped = db.select_groups({"A": ["2687"], "B": ["2687", "MISSING"]})
     assert grouped.extract_mapping().columns[0] == "GroupId"

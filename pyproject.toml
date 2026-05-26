@@ -19,7 +19,20 @@ build-backend = "pdm.backend"
 [tool.pdm]
 distribution = true
 
-[tool.pdm.dev-dependencies]
+
+[dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "ruff>=0.15.14",
 ]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.pdm.scripts]
+format = "ruff format ."
+lint = "ruff check ."
+lint-fix = "ruff check --fix ."
+test = {cmd = "pytest", env = {PYTHONPATH = "src"}}
+precommit = {composite = ["format", "lint-fix", "test"]}

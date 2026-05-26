@@ -71,7 +71,9 @@ class KeggDb:
         """
         file_brite_json = Path(file_brite_json)
         if not file_brite_json.exists():
-            raise FileNotFoundError(f"KEGG BRITE JSON file not found: {file_brite_json}")
+            raise FileNotFoundError(
+                f"KEGG BRITE JSON file not found: {file_brite_json}"
+            )
 
         limits_resolved = KeggResourceLimits() if limits is None else limits
         validate_file_size(

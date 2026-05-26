@@ -244,7 +244,9 @@ def test_dataset_existence_helpers_smoke(tmp_path: Path) -> None:
     assert db.has_any_enzsub_modification("ubiquitination") is False
 
 
-def test_dataset_existence_helpers_return_false_for_no_valid_rows(tmp_path: Path) -> None:
+def test_dataset_existence_helpers_return_false_for_no_valid_rows(
+    tmp_path: Path,
+) -> None:
     file_enzsub = tmp_path / "enzsub.tsv"
     file_interactions = tmp_path / "interactions.tsv"
     _write_text_or_gzip(
@@ -482,9 +484,7 @@ def test_extract_unmapped_with_single_selected_resource(tmp_path: Path) -> None:
         .with_enzsub()
     )
 
-    assert selection.extract_unmapped_input_ids().to_dicts() == [
-        {"InputId": "ERBB2"}
-    ]
+    assert selection.extract_unmapped_input_ids().to_dicts() == [{"InputId": "ERBB2"}]
 
 
 def test_selection_exposes_group_mode(tmp_path: Path) -> None:

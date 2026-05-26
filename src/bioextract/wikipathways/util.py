@@ -22,7 +22,9 @@ def read_gmt_frames(file_gmt: Path) -> dict[str, pl.DataFrame]:
                     f"WikiPathways GMT line must contain at least two columns: "
                     f"path={file_gmt}, line={line_number}"
                 )
-            pathway = parse_pathway_header(fields[0], file_gmt=file_gmt, line_number=line_number)
+            pathway = parse_pathway_header(
+                fields[0], file_gmt=file_gmt, line_number=line_number
+            )
             url = fields[1].strip()
             gene_ids = [gene_id.strip() for gene_id in fields[2:] if gene_id.strip()]
             gene_ids_unique = sorted(set(gene_ids))

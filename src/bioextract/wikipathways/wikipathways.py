@@ -70,7 +70,9 @@ class WikiPathwaysDb:
     limits: WikiPathwaysResourceLimits = field(
         default_factory=WikiPathwaysResourceLimits
     )
-    _frames: dict[str, pl.DataFrame] | None = field(default=None, init=False, repr=False)
+    _frames: dict[str, pl.DataFrame] | None = field(
+        default=None, init=False, repr=False
+    )
 
     DEFAULT_RESOURCE_LIMITS = WikiPathwaysResourceLimits()
 
@@ -111,7 +113,9 @@ class WikiPathwaysDb:
         )
         species_normalized = None if species is None else str(species).strip()
         if species is not None and not species_normalized:
-            raise ValueError("WikiPathways species must be non-empty after normalization")
+            raise ValueError(
+                "WikiPathways species must be non-empty after normalization"
+            )
         return cls(
             snapshot=_WikiPathwaysSnapshot(
                 file_gmt=file_gmt,

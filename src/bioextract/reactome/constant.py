@@ -17,15 +17,9 @@ COLS_MAPPING_RAW = [
 COLS_PATHWAY_RAW = ["ReactomePathwayId", "PathwayName", "Species"]
 COLS_RELATION_RAW = ["ParentReactomePathwayId", "ChildReactomePathwayId"]
 
-SCHEMA_MAPPING_RAW: SchemaDict = {
-    col: pl.String for col in COLS_MAPPING_RAW
-}
-SCHEMA_PATHWAY_RAW: SchemaDict = {
-    col: pl.String for col in COLS_PATHWAY_RAW
-}
-SCHEMA_RELATION_RAW: SchemaDict = {
-    col: pl.String for col in COLS_RELATION_RAW
-}
+SCHEMA_MAPPING_RAW: SchemaDict = {col: pl.String for col in COLS_MAPPING_RAW}
+SCHEMA_PATHWAY_RAW: SchemaDict = {col: pl.String for col in COLS_PATHWAY_RAW}
+SCHEMA_RELATION_RAW: SchemaDict = {col: pl.String for col in COLS_RELATION_RAW}
 
 SCHEMA_GROUPS: SchemaDict = {"GroupId": pl.String}
 SCHEMA_UNMAPPED: SchemaDict = {"InputId": pl.String}
