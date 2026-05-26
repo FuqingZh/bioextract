@@ -86,6 +86,39 @@ df_group_interactions = (
 )
 ```
 
+## GO
+
+```python
+from bioextract.go import GoDb
+
+tidy = GoDb.from_obo("go-basic.obo").build_tidy()
+
+df_term = tidy.frames["term"]
+df_edge = tidy.frames["edge"]
+df_ancestor = tidy.frames["ancestor_all"]
+
+report = tidy.write("out/go-basic")
+```
+
+`GoDb.from_obo(...).write_tidy("out/go-basic")` is also available as a
+convenience wrapper when only persisted parquet outputs are needed.
+Pass `should_write_manifest=True` to also write `manifest.json`.
+
+## KEGG
+
+```python
+from bioextract.kegg import KeggDb
+
+tidy = KeggDb.from_brite_json("br08901.json").build_tidy()
+
+df_pathway = tidy.frames["pathway"]
+
+report = tidy.write("out/br08901")
+```
+
+The GO and KEGG tidy writers emit flat parquet files by default. See
+`docs/architecture/go-kegg-tidy.md`.
+
 ## Development
 
 - `PYTHONPATH=src pytest`
