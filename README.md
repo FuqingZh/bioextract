@@ -96,6 +96,7 @@ tidy = GoDb.from_obo("go-basic.obo").build_tidy()
 df_term = tidy.frames["term"]
 df_edge = tidy.frames["edge"]
 df_ancestor = tidy.frames["ancestor_all"]
+df_subcell = GoDb.from_obo("go-basic.obo").extract_subcell()
 
 report = tidy.write("out/go-basic")
 ```
@@ -103,6 +104,8 @@ report = tidy.write("out/go-basic")
 `GoDb.from_obo(...).write_tidy("out/go-basic")` is also available as a
 convenience wrapper when only persisted parquet outputs are needed.
 Pass `should_write_manifest=True` to also write `manifest.json`.
+`GoDb.from_obo(...).write_subcell("out/subcell.parquet")` writes non-obsolete
+cellular component terms as a subcellular-location table.
 
 ## KEGG
 
@@ -118,6 +121,56 @@ report = tidy.write("out/br08901")
 
 The GO and KEGG tidy writers emit flat parquet files by default. See
 `docs/architecture/go-kegg-tidy.md`.
+
+## Reactome
+
+```python
+from bioextract.reactome import ReactomeDb
+
+db = ReactomeDb.from_files(
+    file_uniprot2reactome="UniProt2Reactome.txt",
+    file_pathways="ReactomePathways.txt",
+    file_relations="ReactomePathwaysRelation.txt",
+)
+
+selection = db.with_species("Homo sapiens").select_ids(["P04637", "Q9Y243"])
+
+df_mapping = selection.extract_mapping()
+df_unmapped = selection.extract_unmapped_input_ids()
+df_term2gene = db.with_species("Homo sapiens").extract_term2gene()
+df_term2name = db.with_species("Homo sapiens").extract_term2name()
+```
+
+`ReactomeDb` reads local Reactome mapping files and emits annotation tables plus
+standard enrichment inputs. The three raw files are composable: mapping-only
+snapshots can still emit `mapping` and `term2gene`, pathways-only snapshots can
+emit `pathway` and `term2name`, and relation extraction uses the relation file.
+It does not call Reactome web services or calculate enrichment p-values.
+
+## WikiPathways
+
+```python
+from bioextract.wikipathways import WikiPathwaysDb
+
+db = WikiPathwaysDb.from_gmt(
+    "wikipathways-20260510-gmt-Homo_sapiens.gmt",
+    species="Homo sapiens",
+)
+
+df_pathway = db.extract_pathway()
+df_term2gene = db.extract_term2gene()
+df_term2name = db.extract_term2name()
+
+selection = db.select_ids(["2687", "435", "MISSING"])
+df_mapping = selection.extract_mapping()
+df_unmapped = selection.extract_unmapped_input_ids()
+
+report = db.write_tidy("out/wikipathways-hsa", should_write_manifest=True)
+```
+
+`WikiPathwaysDb` reads local WikiPathways GMT files. GMT gene content is treated
+as NCBI Entrez Gene IDs; the library does not perform identifier conversion or
+calculate enrichment p-values.
 
 ## Development
 
