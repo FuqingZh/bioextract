@@ -34,7 +34,7 @@ class TidyWriteReport:
 @dataclass(slots=True)
 class TidyDataset:
     frames: Mapping[str, pl.DataFrame]
-    source: TidySource
+    source: TidySource | tuple[TidySource, ...]
     schema_version: str
     build_id_prefix: str
     assets: tuple[TidyAsset, ...]
@@ -89,14 +89,21 @@ class TidyDataset:
             "generated_at": timestamp.isoformat().replace("+00:00", "Z"),
             "sources": [
                 {
-                    "path": self.source.path.as_posix(),
-                    "sha256": calculate_file_sha256(self.source.path),
-                    "bytes": self.source.path.stat().st_size,
-                    "media_type": self.source.media_type,
+                    "path": source.path.as_posix(),
+                    "sha256": calculate_file_sha256(source.path),
+                    "bytes": source.path.stat().st_size,
+                    "media_type": source.media_type,
                 }
+                for source in self._sources
             ],
             "assets": assets,
         }
+
+    @property
+    def _sources(self) -> tuple[TidySource, ...]:
+        if isinstance(self.source, TidySource):
+            return (self.source,)
+        return self.source
 
 
 def calculate_file_sha256(file_path: Path) -> str:

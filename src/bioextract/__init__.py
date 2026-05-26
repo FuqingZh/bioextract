@@ -2,18 +2,20 @@ from importlib import import_module
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
-__all__ = ["go", "kegg", "omnipath", "stringdb"]
+__all__ = ["go", "kegg", "omnipath", "reactome", "stringdb"]
 
 if TYPE_CHECKING:
     import bioextract.go as go
     import bioextract.kegg as kegg
     import bioextract.omnipath as omnipath
+    import bioextract.reactome as reactome
     import bioextract.stringdb as stringdb
 
 _ALIAS_MODULES: dict[str, str] = {
     "go": "bioextract.go",
     "kegg": "bioextract.kegg",
     "omnipath": "bioextract.omnipath",
+    "reactome": "bioextract.reactome",
     "stringdb": "bioextract.stringdb",
 }
 
