@@ -84,3 +84,10 @@ SCHEMA_DEPTH: SchemaDict = {
     field_def.name: field_def.metadata["dtype"]
     for field_def in fields(DepthColumnBuffer)
 }
+SCHEMA_SUBCELL: SchemaDict = {
+    "go_id": SCHEMA_TERM["go_id"],
+    "subcell_name": SCHEMA_TERM["term_name"],
+    "definition": SCHEMA_TERM["definition"],
+    "min_depth_from_root": SCHEMA_DEPTH["min_depth_from_root"],
+    "max_depth_from_root": SCHEMA_DEPTH["max_depth_from_root"],
+}

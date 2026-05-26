@@ -45,6 +45,19 @@ name: obsolete component
 namespace: cellular_component
 def: "obsolete definition" [GOC:ai]
 is_obsolete: true
+
+[Term]
+id: GO:0005575
+name: cellular_component
+namespace: cellular_component
+def: "The part of a cell or its extracellular environment." [GOC:go_curators]
+
+[Term]
+id: GO:0005737
+name: cytoplasm
+namespace: cellular_component
+def: "All of the contents of a cell excluding the plasma membrane and nucleus." [GOC:go_curators]
+is_a: GO:0005575 ! cellular_component
 """,
         encoding="utf-8",
     )
@@ -66,8 +79,8 @@ def test_go_db_build_tidy_exposes_frames_and_write_contract(tmp_path: Path) -> N
         "ancestor_all",
         "depth",
     }
-    assert tidy.frames["term"].height == 4
-    assert tidy.frames["edge"].height == 4
+    assert tidy.frames["term"].height == 6
+    assert tidy.frames["edge"].height == 5
 
     report = tidy.write(dir_out)
 
@@ -108,4 +121,51 @@ def test_legacy_go_tidy_runner_still_writes_contract(tmp_path: Path) -> None:
     run_tidy_go_ontology(file_in=file_in, dir_out=dir_out)
 
     assert not (dir_out / "manifest.json").exists()
-    assert pl.read_parquet(dir_out / "term.parquet").height == 4
+    assert pl.read_parquet(dir_out / "term.parquet").height == 6
+
+
+def test_go_db_extracts_subcell_from_cellular_component(tmp_path: Path) -> None:
+    file_in = tmp_path / "go-basic.obo"
+    write_minimal_obo(file_in)
+
+    df_subcell = GoDb.from_obo(file_in).extract_subcell()
+
+    assert df_subcell.to_dicts() == [
+        {
+            "go_id": "GO:0005575",
+            "subcell_name": "cellular_component",
+            "definition": "The part of a cell or its extracellular environment.",
+            "min_depth_from_root": 0,
+            "max_depth_from_root": 0,
+        },
+        {
+            "go_id": "GO:0005737",
+            "subcell_name": "cytoplasm",
+            "definition": (
+                "All of the contents of a cell excluding the plasma membrane and "
+                "nucleus."
+            ),
+            "min_depth_from_root": 1,
+            "max_depth_from_root": 1,
+        },
+    ]
+
+    df_subcell_with_obsolete = GoDb.from_obo(file_in).extract_subcell(
+        include_obsolete=True
+    )
+    assert df_subcell_with_obsolete["go_id"].to_list() == [
+        "GO:0000004",
+        "GO:0005575",
+        "GO:0005737",
+    ]
+
+
+def test_go_db_writes_subcell_parquet(tmp_path: Path) -> None:
+    file_in = tmp_path / "go-basic.obo"
+    file_out = tmp_path / "subcell.parquet"
+    write_minimal_obo(file_in)
+
+    path_written = GoDb.from_obo(file_in).write_subcell(file_out)
+
+    assert path_written == file_out
+    assert pl.read_parquet(file_out).height == 2

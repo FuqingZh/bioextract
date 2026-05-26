@@ -36,7 +36,12 @@ KeggTidyDataset = TidyDataset
 
 @dataclass(slots=True)
 class KeggDb:
-    """Path-first access to local KEGG resource snapshots."""
+    """Path-first access to local KEGG resource snapshots.
+
+    `KeggDb` is the public entrypoint for extracting tidy KEGG BRITE pathway
+    tables from a local JSON snapshot. It stores only the source path and
+    resource limits until `build_tidy()` or `write_tidy()` is called.
+    """
 
     snapshot: _KeggSnapshot
     limits: KeggResourceLimits
@@ -50,6 +55,20 @@ class KeggDb:
         *,
         limits: KeggResourceLimits | None = None,
     ) -> KeggDb:
+        """Create a dataset handle from a local KEGG BRITE JSON file.
+
+        Args:
+            file_brite_json: Path to a local KEGG BRITE JSON resource.
+            limits: Dataset-level resource limits. When omitted, default
+                fail-fast limits are used.
+
+        Returns:
+            A dataset handle that can build tidy KEGG pathway frames.
+
+        Raises:
+            FileNotFoundError: If the BRITE JSON file does not exist.
+            ValueError: If the configured file-size limit is exceeded.
+        """
         file_brite_json = Path(file_brite_json)
         if not file_brite_json.exists():
             raise FileNotFoundError(f"KEGG BRITE JSON file not found: {file_brite_json}")
@@ -66,6 +85,11 @@ class KeggDb:
         )
 
     def build_tidy(self) -> KeggTidyDataset:
+        """Build the in-memory KEGG BRITE tidy dataset.
+
+        Returns:
+            A `TidyDataset` containing the flat `pathway` frame.
+        """
         frames = build_tidy_frames(self.snapshot.file_brite_json)
         return KeggTidyDataset(
             frames=frames,
@@ -87,6 +111,15 @@ class KeggDb:
         *,
         should_write_manifest: bool = False,
     ) -> TidyWriteReport:
+        """Write the KEGG tidy dataset as flat parquet files.
+
+        Args:
+            dir_out: Output directory for parquet assets.
+            should_write_manifest: Whether to write `manifest.json`.
+
+        Returns:
+            A write report with asset paths and optional manifest content.
+        """
         return self.build_tidy().write(
             Path(dir_out),
             should_write_manifest=should_write_manifest,

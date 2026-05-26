@@ -8,6 +8,7 @@ from .constant import (
     SCHEMA_ALT_ID,
     SCHEMA_ANCESTOR,
     SCHEMA_DEPTH,
+    SCHEMA_SUBCELL,
     SCHEMA_EDGE,
     SCHEMA_SYNONYM,
     SCHEMA_TERM,
@@ -143,6 +144,34 @@ def build_tidy_frames(records: Iterable[TermRecord]) -> dict[str, pl.DataFrame]:
         "ancestor_all": df_ancestor,
         "depth": df_depth,
     }
+
+
+def extract_subcell_frame(
+    frames: dict[str, pl.DataFrame],
+    *,
+    include_obsolete: bool = False,
+) -> pl.DataFrame:
+    df_term = frames["term"]
+    df_depth = frames["depth"]
+    df_subcell = (
+        df_term.filter(pl.col("namespace") == "cellular_component")
+        .join(
+            df_depth.select("go_id", "min_depth_from_root", "max_depth_from_root"),
+            on="go_id",
+            how="left",
+        )
+        .select(
+            "go_id",
+            pl.col("term_name").alias("subcell_name"),
+            "definition",
+            "is_obsolete",
+            "min_depth_from_root",
+            "max_depth_from_root",
+        )
+    )
+    if not include_obsolete:
+        df_subcell = df_subcell.filter(~pl.col("is_obsolete"))
+    return df_subcell.select(SCHEMA_SUBCELL.keys()).sort("go_id")
 
 
 # #endregion
