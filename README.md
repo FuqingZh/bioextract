@@ -172,6 +172,27 @@ report = db.write_tidy("out/wikipathways-hsa", should_write_manifest=True)
 as NCBI Entrez Gene IDs; the library does not perform identifier conversion or
 calculate enrichment p-values.
 
+## UniProt
+
+```python
+from bioextract.uniprot import UniprotDb
+
+db = UniprotDb.from_files(
+    file_idmapping_selected="idmapping_selected.tab.gz",
+)
+
+df_hsa = db.with_taxids("9606").extract_mapping()
+
+report = db.with_taxids("9606", "10090").write_tidy(
+    "out/uniprot-idmapping",
+    should_write_manifest=True,
+)
+```
+
+`UniprotDb` reads raw UniProt `idmapping_selected.tab(.gz)`, single parquet
+files, or hive parquet dataset directories. Tidy writing defaults to hive
+partitioning by `TaxId`; all-taxid export requires `should_allow_all=True`.
+
 ## Development
 
 - `PYTHONPATH=src pytest`
