@@ -140,6 +140,29 @@ def test_write_tidy_defaults_to_hive_and_can_read_hive_dataset(tmp_path: Path) -
     assert df_hsa.height == 2
 
 
+def test_hive_dataset_allows_manifest_and_nested_non_parquet_files(
+    tmp_path: Path,
+) -> None:
+    file_in = write_idmapping_fixture(tmp_path)
+    dir_out = tmp_path / "tidy"
+    (
+        UniprotDb.from_files(file_idmapping_selected=file_in)
+        .with_taxids("9606")
+        .write_tidy(dir_out, should_write_manifest=True)
+    )
+    (dir_out / "README.txt").write_text("metadata", encoding="utf-8")
+    (dir_out / "TaxId=9606" / "note.txt").write_text("metadata", encoding="utf-8")
+
+    df_mapping = (
+        UniprotDb.from_files(file_idmapping_selected=dir_out)
+        .with_taxids("9606")
+        .extract_mapping()
+    )
+
+    assert df_mapping.height == 2
+    assert df_mapping["TaxId"].unique().to_list() == ["9606"]
+
+
 def test_write_tidy_all_requires_explicit_flag_and_writes_hive(
     tmp_path: Path,
 ) -> None:
@@ -217,6 +240,13 @@ def test_from_files_rejects_missing_unsupported_and_empty_hive(
     dir_empty.mkdir()
     with pytest.raises(ValueError, match="contains no parquet"):
         UniprotDb.from_files(file_idmapping_selected=dir_empty)
+
+    dir_no_parquet = tmp_path / "no_parquet"
+    (dir_no_parquet / "TaxId=9606").mkdir(parents=True)
+    (dir_no_parquet / "manifest.json").write_text("{}", encoding="utf-8")
+    (dir_no_parquet / "TaxId=9606" / "note.txt").write_text("x", encoding="utf-8")
+    with pytest.raises(ValueError, match="contains no parquet"):
+        UniprotDb.from_files(file_idmapping_selected=dir_no_parquet)
 
 
 def test_resource_limits_and_taxid_validation(tmp_path: Path) -> None:

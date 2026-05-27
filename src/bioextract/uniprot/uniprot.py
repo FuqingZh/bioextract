@@ -24,7 +24,7 @@ from .constant import (
 )
 from .util import (
     filter_taxids,
-    has_parquet_files,
+    has_hive_parquet_candidates,
     normalize_taxids,
     scan_hive_mapping_dataset,
     scan_parquet_mapping,
@@ -247,7 +247,7 @@ class UniprotDb:
 
 def _infer_mapping_kind(path: Path) -> _UniprotMappingKind:
     if path.is_dir():
-        if not has_parquet_files(path):
+        if not has_hive_parquet_candidates(path):
             raise ValueError(
                 f"UniProt hive parquet dataset contains no parquet files: {path}"
             )

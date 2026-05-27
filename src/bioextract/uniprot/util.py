@@ -58,7 +58,5 @@ def validate_mapping_schema(lf: pl.LazyFrame) -> None:
     )
 
 
-def has_parquet_files(dir_mapping: Path) -> bool:
-    return any(
-        path.is_file() and path.suffix == ".parquet" for path in dir_mapping.rglob("*")
-    )
+def has_hive_parquet_candidates(dir_mapping: Path) -> bool:
+    return any(path.is_file() for path in dir_mapping.glob("**/*.parquet"))
