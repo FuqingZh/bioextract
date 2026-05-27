@@ -2,7 +2,15 @@ from importlib import import_module
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
-__all__ = ["go", "kegg", "omnipath", "reactome", "stringdb", "wikipathways"]
+__all__ = [
+    "go",
+    "kegg",
+    "omnipath",
+    "reactome",
+    "stringdb",
+    "uniprot",
+    "wikipathways",
+]
 
 if TYPE_CHECKING:
     import bioextract.go as go
@@ -10,6 +18,7 @@ if TYPE_CHECKING:
     import bioextract.omnipath as omnipath
     import bioextract.reactome as reactome
     import bioextract.stringdb as stringdb
+    import bioextract.uniprot as uniprot
     import bioextract.wikipathways as wikipathways
 
 _ALIAS_MODULES: dict[str, str] = {
@@ -18,6 +27,7 @@ _ALIAS_MODULES: dict[str, str] = {
     "omnipath": "bioextract.omnipath",
     "reactome": "bioextract.reactome",
     "stringdb": "bioextract.stringdb",
+    "uniprot": "bioextract.uniprot",
     "wikipathways": "bioextract.wikipathways",
 }
 
