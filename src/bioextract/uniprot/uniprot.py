@@ -3,16 +3,17 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Literal, cast
 
 import polars as pl
 
 from bioextract._shared import validate_file_size
-from bioextract._tidy import TidyWriteReport
+from bioextract._tidy import TidyManifest, TidyReportAsset, TidyWriteReport
 
 from .constant import (
     COLS_IDMAPPING_SELECTED,
@@ -36,6 +37,10 @@ __all__ = [
     "UniprotDb",
     "UniprotResourceLimits",
 ]
+
+
+class UniprotTidyManifest(TidyManifest):
+    taxids: list[str]
 
 
 class _UniprotMappingKind(StrEnum):
@@ -62,8 +67,8 @@ class UniprotDb:
     """Path-first access to UniProt idmapping selected resources.
 
     `UniprotDb` reads either the raw UniProt `idmapping_selected.tab(.gz)` file,
-    a single normalized parquet file, or a hive-partitioned parquet dataset
-    written by :meth:`write_tidy`. Construction is deliberately lightweight:
+    a single normalized parquet file, or a hive-partitioned parquet dataset.
+    Construction is deliberately lightweight:
     paths are validated, but data and schemas are not scanned until extraction,
     validation, or writing is requested.
     """
@@ -147,8 +152,13 @@ class UniprotDb:
         *,
         should_allow_all: bool = False,
         should_write_manifest: bool = False,
-        should_write_hive: bool = True,
-        should_overwrite: bool = False,
+        policy_existing: Literal["error", "overwrite", "skip"] = "error",
+        dir_tmp: os.PathLike[str] | str | None = None,
+        level_compression: int | None = None,
+        should_monitor_resources: bool = True,
+        size_rss_stop_gb: float | None = 96,
+        size_threads_stop: int | None = 160,
+        count_d_state_stop: int = 3,
     ) -> TidyWriteReport:
         """Write normalized UniProt mapping data as parquet.
 
@@ -157,59 +167,102 @@ class UniprotDb:
             should_allow_all: Required when no taxids are selected, because all
                 taxa may be very large.
             should_write_manifest: Whether to write `manifest.json`.
-            should_write_hive: Whether to write hive partition directories.
-                This defaults to `True`. Non-hive writing is only supported
-                when exactly one taxid is selected.
-            should_overwrite: Whether to remove an existing non-empty output
-                directory before writing.
+            policy_existing: How to handle a non-empty output directory:
+                `error`, `overwrite`, or `skip`.
+            dir_tmp: Optional scratch directory for staging output before it is
+                published to `dir_out`.
+            level_compression: Optional zstd compression level for
+                `mapping.parquet`.
+            should_monitor_resources: Whether to stop when current-process
+                resource limits are exceeded.
+            size_rss_stop_gb: Stop threshold for current-process RSS.
+            size_threads_stop: Stop threshold for current-process thread count.
+            count_d_state_stop: Number of consecutive D-state samples that
+                trigger a stop.
 
         Returns:
             A write report with asset paths and optional manifest content.
         """
+        if policy_existing not in {"error", "overwrite", "skip"}:
+            raise ValueError(
+                "policy_existing must be one of: 'error', 'overwrite', 'skip'"
+            )
         if not self.snapshot.taxids and not should_allow_all:
             raise ValueError(
                 "Writing all UniProt taxids requires should_allow_all=True"
             )
-        if not should_write_hive and len(self.snapshot.taxids) != 1:
-            raise ValueError(
-                "should_write_hive=False only supports exactly one selected TaxId"
-            )
 
         dir_out = Path(dir_out)
+        if should_allow_all and _is_ceph_path(dir_out):
+            if dir_tmp is None:
+                raise ValueError(
+                    "Writing all UniProt taxids to /cephfs_data requires an "
+                    "explicit local dir_tmp"
+                )
+            if _is_ceph_path(Path(dir_tmp)):
+                raise ValueError(
+                    "UniProt dir_tmp must not be under /cephfs_data for "
+                    "all-taxid writes"
+                )
+
         if dir_out.exists() and any(dir_out.iterdir()):
-            if not should_overwrite:
+            if policy_existing == "error":
                 raise FileExistsError(
                     f"UniProt tidy output directory is not empty: {dir_out}"
                 )
-            shutil.rmtree(dir_out)
-        dir_out.mkdir(parents=True, exist_ok=True)
+            if policy_existing == "skip":
+                return _build_existing_tidy_report(
+                    dir_out=dir_out,
+                    should_write_manifest=should_write_manifest,
+                )
 
         lf_mapping = filter_taxids(self._scan_mapping(), self.snapshot.taxids)
         validate_mapping_schema(lf_mapping)
-        if should_write_hive:
+        monitor = _ResourceMonitor(
+            should_monitor_resources=should_monitor_resources,
+            size_rss_stop_gb=size_rss_stop_gb,
+            size_threads_stop=size_threads_stop,
+            count_d_state_stop=count_d_state_stop,
+        )
+
+        dir_tmp_parent = None if dir_tmp is None else Path(dir_tmp)
+        if dir_tmp_parent is not None:
+            dir_tmp_parent.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.TemporaryDirectory(
+            prefix="bioextract-uniprot-",
+            dir=None if dir_tmp_parent is None else dir_tmp_parent,
+        ) as dir_stage_raw:
+            dir_stage = Path(dir_stage_raw) / "tidy"
+            dir_stage.mkdir(parents=True, exist_ok=True)
+
+            monitor.check()
+            file_out = dir_stage / "mapping.parquet"
             lf_mapping.select(COLS_IDMAPPING_SELECTED).sink_parquet(
-                pl.PartitionBy(dir_out, key="TaxId", include_key=True),
-                mkdir=True,
+                file_out,
+                compression="zstd",
+                compression_level=level_compression,
             )
-            assets = _collect_hive_assets(dir_out)
-        else:
-            df_mapping = lf_mapping.select(COLS_IDMAPPING_SELECTED).collect()
-            file_out = dir_out / "mapping.parquet"
-            df_mapping.write_parquet(file_out)
-            assets = (
+            monitor.check()
+            assets: tuple[TidyReportAsset, ...] = (
                 {
                     "path": "mapping.parquet",
                     "kind": "canonical",
-                    "row_count": df_mapping.height,
+                    "row_count": None,
                     "is_optional": False,
                 },
             )
 
-        manifest = self._build_manifest(assets) if should_write_manifest else None
-        if manifest is not None:
-            (dir_out / "manifest.json").write_text(
-                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
+            manifest = self._build_manifest(assets) if should_write_manifest else None
+            if manifest is not None:
+                (dir_stage / "manifest.json").write_text(
+                    json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+
+            _publish_tidy_dir(
+                dir_stage=dir_stage,
+                dir_out=dir_out,
             )
         return TidyWriteReport(dir_out=dir_out, assets=assets, manifest=manifest)
 
@@ -226,10 +279,10 @@ class UniprotDb:
 
     def _build_manifest(
         self,
-        assets: tuple[dict[str, Any], ...],
-    ) -> dict[str, Any]:
+        assets: tuple[TidyReportAsset, ...],
+    ) -> UniprotTidyManifest:
         timestamp = datetime.now(UTC)
-        source: dict[str, Any] = {
+        source: dict[str, str | int] = {
             "path": self.snapshot.file_idmapping_selected.as_posix(),
             "media_type": _media_type_for_kind(self.snapshot.kind),
         }
@@ -262,18 +315,203 @@ def _infer_mapping_kind(path: Path) -> _UniprotMappingKind:
     raise ValueError(f"Unsupported UniProt idmapping selected input type: {path}")
 
 
-def _collect_hive_assets(dir_out: Path) -> tuple[dict[str, Any], ...]:
-    assets: list[dict[str, Any]] = []
-    for file_parquet in sorted(dir_out.rglob("*.parquet")):
-        assets.append(
+def _publish_tidy_dir(
+    *,
+    dir_stage: Path,
+    dir_out: Path,
+) -> None:
+    dir_out.parent.mkdir(parents=True, exist_ok=True)
+    if dir_out.exists():
+        shutil.rmtree(dir_out)
+    shutil.move(dir_stage.as_posix(), dir_out.as_posix())
+
+
+def _build_existing_tidy_report(
+    *,
+    dir_out: Path,
+    should_write_manifest: bool,
+) -> TidyWriteReport:
+    manifest = None
+    file_manifest = dir_out / "manifest.json"
+    if should_write_manifest and file_manifest.exists():
+        manifest = cast(
+            UniprotTidyManifest,
+            json.loads(file_manifest.read_text(encoding="utf-8")),
+        )
+        assets = _extract_report_assets_from_manifest(manifest)
+    else:
+        assets: tuple[TidyReportAsset, ...] = (
             {
-                "path": file_parquet.relative_to(dir_out).as_posix(),
+                "path": "mapping.parquet",
                 "kind": "canonical",
                 "row_count": None,
                 "is_optional": False,
-            }
+            },
         )
-    return tuple(assets)
+    return TidyWriteReport(dir_out=dir_out, assets=assets, manifest=manifest)
+
+
+def _extract_report_assets_from_manifest(
+    manifest: TidyManifest,
+) -> tuple[TidyReportAsset, ...]:
+    return tuple(
+        {
+            "path": asset["path"],
+            "kind": asset["kind"],
+            "row_count": asset["row_count"],
+            "is_optional": asset["is_optional"],
+        }
+        for asset in manifest["assets"]
+    )
+
+
+def _is_ceph_path(path: Path) -> bool:
+    return path.as_posix() == "/cephfs_data" or path.as_posix().startswith(
+        "/cephfs_data/"
+    )
+
+
+@dataclass(slots=True)
+class _ResourceSample:
+    size_rss_mb: float | None
+    size_threads: int | None
+    count_d_state_threads: int | None
+
+
+@dataclass(slots=True)
+class _ResourceMonitor:
+    should_monitor_resources: bool
+    size_rss_stop_gb: float | None
+    size_threads_stop: int | None
+    count_d_state_stop: int
+    _count_d_state_consecutive: int = 0
+    _size_threads_baseline: int | None = None
+
+    def check(self) -> None:
+        if not self.should_monitor_resources:
+            return
+        sample = _sample_process_resources()
+        if (
+            self.size_rss_stop_gb is not None
+            and sample.size_rss_mb is not None
+            and sample.size_rss_mb > self.size_rss_stop_gb * 1024
+        ):
+            raise RuntimeError(
+                "UniProt tidy write exceeded RSS stop threshold: "
+                f"{sample.size_rss_mb:.1f} MiB > {self.size_rss_stop_gb} GiB"
+            )
+        self._check_threads(sample.size_threads)
+        if (
+            sample.count_d_state_threads is not None
+            and sample.count_d_state_threads > 0
+        ):
+            self._count_d_state_consecutive += 1
+        else:
+            self._count_d_state_consecutive = 0
+        if self._count_d_state_consecutive >= self.count_d_state_stop:
+            raise RuntimeError(
+                "UniProt tidy write observed D-state threads in "
+                f"{self._count_d_state_consecutive} consecutive samples"
+            )
+
+    def _check_threads(self, size_threads: int | None) -> None:
+        if self.size_threads_stop is None or size_threads is None:
+            return
+        if self._size_threads_baseline is None:
+            self._size_threads_baseline = size_threads
+            if size_threads <= self.size_threads_stop or self.size_threads_stop < 64:
+                self._raise_if_threads_exceeded(size_threads)
+            return
+        size_threads_stop_effective = self.size_threads_stop
+        if self._size_threads_baseline > self.size_threads_stop:
+            size_threads_stop_effective = self._size_threads_baseline + max(
+                16,
+                self.size_threads_stop // 4,
+            )
+        if size_threads > size_threads_stop_effective:
+            raise RuntimeError(
+                "UniProt tidy write exceeded thread stop threshold: "
+                f"{size_threads} > {size_threads_stop_effective}"
+            )
+
+    def _raise_if_threads_exceeded(self, size_threads: int) -> None:
+        if self.size_threads_stop is not None and size_threads > self.size_threads_stop:
+            raise RuntimeError(
+                "UniProt tidy write exceeded thread stop threshold: "
+                f"{size_threads} > {self.size_threads_stop}"
+            )
+
+
+def _sample_process_resources() -> _ResourceSample:
+    status = _read_proc_self_status()
+    return _ResourceSample(
+        size_rss_mb=_parse_status_size_mb(status.get("VmRSS")),
+        size_threads=_parse_status_int(status.get("Threads")),
+        count_d_state_threads=_count_proc_self_threads_by_state("D"),
+    )
+
+
+def _read_proc_self_status() -> dict[str, str]:
+    try:
+        lines = Path("/proc/self/status").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    status: dict[str, str] = {}
+    for line in lines:
+        key, sep, value = line.partition(":")
+        if sep:
+            status[key] = value.strip()
+    return status
+
+
+def _parse_status_size_mb(value: str | None) -> float | None:
+    if value is None:
+        return None
+    parts = value.split()
+    if not parts:
+        return None
+    try:
+        size_kb = float(parts[0])
+    except ValueError:
+        return None
+    return size_kb / 1024
+
+
+def _parse_status_int(value: str | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value.split()[0])
+    except (IndexError, ValueError):
+        return None
+
+
+def _count_proc_self_threads_by_state(state: str) -> int | None:
+    dir_task = Path("/proc/self/task")
+    try:
+        files_stat = list(dir_task.glob("*/stat"))
+    except OSError:
+        return None
+    count = 0
+    for file_stat in files_stat:
+        try:
+            text = file_stat.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        state_thread = _parse_proc_stat_state(text)
+        if state_thread == state:
+            count += 1
+    return count
+
+
+def _parse_proc_stat_state(text: str) -> str | None:
+    idx_close = text.rfind(")")
+    if idx_close < 0:
+        return None
+    fields_after_name = text[idx_close + 1 :].strip().split()
+    if not fields_after_name:
+        return None
+    return fields_after_name[0]
 
 
 def _media_type_for_kind(kind: _UniprotMappingKind) -> str:

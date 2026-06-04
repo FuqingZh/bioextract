@@ -6,6 +6,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+import bioextract.uniprot.uniprot as uniprot_module
 from bioextract.uniprot import UniprotDb, UniprotResourceLimits
 from bioextract.uniprot.constant import COLS_IDMAPPING_SELECTED
 
@@ -112,7 +113,7 @@ def test_extract_mapping_filters_taxids_from_raw_gzip(tmp_path: Path) -> None:
     ]
 
 
-def test_write_tidy_defaults_to_hive_and_can_read_hive_dataset(tmp_path: Path) -> None:
+def test_write_tidy_writes_single_parquet_by_default(tmp_path: Path) -> None:
     file_in = write_idmapping_fixture(tmp_path)
     dir_out = tmp_path / "tidy"
 
@@ -124,15 +125,18 @@ def test_write_tidy_defaults_to_hive_and_can_read_hive_dataset(tmp_path: Path) -
 
     assert report.manifest is not None
     assert report.manifest["schema_version"] == "uniprot-idmapping-selected-v0.1"
-    assert sorted(
-        path.relative_to(dir_out).as_posix() for path in dir_out.rglob("*.parquet")
-    ) == [
-        "TaxId=10090/00000000.parquet",
-        "TaxId=9606/00000000.parquet",
-    ]
+    assert report.assets == (
+        {
+            "path": "mapping.parquet",
+            "kind": "canonical",
+            "row_count": None,
+            "is_optional": False,
+        },
+    )
+    assert (dir_out / "mapping.parquet").is_file()
 
     df_hsa = (
-        UniprotDb.from_files(file_idmapping_selected=dir_out)
+        UniprotDb.from_files(file_idmapping_selected=dir_out / "mapping.parquet")
         .with_taxids("9606")
         .extract_mapping()
     )
@@ -144,14 +148,17 @@ def test_hive_dataset_allows_manifest_and_nested_non_parquet_files(
     tmp_path: Path,
 ) -> None:
     file_in = write_idmapping_fixture(tmp_path)
-    dir_out = tmp_path / "tidy"
-    (
+    df_fixture = (
         UniprotDb.from_files(file_idmapping_selected=file_in)
         .with_taxids("9606")
-        .write_tidy(dir_out, should_write_manifest=True)
+        .extract_mapping()
     )
+    dir_out = tmp_path / "tidy"
+    dir_taxid = dir_out / "TaxId=9606"
+    dir_taxid.mkdir(parents=True)
+    df_fixture.write_parquet(dir_taxid / "00000000.parquet")
     (dir_out / "README.txt").write_text("metadata", encoding="utf-8")
-    (dir_out / "TaxId=9606" / "note.txt").write_text("metadata", encoding="utf-8")
+    (dir_taxid / "note.txt").write_text("metadata", encoding="utf-8")
 
     df_mapping = (
         UniprotDb.from_files(file_idmapping_selected=dir_out)
@@ -163,7 +170,7 @@ def test_hive_dataset_allows_manifest_and_nested_non_parquet_files(
     assert df_mapping["TaxId"].unique().to_list() == ["9606"]
 
 
-def test_write_tidy_all_requires_explicit_flag_and_writes_hive(
+def test_write_tidy_all_requires_explicit_flag_and_writes_single_parquet(
     tmp_path: Path,
 ) -> None:
     file_in = write_idmapping_fixture(tmp_path)
@@ -174,10 +181,15 @@ def test_write_tidy_all_requires_explicit_flag_and_writes_hive(
 
     report = db.write_tidy(tmp_path / "all", should_allow_all=True)
 
-    assert sorted(asset["path"] for asset in report.assets) == [
-        "TaxId=10090/00000000.parquet",
-        "TaxId=9606/00000000.parquet",
-    ]
+    assert report.assets == (
+        {
+            "path": "mapping.parquet",
+            "kind": "canonical",
+            "row_count": None,
+            "is_optional": False,
+        },
+    )
+    assert (tmp_path / "all" / "mapping.parquet").is_file()
 
 
 def test_single_taxid_can_write_single_parquet_and_read_it(tmp_path: Path) -> None:
@@ -186,7 +198,7 @@ def test_single_taxid_can_write_single_parquet_and_read_it(tmp_path: Path) -> No
 
     UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
         "9606"
-    ).write_tidy(file_out, should_write_hive=False)
+    ).write_tidy(file_out)
 
     df_mapping = UniprotDb.from_files(
         file_idmapping_selected=file_out / "mapping.parquet"
@@ -195,7 +207,7 @@ def test_single_taxid_can_write_single_parquet_and_read_it(tmp_path: Path) -> No
     assert df_mapping["TaxId"].unique().to_list() == ["9606"]
 
 
-def test_write_tidy_rejects_non_empty_output_unless_overwrite(
+def test_write_tidy_applies_existing_output_policy(
     tmp_path: Path,
 ) -> None:
     file_in = write_idmapping_fixture(tmp_path)
@@ -207,14 +219,179 @@ def test_write_tidy_rejects_non_empty_output_unless_overwrite(
     with pytest.raises(FileExistsError, match="not empty"):
         db.write_tidy(dir_out)
 
-    db.write_tidy(dir_out, should_overwrite=True)
+    report_skip = db.write_tidy(dir_out, policy_existing="skip")
+
+    assert (dir_out / "old.txt").read_text(encoding="utf-8") == "old"
+    assert report_skip.assets == (
+        {
+            "path": "mapping.parquet",
+            "kind": "canonical",
+            "row_count": None,
+            "is_optional": False,
+        },
+    )
+
+    db.write_tidy(dir_out, policy_existing="overwrite")
 
     assert not (dir_out / "old.txt").exists()
     assert sorted(
         path.relative_to(dir_out).as_posix() for path in dir_out.rglob("*.parquet")
     ) == [
-        "TaxId=9606/00000000.parquet",
+        "mapping.parquet",
     ]
+
+
+def test_write_tidy_rejects_invalid_existing_output_policy(tmp_path: Path) -> None:
+    file_in = write_idmapping_fixture(tmp_path)
+
+    with pytest.raises(ValueError, match="policy_existing"):
+        UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
+            "9606"
+        ).write_tidy(tmp_path / "tidy", policy_existing="replace")  # type: ignore[arg-type]
+
+
+def test_write_tidy_skip_can_return_existing_manifest(tmp_path: Path) -> None:
+    file_in = write_idmapping_fixture(tmp_path)
+    dir_out = tmp_path / "tidy"
+    db = UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids("9606")
+
+    db.write_tidy(dir_out, should_write_manifest=True)
+    report_skip = db.write_tidy(
+        dir_out,
+        policy_existing="skip",
+        should_write_manifest=True,
+    )
+
+    assert report_skip.manifest is not None
+    assert report_skip.manifest["schema_version"] == "uniprot-idmapping-selected-v0.1"
+    assert report_skip.assets == tuple(report_skip.manifest["assets"])
+
+
+def test_write_tidy_accepts_zstd_compression_level(tmp_path: Path) -> None:
+    file_in = write_idmapping_fixture(tmp_path)
+
+    UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
+        "9606"
+    ).write_tidy(tmp_path / "tidy", level_compression=1)
+
+    assert (tmp_path / "tidy" / "mapping.parquet").is_file()
+
+
+def test_write_tidy_rejects_all_taxid_ceph_without_local_tmp(tmp_path: Path) -> None:
+    file_in = write_idmapping_fixture(tmp_path)
+    db = UniprotDb.from_files(file_idmapping_selected=file_in)
+
+    with pytest.raises(ValueError, match="explicit local dir_tmp"):
+        db.write_tidy("/cephfs_data/example/uniprot/tidy", should_allow_all=True)
+
+    with pytest.raises(ValueError, match="must not be under /cephfs_data"):
+        db.write_tidy(
+            "/cephfs_data/example/uniprot/tidy",
+            should_allow_all=True,
+            dir_tmp="/cephfs_data/tmp",
+        )
+
+
+def test_write_tidy_uses_explicit_tmp_and_publishes_output(tmp_path: Path) -> None:
+    file_in = write_idmapping_fixture(tmp_path)
+    dir_tmp = tmp_path / "scratch"
+    dir_out = tmp_path / "tidy"
+
+    UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
+        "9606"
+    ).write_tidy(dir_out, dir_tmp=dir_tmp)
+
+    assert (dir_out / "mapping.parquet").is_file()
+    assert sorted(path.name for path in dir_tmp.iterdir()) == []
+
+
+def test_write_tidy_resource_monitor_stops_on_rss(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_in = write_idmapping_fixture(tmp_path)
+
+    monkeypatch.setattr(
+        uniprot_module,
+        "_sample_process_resources",
+        lambda: uniprot_module._ResourceSample(
+            size_rss_mb=2,
+            size_threads=1,
+            count_d_state_threads=0,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="RSS stop threshold"):
+        UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
+            "9606"
+        ).write_tidy(tmp_path / "tidy", size_rss_stop_gb=0.001)
+
+
+def test_write_tidy_resource_monitor_stops_on_threads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_in = write_idmapping_fixture(tmp_path)
+
+    monkeypatch.setattr(
+        uniprot_module,
+        "_sample_process_resources",
+        lambda: uniprot_module._ResourceSample(
+            size_rss_mb=1,
+            size_threads=3,
+            count_d_state_threads=0,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="thread stop threshold"):
+        UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
+            "9606"
+        ).write_tidy(tmp_path / "tidy", size_threads_stop=2)
+
+
+def test_write_tidy_resource_monitor_stops_on_repeated_d_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_in = write_idmapping_fixture(tmp_path)
+
+    monkeypatch.setattr(
+        uniprot_module,
+        "_sample_process_resources",
+        lambda: uniprot_module._ResourceSample(
+            size_rss_mb=1,
+            size_threads=1,
+            count_d_state_threads=1,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="D-state"):
+        UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
+            "9606"
+        ).write_tidy(tmp_path / "tidy", count_d_state_stop=2)
+
+
+def test_write_tidy_can_disable_resource_monitor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_in = write_idmapping_fixture(tmp_path)
+
+    monkeypatch.setattr(
+        uniprot_module,
+        "_sample_process_resources",
+        lambda: uniprot_module._ResourceSample(
+            size_rss_mb=10_000,
+            size_threads=10_000,
+            count_d_state_threads=10_000,
+        ),
+    )
+
+    UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
+        "9606"
+    ).write_tidy(tmp_path / "tidy", should_monitor_resources=False)
+
+    assert (tmp_path / "tidy" / "mapping.parquet").is_file()
 
 
 def test_validate_schema_rejects_bad_parquet(tmp_path: Path) -> None:

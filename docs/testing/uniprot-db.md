@@ -3,7 +3,7 @@
 ## Scope
 
 The first UniProtDb test suite verifies lightweight construction, raw
-`idmapping_selected` parsing, taxid filtering, hive parquet writing, hive
+`idmapping_selected` parsing, taxid filtering, single parquet writing, hive
 dataset reading, single parquet reading, and schema/error handling.
 
 It should not test online UniProt services, `.dat` parsing, or full 9 GB
@@ -29,10 +29,10 @@ P31750	AKT1_MOUSE	11651	...	10090	...
 - missing, unsupported, empty hive, and oversized inputs are rejected.
 - `with_taxids()` normalizes taxid values and rejects empty values.
 - `extract_mapping()` filters by selected taxids.
-- `write_tidy()` defaults to hive partitioning.
-- hive output can be read back through `from_files()`.
+- `write_tidy()` emits canonical `mapping.parquet`.
+- `level_compression` is passed through to zstd parquet writing.
 - all-taxid write requires `should_allow_all=True`.
-- non-hive write is allowed only for one selected taxid.
+- non-empty output directories follow `policy_existing`.
 - `validate_schema()` reports missing required columns.
 
 ## Real-Data Smoke

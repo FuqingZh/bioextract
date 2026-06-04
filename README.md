@@ -190,8 +190,10 @@ report = db.with_taxids("9606", "10090").write_tidy(
 ```
 
 `UniprotDb` reads raw UniProt `idmapping_selected.tab(.gz)`, single parquet
-files, or hive parquet dataset directories. Tidy writing defaults to hive
-partitioning by `TaxId`; all-taxid export requires `should_allow_all=True`.
+files, or hive parquet dataset directories. Tidy writing emits a canonical
+`mapping.parquet`; all-taxid export requires `should_allow_all=True`.
+Use `policy_existing="overwrite"` or `policy_existing="skip"` when the output
+directory already exists.
 
 ## Development
 

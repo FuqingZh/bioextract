@@ -5,7 +5,8 @@
 `bioextract.uniprot.UniprotDb` provides path-first access to UniProt
 `idmapping_selected` resources. The resource is large, so the database handle
 must not load data during construction. It should support raw UniProt selected
-mapping files and the hive parquet datasets written by bioextract.
+mapping files, normalized parquet files, and hive parquet datasets from
+external or legacy sources.
 
 The MVP covers:
 
@@ -14,7 +15,7 @@ The MVP covers:
 - hive parquet dataset directories partitioned by `TaxId`
 - `with_taxids(*taxids)` scoped extraction
 - full normalized mapping extraction
-- hive parquet tidy writing by default
+- single parquet tidy writing
 
 It intentionally does not cover:
 
@@ -91,35 +92,31 @@ done by `validate_schema()`, `extract_mapping()`, and `write_tidy()`.
 
 ## Tidy Output
 
-Hive parquet writing is the default:
+Tidy writing emits one canonical parquet file:
 
 ```text
 out/
-  TaxId=9606/
-    00000000.parquet
-  TaxId=10090/
-    00000000.parquet
+  mapping.parquet
   manifest.json
 ```
 
 `write_tidy()` requires `should_allow_all=True` when no taxids are selected,
 because all-taxa export may scan the entire 9 GB raw gzip file.
+The writer uses zstd compression by default; callers can pass
+`level_compression` to tune the zstd compression level.
 
-Non-hive output is available only for exactly one selected TaxId:
-
-```python
-db.with_taxids("9606").write_tidy("out/hsa", should_write_hive=False)
-```
-
-which writes:
+Existing non-empty outputs are controlled by `policy_existing`:
 
 ```text
-out/hsa/
-  mapping.parquet
+error      raise FileExistsError
+overwrite  replace the output directory
+skip       return a write report without rewriting files
 ```
 
 ## Implementation Notes
 
-Raw TSV and parquet inputs are scanned lazily. Hive writing uses Polars
-`sink_parquet(PartitionBy(...))`, so multi-taxid and all-taxid writes do not
-need to collect the full table in memory before partitioning.
+Raw TSV and parquet inputs are scanned lazily. Tidy writing uses Polars
+`sink_parquet()`, so large writes do not need to collect the full table in
+memory before writing. Hive parquet dataset reading remains supported for
+compatibility, but `write_tidy()` no longer creates `TaxId=` partitioned output
+because UniProt all-taxa data has very high `TaxId` cardinality.

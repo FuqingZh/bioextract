@@ -6,8 +6,10 @@
 - Support raw UniProt `idmapping_selected.tab(.gz)`.
 - Support normalized single parquet and hive parquet dataset inputs.
 - Support taxid-scoped extraction through `with_taxids(*taxids)`.
-- Write tidy outputs as hive parquet datasets by default.
+- Write tidy outputs as canonical single parquet files.
 - Require `should_allow_all=True` for all-taxid writing.
+- Use `policy_existing="error" | "overwrite" | "skip"` for non-empty outputs.
+- Support `level_compression` for zstd parquet compression tuning.
 
 ## Files
 
@@ -57,7 +59,8 @@ df_hsa = db.with_taxids("9606").extract_mapping()
 - Additive public API only.
 - No change to existing resource DBs.
 - No new runtime dependency beyond Polars.
-- Default output uses hive parquet partitioning by `TaxId`.
+- Tidy output uses `mapping.parquet`; hive parquet dataset reading remains
+  available for external or legacy inputs.
 
 ## Tests
 
