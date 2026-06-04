@@ -1,15 +1,39 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TypedDict
 
 import polars as pl
 
 from .constant import SCHEMA_PATHWAY, SCHEMA_TERM2GENE, SCHEMA_TERM2NAME
 
 
+class _PathwayRecord(TypedDict):
+    PathwayName: str
+    Collection: str
+    Version: str
+    WikiPathwaysId: str
+    Species: str
+    Url: str
+    GeneCount: int
+
+
+class _PathwayHeaderRecord(TypedDict):
+    PathwayName: str
+    Collection: str
+    Version: str
+    WikiPathwaysId: str
+    Species: str
+
+
+class _Term2GeneRecord(TypedDict):
+    WikiPathwaysId: str
+    GeneId: str
+
+
 def read_gmt_frames(file_gmt: Path) -> dict[str, pl.DataFrame]:
-    pathways: list[dict[str, object]] = []
-    term2gene_rows: list[dict[str, str]] = []
+    pathways: list[_PathwayRecord] = []
+    term2gene_rows: list[_Term2GeneRecord] = []
 
     with file_gmt.open("r", encoding="utf-8") as handle:
         for line_number, line in enumerate(handle, start=1):
@@ -28,13 +52,12 @@ def read_gmt_frames(file_gmt: Path) -> dict[str, pl.DataFrame]:
             url = fields[1].strip()
             gene_ids = [gene_id.strip() for gene_id in fields[2:] if gene_id.strip()]
             gene_ids_unique = sorted(set(gene_ids))
-            pathways.append(
-                {
-                    **pathway,
-                    "Url": url,
-                    "GeneCount": len(gene_ids_unique),
-                }
-            )
+            pathway_record: _PathwayRecord = {
+                **pathway,
+                "Url": url,
+                "GeneCount": len(gene_ids_unique),
+            }
+            pathways.append(pathway_record)
             for gene_id in gene_ids_unique:
                 term2gene_rows.append(
                     {
@@ -61,7 +84,7 @@ def parse_pathway_header(
     *,
     file_gmt: Path,
     line_number: int,
-) -> dict[str, str]:
+) -> _PathwayHeaderRecord:
     parts = [part.strip() for part in header.split("%")]
     if len(parts) != 4 or any(not part for part in parts):
         raise ValueError(

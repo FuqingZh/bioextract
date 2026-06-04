@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 
 import polars as pl
@@ -8,8 +8,8 @@ from .constant import (
     SCHEMA_ALT_ID,
     SCHEMA_ANCESTOR,
     SCHEMA_DEPTH,
-    SCHEMA_SUBCELL,
     SCHEMA_EDGE,
+    SCHEMA_SUBCELL,
     SCHEMA_SYNONYM,
     SCHEMA_TERM,
     SCHEMA_XREF,
@@ -147,7 +147,7 @@ def build_tidy_frames(records: Iterable[TermRecord]) -> dict[str, pl.DataFrame]:
 
 
 def extract_subcell_frame(
-    frames: dict[str, pl.DataFrame],
+    frames: Mapping[str, pl.DataFrame],
     *,
     include_obsolete: bool = False,
 ) -> pl.DataFrame:

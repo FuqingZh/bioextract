@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypedDict
 
 import polars as pl
 
@@ -24,11 +25,31 @@ class TidyAsset:
     is_optional: bool = False
 
 
+class TidyReportAsset(TypedDict):
+    path: str
+    kind: str
+    row_count: int | None
+    is_optional: bool
+
+
+class TidyManifestAsset(TidyReportAsset):
+    sha256: str
+    row_count: int
+
+
+class TidyManifest(TypedDict):
+    build_id: str
+    schema_version: str
+    generated_at: str
+    sources: list[dict[str, str | int]]
+    assets: list[TidyManifestAsset]
+
+
 @dataclass(frozen=True, slots=True)
 class TidyWriteReport:
     dir_out: Path
-    assets: tuple[dict[str, object], ...]
-    manifest: dict[str, object] | None = None
+    assets: tuple[TidyReportAsset, ...]
+    manifest: TidyManifest | None = None
 
 
 @dataclass(slots=True)
@@ -48,7 +69,7 @@ class TidyDataset:
         dir_out = Path(dir_out)
         dir_out.mkdir(parents=True, exist_ok=True)
 
-        entries_manifest: list[dict[str, object]] = []
+        entries_manifest: list[TidyManifestAsset] = []
         for asset in self.assets:
             frame = self.frames[asset.frame_name]
             file_out = dir_out / asset.path
@@ -80,8 +101,8 @@ class TidyDataset:
 
     def build_manifest(
         self,
-        assets: list[dict[str, object]],
-    ) -> dict[str, object]:
+        assets: list[TidyManifestAsset],
+    ) -> TidyManifest:
         timestamp = datetime.now(UTC)
         return {
             "build_id": f"{self.build_id_prefix}-{timestamp.strftime('%Y%m%dT%H%M%SZ')}",
