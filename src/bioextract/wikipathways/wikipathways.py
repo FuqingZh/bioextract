@@ -211,7 +211,7 @@ class WikiPathwaysDb:
             "term2name": self.extract_term2name(),
         }
         return WikiPathwaysTidyDataset(
-            frames=frames,
+            frames={frame_name: frame.lazy() for frame_name, frame in frames.items()},
             source=TidySource(path=self.snapshot.file_gmt, media_type=MEDIA_TYPE_GMT),
             schema_version=SCHEMA_VERSION,
             build_id_prefix=f"wikipathways-gmt-{self.snapshot.file_gmt.stem}",
@@ -226,12 +226,15 @@ class WikiPathwaysDb:
         dir_out: os.PathLike[str] | str,
         *,
         should_write_manifest: bool = False,
+        should_hash_assets: bool = False,
     ) -> TidyWriteReport:
         """Write the WikiPathways tidy dataset as flat parquet files.
 
         Args:
             dir_out: Output directory for parquet assets.
             should_write_manifest: Whether to write `manifest.json`.
+            should_hash_assets: Whether to calculate asset checksums in the
+                manifest.
 
         Returns:
             A write report with asset paths and optional manifest content.
@@ -239,6 +242,7 @@ class WikiPathwaysDb:
         return self.build_tidy().write(
             Path(dir_out),
             should_write_manifest=should_write_manifest,
+            should_hash_assets=should_hash_assets,
         )
 
     def _frame(self, frame_name: str) -> pl.DataFrame:

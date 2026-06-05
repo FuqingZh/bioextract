@@ -255,7 +255,6 @@ def test_write_tidy_writes_single_parquet_by_default(tmp_path: Path) -> None:
         {
             "path": "mapping.parquet",
             "kind": "canonical",
-            "row_count": None,
             "is_optional": False,
         },
     )
@@ -311,7 +310,6 @@ def test_write_tidy_all_requires_explicit_flag_and_writes_single_parquet(
         {
             "path": "mapping.parquet",
             "kind": "canonical",
-            "row_count": None,
             "is_optional": False,
         },
     )
@@ -352,7 +350,6 @@ def test_write_tidy_applies_existing_output_policy(
         {
             "path": "mapping.parquet",
             "kind": "canonical",
-            "row_count": None,
             "is_optional": False,
         },
     )

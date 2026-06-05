@@ -91,14 +91,17 @@ class GoDb:
         return cls(snapshot=_GoSnapshot(file_obo=file_obo), limits=limits_resolved)
 
     def build_tidy(self) -> GoTidyDataset:
-        """Build the in-memory GO tidy dataset.
+        """Build the lazy GO tidy dataset.
 
         Returns:
             A `TidyDataset` with `term`, `edge`, `synonym`, `xref`, `alt_id`,
             `ancestor_all`, and `depth` frames.
         """
         records = scan_obo_term_records(self.snapshot.file_obo)
-        frames = build_tidy_frames(records)
+        frames = {
+            frame_name: frame.lazy()
+            for frame_name, frame in build_tidy_frames(records).items()
+        }
         return GoTidyDataset(
             frames=frames,
             source=TidySource(path=self.snapshot.file_obo, media_type=MEDIA_TYPE_OBO),
@@ -115,12 +118,15 @@ class GoDb:
         dir_out: os.PathLike[str] | str,
         *,
         should_write_manifest: bool = False,
+        should_hash_assets: bool = False,
     ) -> TidyWriteReport:
         """Write the GO tidy dataset as flat parquet files.
 
         Args:
             dir_out: Output directory for parquet assets.
             should_write_manifest: Whether to write `manifest.json`.
+            should_hash_assets: Whether to calculate asset checksums in the
+                manifest.
 
         Returns:
             A write report with asset paths and optional manifest content.
@@ -128,6 +134,7 @@ class GoDb:
         return self.build_tidy().write(
             Path(dir_out),
             should_write_manifest=should_write_manifest,
+            should_hash_assets=should_hash_assets,
         )
 
     def extract_subcell(self, *, include_obsolete: bool = False) -> pl.DataFrame:
@@ -140,7 +147,10 @@ class GoDb:
             A DataFrame with GO ID, subcell name, definition, and depth columns.
         """
         return extract_subcell_frame(
-            self.build_tidy().frames,
+            {
+                frame_name: frame.collect()
+                for frame_name, frame in self.build_tidy().frames.items()
+            },
             include_obsolete=include_obsolete,
         )
 
@@ -161,5 +171,7 @@ class GoDb:
         """
         file_out = Path(file_out)
         file_out.parent.mkdir(parents=True, exist_ok=True)
-        self.extract_subcell(include_obsolete=include_obsolete).write_parquet(file_out)
+        self.extract_subcell(include_obsolete=include_obsolete).lazy().sink_parquet(
+            file_out
+        )
         return file_out

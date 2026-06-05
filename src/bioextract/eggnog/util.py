@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+from typing import TextIO
 
 import polars as pl
 
@@ -36,20 +37,79 @@ def read_cog_fun_frame(file_cog_fun: Path | None) -> pl.DataFrame:
         )
     if file_cog_fun.stat().st_size == 0:
         return pl.DataFrame(schema=schema).select("CogCategory", "CogClass", "CogName")
-    df = pl.read_csv(
+    df = pl.scan_csv(
         file_cog_fun,
         separator="\t",
         has_header=False,
         new_columns=["CogCategory", "CogClass", "_Color", "CogName"],
         schema_overrides=schema,
         truncate_ragged_lines=True,
-    )
+    ).collect()
     return (
         df.filter(pl.col("CogCategory").str.len_chars() == 1)
         .select("CogCategory", "CogClass", "CogName")
         .unique()
         .sort("CogCategory")
     )
+
+
+def scan_mapping_tsv(file_mapping_tsv: Path) -> pl.LazyFrame:
+    return pl.scan_csv(
+        file_mapping_tsv,
+        separator="\t",
+        has_header=True,
+        schema_overrides=SCHEMA_MAPPING,
+    ).select(COLS_MAPPING)
+
+
+def write_mapping_tsv(
+    *,
+    file_eggnog_db: Path,
+    dir_tmp: Path | None,
+    df_cog_fun: pl.DataFrame,
+    file_out: Path,
+) -> None:
+    file_out.parent.mkdir(parents=True, exist_ok=True)
+    map_cog_fun = {
+        row["CogCategory"]: (row["CogClass"], row["CogName"])
+        for row in df_cog_fun.iter_rows(named=True)
+    }
+    with open_sqlite_path(file_eggnog_db, dir_tmp=dir_tmp) as file_sqlite:
+        with sqlite3.connect(file_sqlite) as conn:
+            with file_out.open("w", encoding="utf-8") as handle:
+                handle.write("\t".join(COLS_MAPPING) + "\n")
+                write_mapping_rows(handle, conn=conn, map_cog_fun=map_cog_fun)
+
+
+def write_mapping_rows(
+    handle: TextIO,
+    *,
+    conn: sqlite3.Connection,
+    map_cog_fun: dict[str, tuple[str | None, str | None]],
+) -> None:
+    og_cache: dict[tuple[str, str | None], list[dict[str, str | None]]] = {}
+    for protein_id, ogs_text in iter_protein_ogs(conn, None):
+        for og_id, og_level in parse_ogs(ogs_text):
+            key = (og_id, og_level)
+            if key not in og_cache:
+                og_cache[key] = read_og_rows(conn, [key])
+            for og_row in og_cache[key]:
+                for category in parse_cog_categories(og_row["CogCategories"]):
+                    cog_class, cog_name = map_cog_fun.get(category, (None, None))
+                    handle.write(
+                        "\t".join(
+                            [
+                                protein_id,
+                                og_row["EggnogOgId"] or "",
+                                og_row["EggnogLevel"] or "",
+                                category,
+                                cog_class or "",
+                                cog_name or "",
+                                og_row["OgDescription"] or "",
+                            ]
+                        )
+                        + "\n"
+                    )
 
 
 def build_mapping_frame(

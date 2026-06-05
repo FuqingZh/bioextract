@@ -79,8 +79,8 @@ def test_go_db_build_tidy_exposes_frames_and_write_contract(tmp_path: Path) -> N
         "ancestor_all",
         "depth",
     }
-    assert tidy.frames["term"].height == 6
-    assert tidy.frames["edge"].height == 5
+    assert tidy.frames["term"].select(pl.len()).collect().item() == 6
+    assert tidy.frames["edge"].select(pl.len()).collect().item() == 5
 
     report = tidy.write(dir_out)
 

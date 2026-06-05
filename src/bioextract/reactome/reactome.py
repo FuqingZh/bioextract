@@ -309,7 +309,7 @@ class ReactomeDb:
             assets.append(TidyAsset(path=path, kind=kind, frame_name=frame_name))
 
         return ReactomeTidyDataset(
-            frames=frames,
+            frames={frame_name: frame.lazy() for frame_name, frame in frames.items()},
             source=self._tidy_sources(),
             schema_version=SCHEMA_VERSION,
             build_id_prefix="reactome-mapping",
@@ -321,12 +321,15 @@ class ReactomeDb:
         dir_out: os.PathLike[str] | str,
         *,
         should_write_manifest: bool = False,
+        should_hash_assets: bool = False,
     ) -> TidyWriteReport:
         """Write the Reactome tidy dataset as flat parquet files.
 
         Args:
             dir_out: Output directory for parquet assets.
             should_write_manifest: Whether to write `manifest.json`.
+            should_hash_assets: Whether to calculate asset checksums in the
+                manifest.
 
         Returns:
             A write report with asset paths and optional manifest content.
@@ -334,6 +337,7 @@ class ReactomeDb:
         return self.build_tidy().write(
             Path(dir_out),
             should_write_manifest=should_write_manifest,
+            should_hash_assets=should_hash_assets,
         )
 
     def mapping_frame(self) -> pl.DataFrame:

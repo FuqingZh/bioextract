@@ -94,7 +94,7 @@ def test_kegg_db_build_tidy_exposes_frames_and_write_contract(tmp_path: Path) ->
     tidy = KeggDb.from_brite_json(file_in).build_tidy()
 
     assert set(tidy.frames) == {"pathway"}
-    assert tidy.frames["pathway"].height == 2
+    assert tidy.frames["pathway"].select(pl.len()).collect().item() == 2
 
     report = tidy.write(dir_out)
 

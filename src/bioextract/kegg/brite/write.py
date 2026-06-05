@@ -1,4 +1,3 @@
-import hashlib
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -33,15 +32,11 @@ def write_frame_assets(
     for path_rel, kind, frame_name in ASSET_SPECS:
         frame = frames[frame_name]
         file_out = dir_out / path_rel
-        frame.write_parquet(file_out)
-        with file_out.open("rb") as handle:
-            sha256 = hashlib.file_digest(handle, "sha256").hexdigest()
+        frame.lazy().sink_parquet(file_out)
         entries_manifest.append(
             {
                 "path": path_rel,
                 "kind": kind,
-                "sha256": sha256,
-                "row_count": frame.height,
                 "is_optional": False,
             }
         )

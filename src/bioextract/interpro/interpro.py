@@ -173,9 +173,15 @@ class InterProDb:
         return self._df_mapping
 
     def build_tidy(self) -> InterProTidyDataset:
-        """Build the in-memory InterPro tidy dataset."""
+        """Build the lazy InterPro tidy dataset."""
         return InterProTidyDataset(
-            frames={"mapping": self.extract_mapping()},
+            frames={
+                "mapping": scan_mapping_frame(
+                    self.snapshot.file_protein2ipr,
+                    df_interpro_entry=self._xml_frame("entry"),
+                    df_interpro_member=self._xml_frame("member"),
+                )
+            },
             source=self._tidy_sources(),
             schema_version=SCHEMA_VERSION,
             build_id_prefix=f"interpro-mapping-{self.snapshot.file_protein2ipr.stem}",
@@ -190,6 +196,7 @@ class InterProDb:
         dir_out: os.PathLike[str] | str,
         *,
         should_write_manifest: bool = False,
+        should_hash_assets: bool = False,
     ) -> TidyWriteReport:
         """Write the InterPro tidy dataset as a flat parquet file."""
         dir_out = Path(dir_out)
@@ -201,19 +208,18 @@ class InterProDb:
             df_interpro_member=self._xml_frame("member"),
         ).sink_parquet(file_out)
 
-        row_count = pl.scan_parquet(file_out).select(pl.len()).collect().item()
         asset: TidyReportAsset = {
             "path": "mapping.parquet",
             "kind": "canonical",
-            "row_count": row_count,
             "is_optional": False,
         }
         manifest = (
             self._build_manifest(
                 {
                     **asset,
-                    "sha256": calculate_file_sha256(file_out),
-                    "row_count": row_count,
+                    "sha256": calculate_file_sha256(file_out)
+                    if should_hash_assets
+                    else None,
                 }
             )
             if should_write_manifest
@@ -228,7 +234,7 @@ class InterProDb:
 
     def _build_manifest(
         self,
-        asset: dict[str, str | int | bool],
+        asset: dict[str, str | bool | None],
     ) -> TidyManifest:
         timestamp = datetime.now(UTC)
         return {
@@ -238,7 +244,6 @@ class InterProDb:
             "sources": [
                 {
                     "path": source.path.as_posix(),
-                    "sha256": calculate_file_sha256(source.path),
                     "bytes": source.path.stat().st_size,
                     "media_type": source.media_type,
                 }

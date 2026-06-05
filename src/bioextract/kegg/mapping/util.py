@@ -241,10 +241,14 @@ def _read_two_col_tsv(
 ) -> pl.DataFrame:
     if file_path.stat().st_size == 0:
         return pl.DataFrame(schema=schema)
-    return pl.read_csv(
-        file_path,
-        separator="\t",
-        has_header=False,
-        new_columns=columns,
-        schema_overrides=schema,
-    ).select(columns)
+    return (
+        pl.scan_csv(
+            file_path,
+            separator="\t",
+            has_header=False,
+            new_columns=columns,
+            schema_overrides=schema,
+        )
+        .select(columns)
+        .collect()
+    )

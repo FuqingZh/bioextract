@@ -140,12 +140,13 @@ def _read_reactome_tsv(
     schema: SchemaDict,
     context: str,
 ) -> pl.DataFrame:
-    df = pl.read_csv(
+    lf = pl.scan_csv(
         file_path,
         separator="\t",
         has_header=False,
         new_columns=columns,
         schema_overrides=schema,
     )
+    df = lf.select(columns).collect()
     validate_required_cols(df.columns, columns, context)
-    return df.select(columns)
+    return df

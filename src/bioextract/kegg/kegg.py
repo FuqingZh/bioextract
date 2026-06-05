@@ -249,10 +249,15 @@ class KeggDb:
         )
 
     def build_tidy(self) -> KeggTidyDataset:
-        """Build the in-memory KEGG tidy dataset for this snapshot kind."""
+        """Build the lazy KEGG tidy dataset for this snapshot kind."""
         if self.snapshot.kind == _KeggSnapshotKind.BRITE_JSON:
             file_brite_json = self._required_path(self.snapshot.file_brite_json)
-            frames = build_brite_tidy_frames(file_brite_json)
+            frames = {
+                frame_name: frame.lazy()
+                for frame_name, frame in build_brite_tidy_frames(
+                    file_brite_json
+                ).items()
+            }
             return KeggTidyDataset(
                 frames=frames,
                 source=TidySource(path=file_brite_json, media_type=MEDIA_TYPE_JSON),
@@ -266,7 +271,7 @@ class KeggDb:
 
         self._require_mapping_snapshot("build KEGG mapping tidy dataset")
         return KeggTidyDataset(
-            frames={"mapping": self.extract_mapping()},
+            frames={"mapping": self.extract_mapping().lazy()},
             source=self._mapping_tidy_sources(),
             schema_version=MAPPING_SCHEMA_VERSION,
             build_id_prefix=f"kegg-mapping-{self.snapshot.organism_code}",
@@ -281,11 +286,13 @@ class KeggDb:
         dir_out: os.PathLike[str] | str,
         *,
         should_write_manifest: bool = False,
+        should_hash_assets: bool = False,
     ) -> TidyWriteReport:
         """Write the KEGG tidy dataset as flat parquet files."""
         return self.build_tidy().write(
             Path(dir_out),
             should_write_manifest=should_write_manifest,
+            should_hash_assets=should_hash_assets,
         )
 
     def _mapping_tidy_sources(self) -> tuple[TidySource, ...]:

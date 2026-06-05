@@ -28,13 +28,11 @@ class TidyAsset:
 class TidyReportAsset(TypedDict):
     path: str
     kind: str
-    row_count: int | None
     is_optional: bool
 
 
 class TidyManifestAsset(TidyReportAsset):
-    sha256: str
-    row_count: int
+    sha256: str | None
 
 
 class TidyManifest(TypedDict):
@@ -54,7 +52,7 @@ class TidyWriteReport:
 
 @dataclass(slots=True)
 class TidyDataset:
-    frames: Mapping[str, pl.DataFrame]
+    frames: Mapping[str, pl.LazyFrame]
     source: TidySource | tuple[TidySource, ...]
     schema_version: str
     build_id_prefix: str
@@ -65,22 +63,31 @@ class TidyDataset:
         dir_out: Path | str,
         *,
         should_write_manifest: bool = False,
+        should_hash_assets: bool = False,
     ) -> TidyWriteReport:
         dir_out = Path(dir_out)
         dir_out.mkdir(parents=True, exist_ok=True)
 
+        entries_report: list[TidyReportAsset] = []
         entries_manifest: list[TidyManifestAsset] = []
         for asset in self.assets:
             frame = self.frames[asset.frame_name]
             file_out = dir_out / asset.path
             file_out.parent.mkdir(parents=True, exist_ok=True)
-            frame.write_parquet(file_out)
+            frame.sink_parquet(file_out)
+            entry_report: TidyReportAsset = {
+                "path": asset.path,
+                "kind": asset.kind,
+                "is_optional": asset.is_optional,
+            }
+            entries_report.append(entry_report)
             entries_manifest.append(
                 {
                     "path": asset.path,
                     "kind": asset.kind,
-                    "sha256": calculate_file_sha256(file_out),
-                    "row_count": frame.height,
+                    "sha256": calculate_file_sha256(file_out)
+                    if should_hash_assets
+                    else None,
                     "is_optional": asset.is_optional,
                 }
             )
@@ -95,7 +102,7 @@ class TidyDataset:
             )
         return TidyWriteReport(
             dir_out=dir_out,
-            assets=tuple(entries_manifest),
+            assets=tuple(entries_report),
             manifest=manifest,
         )
 
@@ -111,7 +118,6 @@ class TidyDataset:
             "sources": [
                 {
                     "path": source.path.as_posix(),
-                    "sha256": calculate_file_sha256(source.path),
                     "bytes": source.path.stat().st_size,
                     "media_type": source.media_type,
                 }

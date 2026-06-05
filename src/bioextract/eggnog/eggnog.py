@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,8 +31,10 @@ from .util import (
     build_mapping_frame,
     extract_unmapped_input_ids_frame,
     read_cog_fun_frame,
+    scan_mapping_tsv,
     select_mapping_frame,
     validate_kind_input_id,
+    write_mapping_tsv,
 )
 
 __all__ = [
@@ -168,16 +171,14 @@ class EggnogDb:
         )
 
     def build_tidy(self) -> EggnogTidyDataset:
-        """Build the in-memory eggNOG tidy dataset."""
-        return EggnogTidyDataset(
-            frames={"mapping": self.extract_mapping()},
-            source=self._tidy_sources(),
-            schema_version=SCHEMA_VERSION,
-            build_id_prefix=f"eggnog-mapping-{self.snapshot.file_eggnog_db.stem}",
-            assets=tuple(
-                TidyAsset(path=path, kind=kind, frame_name=frame_name)
-                for path, kind, frame_name in ASSET_SPECS
-            ),
+        """Build a tidy dataset handle.
+
+        eggNOG mapping expands a SQLite table into a flat TSV before Polars can
+        scan it lazily, so callers should use `write_tidy()` for full writes.
+        """
+        raise NotImplementedError(
+            "EggnogDb.build_tidy() cannot return a stable lazy dataset without "
+            "a materialized mapping source; use EggnogDb.write_tidy()."
         )
 
     def write_tidy(
@@ -185,12 +186,35 @@ class EggnogDb:
         dir_out: os.PathLike[str] | str,
         *,
         should_write_manifest: bool = False,
+        should_hash_assets: bool = False,
     ) -> TidyWriteReport:
         """Write the eggNOG tidy dataset as flat parquet files."""
-        return self.build_tidy().write(
-            Path(dir_out),
-            should_write_manifest=should_write_manifest,
-        )
+        with tempfile.TemporaryDirectory(
+            prefix="bioextract-eggnog-",
+            dir=None if self.snapshot.dir_tmp is None else self.snapshot.dir_tmp,
+        ) as dir_tmp:
+            file_mapping_tsv = Path(dir_tmp) / "mapping.tsv"
+            write_mapping_tsv(
+                file_eggnog_db=self.snapshot.file_eggnog_db,
+                dir_tmp=self.snapshot.dir_tmp,
+                df_cog_fun=self._read_cog_fun(),
+                file_out=file_mapping_tsv,
+            )
+            dataset = EggnogTidyDataset(
+                frames={"mapping": scan_mapping_tsv(file_mapping_tsv)},
+                source=self._tidy_sources(),
+                schema_version=SCHEMA_VERSION,
+                build_id_prefix=f"eggnog-mapping-{self.snapshot.file_eggnog_db.stem}",
+                assets=tuple(
+                    TidyAsset(path=path, kind=kind, frame_name=frame_name)
+                    for path, kind, frame_name in ASSET_SPECS
+                ),
+            )
+            return dataset.write(
+                Path(dir_out),
+                should_write_manifest=should_write_manifest,
+                should_hash_assets=should_hash_assets,
+            )
 
     def _read_cog_fun(self) -> pl.DataFrame:
         if self._df_cog_fun is None:

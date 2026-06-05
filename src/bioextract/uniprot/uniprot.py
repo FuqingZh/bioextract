@@ -39,10 +39,12 @@ from .util import (
     has_hive_parquet_candidates,
     normalize_taxids,
     read_eggnog_xref_frame,
+    scan_eggnog_xref_tsv,
     scan_hive_mapping_dataset,
     scan_parquet_mapping,
     scan_raw_idmapping_selected,
     validate_mapping_schema,
+    write_eggnog_xref_tsv,
 )
 
 __all__ = [
@@ -221,6 +223,7 @@ class UniprotDb:
         dir_out: os.PathLike[str] | str,
         *,
         should_write_manifest: bool = False,
+        should_hash_assets: bool = False,
     ) -> TidyWriteReport:
         """Write UniProt eggNOG xrefs as a canonical parquet mapping."""
         self._require_dat_snapshot("write UniProt eggNOG xref tidy")
@@ -230,18 +233,29 @@ class UniprotDb:
             if self.snapshot.kind == _UniprotMappingKind.DAT_GZIP
             else MEDIA_TYPE_FLAT_FILE
         )
-        dataset = TidyDataset(
-            frames={"mapping": self.extract_eggnog_xref()},
-            source=TidySource(path=file_dat, media_type=media_type),
-            schema_version=SCHEMA_VERSION_EGGNOG_XREF,
-            build_id_prefix=f"uniprot-eggnog-xref-{self.snapshot.source_db}",
-            assets=(
-                TidyAsset(
-                    path="mapping.parquet", kind="canonical", frame_name="mapping"
+        with tempfile.TemporaryDirectory(prefix="bioextract-uniprot-xref-") as dir_tmp:
+            file_xref_tsv = Path(dir_tmp) / "mapping.tsv"
+            write_eggnog_xref_tsv(
+                file_dat,
+                file_xref_tsv,
+                source_db=self.snapshot.source_db or "",
+            )
+            dataset = TidyDataset(
+                frames={"mapping": scan_eggnog_xref_tsv(file_xref_tsv)},
+                source=TidySource(path=file_dat, media_type=media_type),
+                schema_version=SCHEMA_VERSION_EGGNOG_XREF,
+                build_id_prefix=f"uniprot-eggnog-xref-{self.snapshot.source_db}",
+                assets=(
+                    TidyAsset(
+                        path="mapping.parquet", kind="canonical", frame_name="mapping"
+                    ),
                 ),
-            ),
-        )
-        return dataset.write(Path(dir_out), should_write_manifest=should_write_manifest)
+            )
+            return dataset.write(
+                Path(dir_out),
+                should_write_manifest=should_write_manifest,
+                should_hash_assets=should_hash_assets,
+            )
 
     def write_tidy(
         self,
@@ -346,7 +360,6 @@ class UniprotDb:
                 {
                     "path": "mapping.parquet",
                     "kind": "canonical",
-                    "row_count": None,
                     "is_optional": False,
                 },
             )
@@ -489,7 +502,6 @@ def _build_existing_tidy_report(
             {
                 "path": "mapping.parquet",
                 "kind": "canonical",
-                "row_count": None,
                 "is_optional": False,
             },
         )
@@ -503,7 +515,6 @@ def _extract_report_assets_from_manifest(
         {
             "path": asset["path"],
             "kind": asset["kind"],
-            "row_count": asset["row_count"],
             "is_optional": asset["is_optional"],
         }
         for asset in manifest["assets"]
