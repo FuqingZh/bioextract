@@ -189,15 +189,15 @@ class WikiPathwaysDb:
 
     def extract_pathway(self) -> pl.DataFrame:
         """Extract WikiPathways pathway metadata with gene counts."""
-        return self._lazy_frame("pathway").collect()
+        return self.lazy_frame("pathway").collect()
 
     def extract_term2gene(self) -> pl.DataFrame:
         """Extract a WikiPathways pathway-to-Entrez table."""
-        return self._lazy_frame("term2gene").collect()
+        return self.lazy_frame("term2gene").collect()
 
     def extract_term2name(self) -> pl.DataFrame:
         """Extract WikiPathways pathway display metadata for enrichment callers."""
-        return self._lazy_frame("term2name").collect()
+        return self.lazy_frame("term2name").collect()
 
     def build_tidy(self) -> WikiPathwaysTidyDataset:
         """Build the in-memory WikiPathways tidy dataset.
@@ -207,9 +207,9 @@ class WikiPathwaysDb:
         """
         return WikiPathwaysTidyDataset(
             frames={
-                "pathway": self._lazy_frame("pathway"),
-                "term2gene": self._lazy_frame("term2gene"),
-                "term2name": self._lazy_frame("term2name"),
+                "pathway": self.lazy_frame("pathway"),
+                "term2gene": self.lazy_frame("term2gene"),
+                "term2name": self.lazy_frame("term2name"),
             },
             source=TidySource(path=self.snapshot.file_gmt, media_type=MEDIA_TYPE_GMT),
             schema_version=SCHEMA_VERSION,
@@ -244,7 +244,7 @@ class WikiPathwaysDb:
             should_hash_assets=should_hash_assets,
         )
 
-    def _lazy_frame(self, frame_name: str) -> pl.LazyFrame:
+    def lazy_frame(self, frame_name: str) -> pl.LazyFrame:
         if self._frames is None:
             frames = read_gmt_frames(self.snapshot.file_gmt)
             if self.snapshot.species is not None:
@@ -303,8 +303,8 @@ class WikiPathwaysSelection:
     def _lazy_mapping(self) -> pl.LazyFrame:
         if self._lf_mapping is None:
             self._lf_mapping = extract_mapping_frame(
-                self.dataset._lazy_frame("pathway"),
-                self.dataset._lazy_frame("term2gene"),
+                self.dataset.lazy_frame("pathway"),
+                self.dataset.lazy_frame("term2gene"),
                 self._df_input_ids,
                 cols_group_id=self._col_group_id,
             )
