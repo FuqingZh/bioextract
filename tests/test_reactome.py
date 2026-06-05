@@ -192,7 +192,7 @@ def test_build_tidy_writes_flat_parquet_and_manifest(tmp_path: Path) -> None:
     assert report.manifest is not None
     assert report.manifest["schema_version"] == "reactome-mapping-v0.1"
     assert len(report.manifest["sources"]) == 3
-    assert sorted(asset["path"] for asset in report.assets) == [
+    assert sorted(asset.path for asset in report.assets) == [
         "mapping.parquet",
         "pathway.parquet",
         "relation.parquet",
@@ -217,7 +217,7 @@ def test_mapping_only_snapshot_supports_annotation_and_term2gene(
     report = tidy.write(tmp_path / "mapping-only", should_write_manifest=True)
     assert report.manifest is not None
     assert len(report.manifest["sources"]) == 1
-    assert sorted(asset["path"] for asset in report.assets) == [
+    assert sorted(asset.path for asset in report.assets) == [
         "mapping.parquet",
         "term2gene.parquet",
     ]

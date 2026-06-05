@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import Iterable
+from dataclasses import asdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -360,20 +361,16 @@ class UniprotDb:
                 compression_level=level_compression,
             )
             monitor.check()
-            assets: tuple[TidyReportAsset, ...] = (
-                {
-                    "path": "mapping.parquet",
-                    "kind": "canonical",
-                    "is_optional": False,
-                },
-            )
+            assets = (TidyReportAsset(path="mapping.parquet", kind="canonical"),)
             assets_manifest: list[TidyManifestAsset] = [
-                {
-                    **asset,
-                    "sha256": calculate_file_sha256(file_out)
+                TidyManifestAsset(
+                    path=asset.path,
+                    kind=asset.kind,
+                    is_optional=asset.is_optional,
+                    sha256=calculate_file_sha256(file_out)
                     if should_hash_assets
                     else None,
-                }
+                )
                 for asset in assets
             ]
 
@@ -434,7 +431,7 @@ class UniprotDb:
             "generated_at": timestamp.isoformat().replace("+00:00", "Z"),
             "taxids": list(self.snapshot.taxids),
             "sources": [source],
-            "assets": assets,
+            "assets": [asdict(asset) for asset in assets],
         }
 
     def _require_idmapping_snapshot(self, action: str) -> None:
@@ -518,11 +515,7 @@ def _build_existing_tidy_report(
         assets = _extract_report_assets_from_manifest(manifest)
     else:
         assets: tuple[TidyReportAsset, ...] = (
-            {
-                "path": "mapping.parquet",
-                "kind": "canonical",
-                "is_optional": False,
-            },
+            TidyReportAsset(path="mapping.parquet", kind="canonical"),
         )
     return TidyWriteReport(dir_out=dir_out, assets=assets, manifest=manifest)
 
@@ -531,11 +524,11 @@ def _extract_report_assets_from_manifest(
     manifest: TidyManifest,
 ) -> tuple[TidyReportAsset, ...]:
     return tuple(
-        {
-            "path": asset["path"],
-            "kind": asset["kind"],
-            "is_optional": asset["is_optional"],
-        }
+        TidyReportAsset(
+            path=str(asset["path"]),
+            kind=str(asset["kind"]),
+            is_optional=bool(asset["is_optional"]),
+        )
         for asset in manifest["assets"]
     )
 

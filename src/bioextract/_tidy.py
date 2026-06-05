@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from dataclasses import asdict
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,14 +26,19 @@ class TidyAsset:
     is_optional: bool = False
 
 
-class TidyReportAsset(TypedDict):
+@dataclass(frozen=True, slots=True)
+class TidyReportAsset:
     path: str
     kind: str
-    is_optional: bool
+    is_optional: bool = False
 
 
-class TidyManifestAsset(TidyReportAsset):
+@dataclass(frozen=True, slots=True)
+class TidyManifestAsset:
+    path: str
+    kind: str
     sha256: str | None
+    is_optional: bool = False
 
 
 class TidyManifest(TypedDict):
@@ -40,7 +46,7 @@ class TidyManifest(TypedDict):
     schema_version: str
     generated_at: str
     sources: list[dict[str, str | int]]
-    assets: list[TidyManifestAsset]
+    assets: list[dict[str, str | bool | None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,21 +81,21 @@ class TidyDataset:
             file_out = dir_out / asset.path
             file_out.parent.mkdir(parents=True, exist_ok=True)
             frame.sink_parquet(file_out)
-            entry_report: TidyReportAsset = {
-                "path": asset.path,
-                "kind": asset.kind,
-                "is_optional": asset.is_optional,
-            }
+            entry_report = TidyReportAsset(
+                path=asset.path,
+                kind=asset.kind,
+                is_optional=asset.is_optional,
+            )
             entries_report.append(entry_report)
             entries_manifest.append(
-                {
-                    "path": asset.path,
-                    "kind": asset.kind,
-                    "sha256": calculate_file_sha256(file_out)
+                TidyManifestAsset(
+                    path=asset.path,
+                    kind=asset.kind,
+                    is_optional=asset.is_optional,
+                    sha256=calculate_file_sha256(file_out)
                     if should_hash_assets
                     else None,
-                    "is_optional": asset.is_optional,
-                }
+                )
             )
 
         manifest = (
@@ -123,7 +129,7 @@ class TidyDataset:
                 }
                 for source in self._sources
             ],
-            "assets": assets,
+            "assets": [asdict(asset) for asset in assets],
         }
 
     @property

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterable, Mapping
+from dataclasses import asdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,6 +20,7 @@ from bioextract._tidy import (
     TidyAsset,
     TidyDataset,
     TidyManifest,
+    TidyManifestAsset,
     TidyReportAsset,
     TidySource,
     TidyWriteReport,
@@ -27,13 +29,13 @@ from bioextract._tidy import (
 
 from .constant import (
     ASSET_SPECS,
-    InterProInputIdKind,
     MEDIA_TYPE_TSV_GZIP,
     MEDIA_TYPE_XML_GZIP,
     SCHEMA_GROUP_INPUT_IDS,
     SCHEMA_GROUPS,
     SCHEMA_UNMAPPED,
     SCHEMA_VERSION,
+    InterProInputIdKind,
 )
 from .util import (
     extract_unmapped_input_ids_frame,
@@ -167,8 +169,8 @@ class InterProDb:
         if self._df_mapping is None:
             self._df_mapping = read_mapping_frame(
                 self.snapshot.file_protein2ipr,
-                df_interpro_entry=self._xml_frame("entry"),
-                df_interpro_member=self._xml_frame("member"),
+                df_interpro_entry=self.xml_frame("entry"),
+                df_interpro_member=self.xml_frame("member"),
             )
         return self._df_mapping
 
@@ -178,8 +180,8 @@ class InterProDb:
             frames={
                 "mapping": scan_mapping_frame(
                     self.snapshot.file_protein2ipr,
-                    df_interpro_entry=self._xml_frame("entry"),
-                    df_interpro_member=self._xml_frame("member"),
+                    df_interpro_entry=self.xml_frame("entry"),
+                    df_interpro_member=self.xml_frame("member"),
                 )
             },
             source=self._tidy_sources(),
@@ -204,26 +206,19 @@ class InterProDb:
         file_out = dir_out / "mapping.parquet"
         scan_mapping_frame(
             self.snapshot.file_protein2ipr,
-            df_interpro_entry=self._xml_frame("entry"),
-            df_interpro_member=self._xml_frame("member"),
+            df_interpro_entry=self.xml_frame("entry"),
+            df_interpro_member=self.xml_frame("member"),
         ).sink_parquet(file_out)
 
-        asset: TidyReportAsset = {
-            "path": "mapping.parquet",
-            "kind": "canonical",
-            "is_optional": False,
-        }
+        asset = TidyReportAsset(path="mapping.parquet", kind="canonical")
+        asset_manifest = TidyManifestAsset(
+            path=asset.path,
+            kind=asset.kind,
+            is_optional=asset.is_optional,
+            sha256=calculate_file_sha256(file_out) if should_hash_assets else None,
+        )
         manifest = (
-            self._build_manifest(
-                {
-                    **asset,
-                    "sha256": calculate_file_sha256(file_out)
-                    if should_hash_assets
-                    else None,
-                }
-            )
-            if should_write_manifest
-            else None
+            self._build_manifest(asset_manifest) if should_write_manifest else None
         )
         if manifest is not None:
             (dir_out / "manifest.json").write_text(
@@ -234,7 +229,7 @@ class InterProDb:
 
     def _build_manifest(
         self,
-        asset: dict[str, str | bool | None],
+        asset: TidyManifestAsset,
     ) -> TidyManifest:
         timestamp = datetime.now(UTC)
         return {
@@ -249,10 +244,10 @@ class InterProDb:
                 }
                 for source in self._tidy_sources()
             ],
-            "assets": [asset],
+            "assets": [asdict(asset)],
         }
 
-    def _xml_frame(self, frame_name: str) -> pl.DataFrame:
+    def xml_frame(self, frame_name: str) -> pl.DataFrame:
         if self._frames_xml is None:
             self._frames_xml = read_interpro_xml_frames(self.snapshot.file_interpro_xml)
         return self._frames_xml[frame_name]
@@ -300,8 +295,8 @@ class InterProSelection:
                 self._df_input_ids,
                 kind_input_id=self.kind_input_id,
                 cols_group_id=self._col_group_id,
-                df_interpro_entry=self.dataset._xml_frame("entry"),
-                df_interpro_member=self.dataset._xml_frame("member"),
+                df_interpro_entry=self.dataset.xml_frame("entry"),
+                df_interpro_member=self.dataset.xml_frame("member"),
             )
         return self._df_mapping
 

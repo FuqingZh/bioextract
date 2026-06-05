@@ -180,7 +180,7 @@ def test_build_tidy_writes_mapping_parquet_and_manifest(tmp_path: Path) -> None:
 
     assert report.manifest is not None
     assert report.manifest["schema_version"] == "kegg-mapping-v0.1"
-    assert [asset["path"] for asset in report.assets] == ["mapping.parquet"]
+    assert [asset.path for asset in report.assets] == ["mapping.parquet"]
     assert pl.read_parquet(tmp_path / "out" / "mapping.parquet").height == 3
 
 

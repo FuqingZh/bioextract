@@ -106,7 +106,7 @@ def test_build_tidy_writes_flat_parquet_and_manifest(tmp_path: Path) -> None:
 
     assert report.manifest is not None
     assert report.manifest["schema_version"] == "wikipathways-gmt-v0.1"
-    assert sorted(asset["path"] for asset in report.assets) == [
+    assert sorted(asset.path for asset in report.assets) == [
         "pathway.parquet",
         "term2gene.parquet",
         "term2name.parquet",

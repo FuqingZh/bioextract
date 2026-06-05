@@ -7,6 +7,7 @@ import polars as pl
 import pytest
 
 import bioextract.uniprot.uniprot as uniprot_module
+from bioextract._tidy import TidyReportAsset
 from bioextract.uniprot import UniprotDb, UniprotResourceLimits
 from bioextract.uniprot.constant import COLS_IDMAPPING_SELECTED
 
@@ -222,7 +223,7 @@ def test_write_eggnog_xref_tidy_writes_mapping_parquet_and_manifest(
 
     assert report.manifest is not None
     assert report.manifest["schema_version"] == "uniprot-eggnog-xref-v0.1"
-    assert [asset["path"] for asset in report.assets] == ["mapping.parquet"]
+    assert [asset.path for asset in report.assets] == ["mapping.parquet"]
     assert pl.read_parquet(tmp_path / "eggnog-xref" / "mapping.parquet").height == 5
 
 
@@ -251,13 +252,7 @@ def test_write_tidy_writes_single_parquet_by_default(tmp_path: Path) -> None:
 
     assert report.manifest is not None
     assert report.manifest["schema_version"] == "uniprot-idmapping-selected-v0.1"
-    assert report.assets == (
-        {
-            "path": "mapping.parquet",
-            "kind": "canonical",
-            "is_optional": False,
-        },
-    )
+    assert report.assets == (TidyReportAsset(path="mapping.parquet", kind="canonical"),)
     assert (dir_out / "mapping.parquet").is_file()
 
     df_hsa = (
@@ -306,13 +301,7 @@ def test_write_tidy_all_requires_explicit_flag_and_writes_single_parquet(
 
     report = db.write_tidy(tmp_path / "all", should_allow_all=True)
 
-    assert report.assets == (
-        {
-            "path": "mapping.parquet",
-            "kind": "canonical",
-            "is_optional": False,
-        },
-    )
+    assert report.assets == (TidyReportAsset(path="mapping.parquet", kind="canonical"),)
     assert (tmp_path / "all" / "mapping.parquet").is_file()
 
 
@@ -347,11 +336,7 @@ def test_write_tidy_applies_existing_output_policy(
 
     assert (dir_out / "old.txt").read_text(encoding="utf-8") == "old"
     assert report_skip.assets == (
-        {
-            "path": "mapping.parquet",
-            "kind": "canonical",
-            "is_optional": False,
-        },
+        TidyReportAsset(path="mapping.parquet", kind="canonical"),
     )
 
     db.write_tidy(dir_out, policy_existing="overwrite")
@@ -387,14 +372,9 @@ def test_write_tidy_skip_can_return_existing_manifest(tmp_path: Path) -> None:
 
     assert report_skip.manifest is not None
     assert report_skip.manifest["schema_version"] == "uniprot-idmapping-selected-v0.1"
-    assert report_skip.assets == tuple(
-        {
-            "path": asset["path"],
-            "kind": asset["kind"],
-            "is_optional": asset["is_optional"],
-        }
-        for asset in report_skip.manifest["assets"]
-    )
+    assert [asset.path for asset in report_skip.assets] == [
+        asset["path"] for asset in report_skip.manifest["assets"]
+    ]
 
 
 def test_write_tidy_accepts_zstd_compression_level(tmp_path: Path) -> None:
