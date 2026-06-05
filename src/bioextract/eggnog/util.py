@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import csv
 import gzip
 import shutil
 import sqlite3
 import tempfile
-from collections.abc import Iterable
-from collections.abc import Generator
+from collections.abc import Generator, Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
-from typing import TextIO
+from typing import Protocol
+from typing import Sequence
 
 import polars as pl
 
@@ -19,6 +19,10 @@ from .constant import (
     SCHEMA_MAPPING,
     EggnogInputIdKind,
 )
+
+
+class _RowWriter(Protocol):
+    def writerow(self, row: Sequence[object]) -> object: ...
 
 
 def read_cog_fun_frame(file_cog_fun: Path | None) -> pl.DataFrame:
@@ -77,13 +81,18 @@ def write_mapping_tsv(
     }
     with open_sqlite_path(file_eggnog_db, dir_tmp=dir_tmp) as file_sqlite:
         with sqlite3.connect(file_sqlite) as conn:
-            with file_out.open("w", encoding="utf-8") as handle:
-                handle.write("\t".join(COLS_MAPPING) + "\n")
-                write_mapping_rows(handle, conn=conn, map_cog_fun=map_cog_fun)
+            with file_out.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.writer(
+                    handle,
+                    delimiter="\t",
+                    lineterminator="\n",
+                )
+                writer.writerow(COLS_MAPPING)
+                write_mapping_rows(writer, conn=conn, map_cog_fun=map_cog_fun)
 
 
 def write_mapping_rows(
-    handle: TextIO,
+    writer: _RowWriter,
     *,
     conn: sqlite3.Connection,
     map_cog_fun: dict[str, tuple[str | None, str | None]],
@@ -97,19 +106,16 @@ def write_mapping_rows(
             for og_row in og_cache[key]:
                 for category in parse_cog_categories(og_row["CogCategories"]):
                     cog_class, cog_name = map_cog_fun.get(category, (None, None))
-                    handle.write(
-                        "\t".join(
-                            [
-                                protein_id,
-                                og_row["EggnogOgId"] or "",
-                                og_row["EggnogLevel"] or "",
-                                category,
-                                cog_class or "",
-                                cog_name or "",
-                                og_row["OgDescription"] or "",
-                            ]
-                        )
-                        + "\n"
+                    writer.writerow(
+                        [
+                            protein_id,
+                            og_row["EggnogOgId"] or "",
+                            og_row["EggnogLevel"] or "",
+                            category,
+                            cog_class or "",
+                            cog_name or "",
+                            og_row["OgDescription"] or "",
+                        ]
                     )
 
 

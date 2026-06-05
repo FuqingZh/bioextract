@@ -18,7 +18,6 @@ from bioextract._tidy import TidyAsset, TidyDataset, TidySource, TidyWriteReport
 
 from .constant import (
     ASSET_SPECS,
-    EggnogInputIdKind,
     MEDIA_TYPE_SQLITE,
     MEDIA_TYPE_SQLITE_GZIP,
     MEDIA_TYPE_TSV,
@@ -26,6 +25,7 @@ from .constant import (
     SCHEMA_GROUPS,
     SCHEMA_UNMAPPED,
     SCHEMA_VERSION,
+    EggnogInputIdKind,
 )
 from .util import (
     build_mapping_frame,
@@ -115,7 +115,7 @@ class EggnogDb:
             self._df_mapping = build_mapping_frame(
                 file_eggnog_db=self.snapshot.file_eggnog_db,
                 dir_tmp=self.snapshot.dir_tmp,
-                df_cog_fun=self._read_cog_fun(),
+                df_cog_fun=self.read_cog_fun(),
             )
         return self._df_mapping
 
@@ -197,7 +197,7 @@ class EggnogDb:
             write_mapping_tsv(
                 file_eggnog_db=self.snapshot.file_eggnog_db,
                 dir_tmp=self.snapshot.dir_tmp,
-                df_cog_fun=self._read_cog_fun(),
+                df_cog_fun=self.read_cog_fun(),
                 file_out=file_mapping_tsv,
             )
             dataset = EggnogTidyDataset(
@@ -216,7 +216,7 @@ class EggnogDb:
                 should_hash_assets=should_hash_assets,
             )
 
-    def _read_cog_fun(self) -> pl.DataFrame:
+    def read_cog_fun(self) -> pl.DataFrame:
         if self._df_cog_fun is None:
             self._df_cog_fun = read_cog_fun_frame(self.snapshot.file_cog_fun)
         return self._df_cog_fun
@@ -266,7 +266,7 @@ class EggnogSelection:
                 df_input_ids=self._df_input_ids,
                 kind_input_id=self.kind_input_id,
                 cols_group_id=self._col_group_id,
-                df_cog_fun=self.dataset._read_cog_fun(),
+                df_cog_fun=self.dataset.read_cog_fun(),
             )
         return self._df_mapping
 
