@@ -1,7 +1,10 @@
+import csv
 import re
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
+from typing import TextIO
 
 import polars as pl
 from polars._typing import SchemaDict
@@ -13,6 +16,14 @@ RE_UNIPROT_PIPE = re.compile(r"^[^|]+\|([^|]+)\|")
 class GroupInputFrames:
     df_groups: pl.DataFrame
     df_input_ids: pl.DataFrame
+
+
+class RowWriter(Protocol):
+    def writerow(self, row: Iterable[object], /) -> object: ...
+
+
+def create_tsv_writer(handle: TextIO) -> RowWriter:
+    return csv.writer(handle, delimiter="\t", lineterminator="\n")
 
 
 def normalize_input_id(value: str) -> str:

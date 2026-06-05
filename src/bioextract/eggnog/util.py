@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import csv
 import gzip
 import shutil
 import sqlite3
@@ -8,9 +7,10 @@ import tempfile
 from collections.abc import Generator, Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Protocol
 
 import polars as pl
+
+from bioextract._shared import RowWriter, create_tsv_writer
 
 from .constant import (
     COLS_MAPPING,
@@ -18,10 +18,6 @@ from .constant import (
     SCHEMA_MAPPING,
     EggnogInputIdKind,
 )
-
-
-class _RowWriter(Protocol):
-    def writerow(self, row: Iterable[object], /) -> object: ...
 
 
 def read_cog_fun_frame(file_cog_fun: Path | None) -> pl.DataFrame:
@@ -81,17 +77,13 @@ def write_mapping_tsv(
     with open_sqlite_path(file_eggnog_db, dir_tmp=dir_tmp) as file_sqlite:
         with sqlite3.connect(file_sqlite) as conn:
             with file_out.open("w", encoding="utf-8", newline="") as handle:
-                writer = csv.writer(
-                    handle,
-                    delimiter="\t",
-                    lineterminator="\n",
-                )
+                writer = create_tsv_writer(handle)
                 writer.writerow(COLS_MAPPING)
                 write_mapping_rows(writer, conn=conn, map_cog_fun=map_cog_fun)
 
 
 def write_mapping_rows(
-    writer: _RowWriter,
+    writer: RowWriter,
     *,
     conn: sqlite3.Connection,
     map_cog_fun: dict[str, tuple[str | None, str | None]],

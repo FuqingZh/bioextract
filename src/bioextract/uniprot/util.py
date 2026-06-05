@@ -1,15 +1,12 @@
 from __future__ import annotations
 
-import csv
 import gzip
-from collections.abc import Iterable
 from pathlib import Path
-from typing import Protocol
 from typing import TextIO
 
 import polars as pl
 
-from bioextract._shared import validate_required_cols
+from bioextract._shared import RowWriter, create_tsv_writer, validate_required_cols
 
 from .constant import (
     COLS_EGGNOG_XREF,
@@ -18,10 +15,6 @@ from .constant import (
     SCHEMA_EGGNOG_XREF,
     SCHEMA_MAPPING,
 )
-
-
-class _RowWriter(Protocol):
-    def writerow(self, row: Iterable[object], /) -> object: ...
 
 
 def normalize_taxids(taxids: tuple[str | int, ...]) -> tuple[str, ...]:
@@ -121,7 +114,7 @@ def write_eggnog_xref_tsv(
 ) -> None:
     file_out.parent.mkdir(parents=True, exist_ok=True)
     with file_out.open("w", encoding="utf-8", newline="") as handle_out:
-        writer = csv.writer(handle_out, delimiter="\t", lineterminator="\n")
+        writer = create_tsv_writer(handle_out)
         writer.writerow(COLS_EGGNOG_XREF)
         with open_uniprot_dat(file_dat) as handle_in:
             accessions: list[str] = []
@@ -187,7 +180,7 @@ def append_eggnog_xref_rows(
 
 
 def write_eggnog_xref_rows(
-    writer: _RowWriter,
+    writer: RowWriter,
     *,
     accessions: list[str],
     eggnog_xrefs: list[tuple[str, str]],
