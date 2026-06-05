@@ -3,7 +3,9 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 __all__ = [
+    "eggnog",
     "go",
+    "interpro",
     "kegg",
     "omnipath",
     "reactome",
@@ -13,7 +15,9 @@ __all__ = [
 ]
 
 if TYPE_CHECKING:
+    import bioextract.eggnog as eggnog
     import bioextract.go as go
+    import bioextract.interpro as interpro
     import bioextract.kegg as kegg
     import bioextract.omnipath as omnipath
     import bioextract.reactome as reactome
@@ -22,7 +26,9 @@ if TYPE_CHECKING:
     import bioextract.wikipathways as wikipathways
 
 _ALIAS_MODULES: dict[str, str] = {
+    "eggnog": "bioextract.eggnog",
     "go": "bioextract.go",
+    "interpro": "bioextract.interpro",
     "kegg": "bioextract.kegg",
     "omnipath": "bioextract.omnipath",
     "reactome": "bioextract.reactome",
