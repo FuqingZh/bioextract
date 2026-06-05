@@ -39,10 +39,6 @@ def scan_raw_idmapping_selected(file_idmapping_selected: Path) -> pl.LazyFrame:
     ).select(COLS_IDMAPPING_SELECTED)
 
 
-def scan_parquet_mapping(file_mapping: Path) -> pl.LazyFrame:
-    return pl.scan_parquet(file_mapping)
-
-
 def scan_hive_mapping_dataset(dir_mapping: Path) -> pl.LazyFrame:
     return pl.scan_parquet(
         dir_mapping / "**" / "*.parquet",

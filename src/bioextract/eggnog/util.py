@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 import tempfile
 from collections.abc import Iterable
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -386,7 +387,11 @@ def validate_kind_input_id(kind_input_id: str) -> None:
 
 
 @contextmanager
-def open_sqlite_path(file_eggnog_db: Path, *, dir_tmp: Path | None) -> Iterator[Path]:
+def open_sqlite_path(
+    file_eggnog_db: Path,
+    *,
+    dir_tmp: Path | None,
+) -> Generator[Path, None, None]:
     if file_eggnog_db.suffix != ".gz":
         yield file_eggnog_db
         return

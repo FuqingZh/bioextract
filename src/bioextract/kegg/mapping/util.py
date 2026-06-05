@@ -205,14 +205,16 @@ def validate_kind_input_id(kind_input_id: str) -> None:
 
 
 def col_join_by_kind(kind_input_id: KeggInputIdKind) -> str:
-    if kind_input_id == "uniprot":
-        return "UniProtId"
-    if kind_input_id == "ncbi_geneid":
-        return "NcbiGeneId"
-    if kind_input_id == "kegg_gene":
-        return "KeggGeneId"
-    validate_kind_input_id(kind_input_id)
-    raise AssertionError("unreachable")
+    match kind_input_id:
+        case "uniprot":
+            return "UniProtId"
+        case "ncbi_geneid":
+            return "NcbiGeneId"
+        case "kegg_gene":
+            return "KeggGeneId"
+        case _:
+            validate_kind_input_id(kind_input_id)
+            raise AssertionError("unreachable")
 
 
 def validate_organism_code(df_gene_ids: pl.DataFrame, *, organism_code: str) -> None:

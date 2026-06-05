@@ -43,7 +43,6 @@ from .util import (
     read_eggnog_xref_frame,
     scan_eggnog_xref_tsv,
     scan_hive_mapping_dataset,
-    scan_parquet_mapping,
     scan_raw_idmapping_selected,
     validate_mapping_schema,
     write_eggnog_xref_tsv,
@@ -401,7 +400,7 @@ class UniprotDb:
                     self._required_path(self.snapshot.file_idmapping_selected)
                 )
             case _UniprotMappingKind.PARQUET:
-                return scan_parquet_mapping(
+                return pl.scan_parquet(
                     self._required_path(self.snapshot.file_idmapping_selected)
                 )
             case _UniprotMappingKind.HIVE_PARQUET:
@@ -470,23 +469,27 @@ def _infer_mapping_kind(path: Path) -> _UniprotMappingKind:
                 f"UniProt hive parquet dataset contains no parquet files: {path}"
             )
         return _UniprotMappingKind.HIVE_PARQUET
-    name = path.name
-    if name.endswith(".tab.gz"):
-        return _UniprotMappingKind.RAW_TSV_GZIP
-    if name.endswith(".tab"):
-        return _UniprotMappingKind.RAW_TSV
-    if path.suffix == ".parquet":
-        return _UniprotMappingKind.PARQUET
-    raise ValueError(f"Unsupported UniProt idmapping selected input type: {path}")
+    match path.name:
+        case name if name.endswith(".tab.gz"):
+            return _UniprotMappingKind.RAW_TSV_GZIP
+        case name if name.endswith(".tab"):
+            return _UniprotMappingKind.RAW_TSV
+        case name if name.endswith(".parquet"):
+            return _UniprotMappingKind.PARQUET
+        case _:
+            raise ValueError(
+                f"Unsupported UniProt idmapping selected input type: {path}"
+            )
 
 
 def _infer_dat_kind(path: Path) -> _UniprotMappingKind:
-    name = path.name
-    if name.endswith(".dat.gz"):
-        return _UniprotMappingKind.DAT_GZIP
-    if name.endswith(".dat"):
-        return _UniprotMappingKind.DAT
-    raise ValueError(f"Unsupported UniProt flat-file input type: {path}")
+    match path.name:
+        case name if name.endswith(".dat.gz"):
+            return _UniprotMappingKind.DAT_GZIP
+        case name if name.endswith(".dat"):
+            return _UniprotMappingKind.DAT
+        case _:
+            raise ValueError(f"Unsupported UniProt flat-file input type: {path}")
 
 
 def _publish_tidy_dir(
@@ -696,3 +699,9 @@ def _media_type_for_kind(kind: _UniprotMappingKind) -> str:
             return MEDIA_TYPE_PARQUET
         case _UniprotMappingKind.HIVE_PARQUET:
             return MEDIA_TYPE_PARQUET_DATASET
+        case _UniprotMappingKind.DAT:
+            return MEDIA_TYPE_FLAT_FILE
+        case _UniprotMappingKind.DAT_GZIP:
+            return MEDIA_TYPE_FLAT_FILE_GZIP
+        case _:
+            raise ValueError(f"Unsupported UniProt mapping kind: {kind!r}")
