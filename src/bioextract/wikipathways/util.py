@@ -31,7 +31,7 @@ class _Term2GeneRecord(TypedDict):
     GeneId: str
 
 
-def read_gmt_frames(file_gmt: Path) -> dict[str, pl.DataFrame]:
+def read_gmt_frames(file_gmt: Path) -> dict[str, pl.LazyFrame]:
     pathways: list[_PathwayRecord] = []
     term2gene_rows: list[_Term2GeneRecord] = []
 
@@ -66,16 +66,22 @@ def read_gmt_frames(file_gmt: Path) -> dict[str, pl.DataFrame]:
                     }
                 )
 
-    df_pathway = pl.DataFrame(pathways, schema=SCHEMA_PATHWAY)
-    df_term2gene = pl.DataFrame(term2gene_rows, schema=SCHEMA_TERM2GENE)
-    if df_pathway.height > 0:
-        df_pathway = df_pathway.unique(subset=["WikiPathwaysId"]).sort("WikiPathwaysId")
-    if df_term2gene.height > 0:
-        df_term2gene = df_term2gene.unique().sort("WikiPathwaysId", "GeneId")
+    lf_pathway = (
+        pl.DataFrame(pathways, schema=SCHEMA_PATHWAY)
+        .lazy()
+        .unique(subset=["WikiPathwaysId"])
+        .sort("WikiPathwaysId")
+    )
+    lf_term2gene = (
+        pl.DataFrame(term2gene_rows, schema=SCHEMA_TERM2GENE)
+        .lazy()
+        .unique()
+        .sort("WikiPathwaysId", "GeneId")
+    )
     return {
-        "pathway": df_pathway,
-        "term2gene": df_term2gene,
-        "term2name": extract_term2name_frame(df_pathway),
+        "pathway": lf_pathway,
+        "term2gene": lf_term2gene,
+        "term2name": extract_term2name_frame(lf_pathway),
     }
 
 
@@ -103,21 +109,21 @@ def parse_pathway_header(
     }
 
 
-def extract_term2name_frame(df_pathway: pl.DataFrame) -> pl.DataFrame:
+def extract_term2name_frame(lf_pathway: pl.LazyFrame) -> pl.LazyFrame:
     return (
-        df_pathway.select(SCHEMA_TERM2NAME.keys())
+        lf_pathway.select(SCHEMA_TERM2NAME.keys())
         .unique(subset=["WikiPathwaysId"])
         .sort("WikiPathwaysId")
     )
 
 
 def extract_mapping_frame(
-    df_pathway: pl.DataFrame,
-    df_term2gene: pl.DataFrame,
+    lf_pathway: pl.LazyFrame,
+    lf_term2gene: pl.LazyFrame,
     df_input_ids: pl.DataFrame,
     *,
     cols_group_id: tuple[str, ...],
-) -> pl.DataFrame:
+) -> pl.LazyFrame:
     cols_group = list(cols_group_id)
     cols_out = cols_group + [
         "InputId",
@@ -128,15 +134,16 @@ def extract_mapping_frame(
         "Url",
     ]
     return (
-        df_input_ids.join(
-            df_term2gene,
+        df_input_ids.lazy()
+        .join(
+            lf_term2gene,
             left_on="InputId",
             right_on="GeneId",
             how="inner",
         )
         .with_columns(pl.col("InputId").alias("GeneId"))
         .join(
-            df_pathway.select("WikiPathwaysId", "PathwayName", "Species", "Url"),
+            lf_pathway.select("WikiPathwaysId", "PathwayName", "Species", "Url"),
             on="WikiPathwaysId",
             how="left",
         )
@@ -148,14 +155,15 @@ def extract_mapping_frame(
 
 def extract_unmapped_input_ids_frame(
     df_input_ids: pl.DataFrame,
-    df_mapping: pl.DataFrame,
+    lf_mapping: pl.LazyFrame,
     *,
     cols_group_id: tuple[str, ...],
-) -> pl.DataFrame:
+) -> pl.LazyFrame:
     cols_index = list(cols_group_id) + ["InputId"]
-    df_mapped_input_ids = df_mapping.select(cols_index).unique().sort(cols_index)
+    lf_mapped_input_ids = lf_mapping.select(cols_index).unique().sort(cols_index)
     return (
-        df_input_ids.join(df_mapped_input_ids, on=cols_index, how="anti")
+        df_input_ids.lazy()
+        .join(lf_mapped_input_ids, on=cols_index, how="anti")
         .select(cols_index)
         .sort(cols_index)
     )

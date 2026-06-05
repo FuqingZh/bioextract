@@ -70,7 +70,7 @@ class WikiPathwaysDb:
     limits: WikiPathwaysResourceLimits = field(
         default_factory=WikiPathwaysResourceLimits
     )
-    _frames: dict[str, pl.DataFrame] | None = field(
+    _frames: dict[str, pl.LazyFrame] | None = field(
         default=None, init=False, repr=False
     )
 
@@ -189,15 +189,15 @@ class WikiPathwaysDb:
 
     def extract_pathway(self) -> pl.DataFrame:
         """Extract WikiPathways pathway metadata with gene counts."""
-        return self._frame("pathway")
+        return self._lazy_frame("pathway").collect()
 
     def extract_term2gene(self) -> pl.DataFrame:
         """Extract a WikiPathways pathway-to-Entrez table."""
-        return self._frame("term2gene")
+        return self._lazy_frame("term2gene").collect()
 
     def extract_term2name(self) -> pl.DataFrame:
         """Extract WikiPathways pathway display metadata for enrichment callers."""
-        return self._frame("term2name")
+        return self._lazy_frame("term2name").collect()
 
     def build_tidy(self) -> WikiPathwaysTidyDataset:
         """Build the in-memory WikiPathways tidy dataset.
@@ -205,13 +205,12 @@ class WikiPathwaysDb:
         Returns:
             A `TidyDataset` with `pathway`, `term2gene`, and `term2name` frames.
         """
-        frames = {
-            "pathway": self.extract_pathway(),
-            "term2gene": self.extract_term2gene(),
-            "term2name": self.extract_term2name(),
-        }
         return WikiPathwaysTidyDataset(
-            frames={frame_name: frame.lazy() for frame_name, frame in frames.items()},
+            frames={
+                "pathway": self._lazy_frame("pathway"),
+                "term2gene": self._lazy_frame("term2gene"),
+                "term2name": self._lazy_frame("term2name"),
+            },
             source=TidySource(path=self.snapshot.file_gmt, media_type=MEDIA_TYPE_GMT),
             schema_version=SCHEMA_VERSION,
             build_id_prefix=f"wikipathways-gmt-{self.snapshot.file_gmt.stem}",
@@ -245,22 +244,24 @@ class WikiPathwaysDb:
             should_hash_assets=should_hash_assets,
         )
 
-    def _frame(self, frame_name: str) -> pl.DataFrame:
+    def _lazy_frame(self, frame_name: str) -> pl.LazyFrame:
         if self._frames is None:
             frames = read_gmt_frames(self.snapshot.file_gmt)
             if self.snapshot.species is not None:
-                df_pathway = _filter_species_frame(
+                lf_pathway = _filter_species_frame(
                     frames["pathway"],
                     self.snapshot.species,
                 )
-                df_pathway_ids = df_pathway.select("WikiPathwaysId").unique()
+                lf_pathway_ids = lf_pathway.select("WikiPathwaysId").unique()
                 frames = {
-                    "pathway": df_pathway,
-                    "term2gene": frames["term2gene"].join(
-                        df_pathway_ids,
+                    "pathway": lf_pathway,
+                    "term2gene": frames["term2gene"]
+                    .join(
+                        lf_pathway_ids,
                         on="WikiPathwaysId",
                         how="inner",
-                    ),
+                    )
+                    .sort("WikiPathwaysId", "GeneId"),
                     "term2name": _filter_species_frame(
                         frames["term2name"],
                         self.snapshot.species,
@@ -282,8 +283,8 @@ class WikiPathwaysSelection:
     dataset: WikiPathwaysDb
     _df_input_ids: pl.DataFrame = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
-    _df_mapping: pl.DataFrame | None = field(default=None, repr=False)
-    _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
+    _lf_mapping: pl.LazyFrame | None = field(default=None, repr=False)
+    _lf_unmapped: pl.LazyFrame | None = field(default=None, repr=False)
 
     @property
     def is_grouped(self) -> bool:
@@ -297,27 +298,30 @@ class WikiPathwaysSelection:
 
     def extract_mapping(self) -> pl.DataFrame:
         """Extract selected Entrez-to-WikiPathways pathway mappings."""
-        if self._df_mapping is None:
-            self._df_mapping = extract_mapping_frame(
-                self.dataset.extract_pathway(),
-                self.dataset.extract_term2gene(),
+        return self._lazy_mapping().collect()
+
+    def _lazy_mapping(self) -> pl.LazyFrame:
+        if self._lf_mapping is None:
+            self._lf_mapping = extract_mapping_frame(
+                self.dataset._lazy_frame("pathway"),
+                self.dataset._lazy_frame("term2gene"),
                 self._df_input_ids,
                 cols_group_id=self._col_group_id,
             )
-        return self._df_mapping
+        return self._lf_mapping
 
     def extract_unmapped_input_ids(self) -> pl.DataFrame:
         """Extract normalized input IDs that did not map to WikiPathways."""
-        if self._df_unmapped is None:
-            self._df_unmapped = extract_unmapped_input_ids_frame(
+        if self._lf_unmapped is None:
+            self._lf_unmapped = extract_unmapped_input_ids_frame(
                 self._df_input_ids,
-                self.extract_mapping(),
+                self._lazy_mapping(),
                 cols_group_id=self._col_group_id,
             )
-        return self._df_unmapped
+        return self._lf_unmapped.collect()
 
 
-def _filter_species_frame(df: pl.DataFrame, species: str) -> pl.DataFrame:
-    if "Species" not in df.columns:
-        return df
-    return df.filter(pl.col("Species") == species)
+def _filter_species_frame(lf: pl.LazyFrame, species: str) -> pl.LazyFrame:
+    if "Species" not in lf.collect_schema().names():
+        return lf
+    return lf.filter(pl.col("Species") == species)
