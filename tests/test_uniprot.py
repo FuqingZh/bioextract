@@ -97,6 +97,30 @@ def write_idmapping_fixture(tmp_path: Path, *, should_gzip: bool = True) -> Path
     return file_in
 
 
+def write_uniprot_dat_fixture(tmp_path: Path, *, should_gzip: bool = True) -> Path:
+    suffix = ".dat.gz" if should_gzip else ".dat"
+    file_in = tmp_path / f"uniprot_sprot{suffix}"
+    text = """ID   TEST1_HUMAN              Reviewed;         100 AA.
+AC   P12345; Q11111;
+DR   eggNOG; KOG0001; Eukaryota.
+DR   eggNOG; ENOG502ABC; Metazoa.
+//
+ID   TEST2_BACTERIA           Reviewed;         200 AA.
+AC   Q9Y243;
+DR   eggNOG; COG1028; Bacteria.
+//
+ID   TEST3_HUMAN              Reviewed;         300 AA.
+AC   P31750;
+//
+"""
+    if should_gzip:
+        with gzip.open(file_in, "wt", encoding="utf-8") as handle:
+            handle.write(text)
+    else:
+        file_in.write_text(text, encoding="utf-8")
+    return file_in
+
+
 def test_extract_mapping_filters_taxids_from_raw_gzip(tmp_path: Path) -> None:
     file_in = write_idmapping_fixture(tmp_path)
 
@@ -111,6 +135,108 @@ def test_extract_mapping_filters_taxids_from_raw_gzip(tmp_path: Path) -> None:
         {"UniProtId": "P04637", "GeneId": "7157", "TaxId": "9606"},
         {"UniProtId": "Q9Y243", "GeneId": "10000", "TaxId": "9606"},
     ]
+
+
+def test_extract_eggnog_xref_from_dat_gzip(tmp_path: Path) -> None:
+    file_dat = write_uniprot_dat_fixture(tmp_path)
+
+    df_xref = UniprotDb.from_dat(
+        file_dat=file_dat,
+        source_db="sprot",
+    ).extract_eggnog_xref()
+
+    assert df_xref.to_dicts() == [
+        {
+            "UniProtId": "P12345",
+            "PrimaryUniProtId": "P12345",
+            "IsPrimaryAccession": True,
+            "EggnogOgId": "ENOG502ABC",
+            "EggnogLevel": "Metazoa",
+            "SourceDb": "sprot",
+        },
+        {
+            "UniProtId": "P12345",
+            "PrimaryUniProtId": "P12345",
+            "IsPrimaryAccession": True,
+            "EggnogOgId": "KOG0001",
+            "EggnogLevel": "Eukaryota",
+            "SourceDb": "sprot",
+        },
+        {
+            "UniProtId": "Q11111",
+            "PrimaryUniProtId": "P12345",
+            "IsPrimaryAccession": False,
+            "EggnogOgId": "ENOG502ABC",
+            "EggnogLevel": "Metazoa",
+            "SourceDb": "sprot",
+        },
+        {
+            "UniProtId": "Q11111",
+            "PrimaryUniProtId": "P12345",
+            "IsPrimaryAccession": False,
+            "EggnogOgId": "KOG0001",
+            "EggnogLevel": "Eukaryota",
+            "SourceDb": "sprot",
+        },
+        {
+            "UniProtId": "Q9Y243",
+            "PrimaryUniProtId": "Q9Y243",
+            "IsPrimaryAccession": True,
+            "EggnogOgId": "COG1028",
+            "EggnogLevel": "Bacteria",
+            "SourceDb": "sprot",
+        },
+    ]
+
+
+def test_select_eggnog_xref_ids_filters_accessions(tmp_path: Path) -> None:
+    file_dat = write_uniprot_dat_fixture(tmp_path, should_gzip=False)
+    db = UniprotDb.from_dat(file_dat=file_dat, source_db="sprot")
+
+    df_xref = db.select_eggnog_xref_ids(["Q11111", "MISSING"])
+
+    assert df_xref.select("UniProtId", "PrimaryUniProtId", "EggnogOgId").to_dicts() == [
+        {
+            "UniProtId": "Q11111",
+            "PrimaryUniProtId": "P12345",
+            "EggnogOgId": "ENOG502ABC",
+        },
+        {
+            "UniProtId": "Q11111",
+            "PrimaryUniProtId": "P12345",
+            "EggnogOgId": "KOG0001",
+        },
+    ]
+
+
+def test_write_eggnog_xref_tidy_writes_mapping_parquet_and_manifest(
+    tmp_path: Path,
+) -> None:
+    file_dat = write_uniprot_dat_fixture(tmp_path)
+    db = UniprotDb.from_dat(file_dat=file_dat, source_db="sprot")
+
+    report = db.write_eggnog_xref_tidy(
+        tmp_path / "eggnog-xref",
+        should_write_manifest=True,
+    )
+
+    assert report.manifest is not None
+    assert report.manifest["schema_version"] == "uniprot-eggnog-xref-v0.1"
+    assert [asset["path"] for asset in report.assets] == ["mapping.parquet"]
+    assert pl.read_parquet(tmp_path / "eggnog-xref" / "mapping.parquet").height == 5
+
+
+def test_uniprot_dat_and_idmapping_methods_are_separated(tmp_path: Path) -> None:
+    file_dat = write_uniprot_dat_fixture(tmp_path)
+    db_dat = UniprotDb.from_dat(file_dat=file_dat, source_db="sprot")
+
+    with pytest.raises(ValueError, match="idmapping"):
+        db_dat.extract_mapping()
+
+    file_idmapping = write_idmapping_fixture(tmp_path)
+    db_idmapping = UniprotDb.from_files(file_idmapping_selected=file_idmapping)
+    with pytest.raises(ValueError, match="eggNOG"):
+        db_idmapping.extract_eggnog_xref()
 
 
 def test_write_tidy_writes_single_parquet_by_default(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -13,20 +14,31 @@ from typing import Literal, cast
 import polars as pl
 
 from bioextract._shared import validate_file_size
-from bioextract._tidy import TidyManifest, TidyReportAsset, TidyWriteReport
+from bioextract._tidy import (
+    TidyAsset,
+    TidyDataset,
+    TidyManifest,
+    TidyReportAsset,
+    TidySource,
+    TidyWriteReport,
+)
 
 from .constant import (
     COLS_IDMAPPING_SELECTED,
+    MEDIA_TYPE_FLAT_FILE,
+    MEDIA_TYPE_FLAT_FILE_GZIP,
     MEDIA_TYPE_PARQUET,
     MEDIA_TYPE_PARQUET_DATASET,
     MEDIA_TYPE_TSV,
     MEDIA_TYPE_TSV_GZIP,
+    SCHEMA_VERSION_EGGNOG_XREF,
     SCHEMA_VERSION,
 )
 from .util import (
     filter_taxids,
     has_hive_parquet_candidates,
     normalize_taxids,
+    read_eggnog_xref_frame,
     scan_hive_mapping_dataset,
     scan_parquet_mapping,
     scan_raw_idmapping_selected,
@@ -48,18 +60,23 @@ class _UniprotMappingKind(StrEnum):
     RAW_TSV_GZIP = "raw_tsv_gzip"
     PARQUET = "parquet"
     HIVE_PARQUET = "hive_parquet"
+    DAT = "dat"
+    DAT_GZIP = "dat_gzip"
 
 
 @dataclass(frozen=True, slots=True)
 class UniprotResourceLimits:
     file_idmapping_selected_bytes_max: int | None = None
+    file_dat_bytes_max: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _UniprotSnapshot:
-    file_idmapping_selected: Path
     kind: _UniprotMappingKind
+    file_idmapping_selected: Path | None = None
+    file_dat: Path | None = None
     taxids: tuple[str, ...] = ()
+    source_db: str | None = None
 
 
 @dataclass(slots=True)
@@ -121,8 +138,41 @@ class UniprotDb:
             limits=limits_resolved,
         )
 
+    @classmethod
+    def from_dat(
+        cls,
+        *,
+        file_dat: os.PathLike[str] | str,
+        source_db: str,
+        limits: UniprotResourceLimits | None = None,
+    ) -> UniprotDb:
+        """Create a dataset handle from a UniProtKB flat file.
+
+        The flat-file handle is currently used for cross-reference extraction,
+        not for the normalized idmapping-selected table.
+        """
+        source_db = str(source_db).strip()
+        if not source_db:
+            raise ValueError("UniProt source_db must be non-empty after normalization")
+
+        path = Path(file_dat)
+        if not path.exists():
+            raise FileNotFoundError(f"UniProt flat file not found: {path}")
+        limits_resolved = UniprotResourceLimits() if limits is None else limits
+        kind = _infer_dat_kind(path)
+        validate_file_size(
+            file_path=path,
+            size_max=limits_resolved.file_dat_bytes_max,
+            label="UniProt flat file",
+        )
+        return cls(
+            snapshot=_UniprotSnapshot(file_dat=path, kind=kind, source_db=source_db),
+            limits=limits_resolved,
+        )
+
     def with_taxids(self, *taxids: str | int) -> UniprotDb:
         """Create a taxid-scoped view of this UniProt mapping resource."""
+        self._require_idmapping_snapshot("scope UniProt idmapping by taxid")
         return UniprotDb(
             snapshot=_UniprotSnapshot(
                 file_idmapping_selected=self.snapshot.file_idmapping_selected,
@@ -134,10 +184,12 @@ class UniprotDb:
 
     def validate_schema(self) -> None:
         """Validate that the backing data exposes the normalized mapping schema."""
+        self._require_idmapping_snapshot("validate UniProt idmapping schema")
         validate_mapping_schema(self._scan_mapping())
 
     def extract_mapping(self) -> pl.DataFrame:
         """Extract normalized UniProt idmapping rows for the current taxid scope."""
+        self._require_idmapping_snapshot("extract UniProt idmapping")
         lf_mapping = self._scan_mapping()
         validate_mapping_schema(lf_mapping)
         return (
@@ -145,6 +197,51 @@ class UniprotDb:
             .select(COLS_IDMAPPING_SELECTED)
             .collect()
         )
+
+    def extract_eggnog_xref(self) -> pl.DataFrame:
+        """Extract UniProt flat-file eggNOG cross-reference rows."""
+        self._require_dat_snapshot("extract UniProt eggNOG xrefs")
+        return read_eggnog_xref_frame(
+            self._required_path(self.snapshot.file_dat),
+            source_db=self.snapshot.source_db or "",
+        )
+
+    def select_eggnog_xref_ids(self, ids: Iterable[str]) -> pl.DataFrame:
+        """Extract eggNOG xref rows for selected UniProt accessions."""
+        self._require_dat_snapshot("select UniProt eggNOG xrefs")
+        input_ids = {str(input_id).strip() for input_id in ids if str(input_id).strip()}
+        return read_eggnog_xref_frame(
+            self._required_path(self.snapshot.file_dat),
+            source_db=self.snapshot.source_db or "",
+            input_ids=input_ids,
+        )
+
+    def write_eggnog_xref_tidy(
+        self,
+        dir_out: os.PathLike[str] | str,
+        *,
+        should_write_manifest: bool = False,
+    ) -> TidyWriteReport:
+        """Write UniProt eggNOG xrefs as a canonical parquet mapping."""
+        self._require_dat_snapshot("write UniProt eggNOG xref tidy")
+        file_dat = self._required_path(self.snapshot.file_dat)
+        media_type = (
+            MEDIA_TYPE_FLAT_FILE_GZIP
+            if self.snapshot.kind == _UniprotMappingKind.DAT_GZIP
+            else MEDIA_TYPE_FLAT_FILE
+        )
+        dataset = TidyDataset(
+            frames={"mapping": self.extract_eggnog_xref()},
+            source=TidySource(path=file_dat, media_type=media_type),
+            schema_version=SCHEMA_VERSION_EGGNOG_XREF,
+            build_id_prefix=f"uniprot-eggnog-xref-{self.snapshot.source_db}",
+            assets=(
+                TidyAsset(
+                    path="mapping.parquet", kind="canonical", frame_name="mapping"
+                ),
+            ),
+        )
+        return dataset.write(Path(dir_out), should_write_manifest=should_write_manifest)
 
     def write_tidy(
         self,
@@ -183,6 +280,7 @@ class UniprotDb:
         Returns:
             A write report with asset paths and optional manifest content.
         """
+        self._require_idmapping_snapshot("write UniProt idmapping tidy")
         if policy_existing not in {"error", "overwrite", "skip"}:
             raise ValueError(
                 "policy_existing must be one of: 'error', 'overwrite', 'skip'"
@@ -267,15 +365,24 @@ class UniprotDb:
         return TidyWriteReport(dir_out=dir_out, assets=assets, manifest=manifest)
 
     def _scan_mapping(self) -> pl.LazyFrame:
+        self._require_idmapping_snapshot("scan UniProt idmapping")
         match self.snapshot.kind:
             case _UniprotMappingKind.RAW_TSV | _UniprotMappingKind.RAW_TSV_GZIP:
                 return scan_raw_idmapping_selected(
-                    self.snapshot.file_idmapping_selected
+                    self._required_path(self.snapshot.file_idmapping_selected)
                 )
             case _UniprotMappingKind.PARQUET:
-                return scan_parquet_mapping(self.snapshot.file_idmapping_selected)
+                return scan_parquet_mapping(
+                    self._required_path(self.snapshot.file_idmapping_selected)
+                )
             case _UniprotMappingKind.HIVE_PARQUET:
-                return scan_hive_mapping_dataset(self.snapshot.file_idmapping_selected)
+                return scan_hive_mapping_dataset(
+                    self._required_path(self.snapshot.file_idmapping_selected)
+                )
+            case _:
+                raise ValueError(
+                    "Cannot scan UniProt idmapping from flat-file snapshot"
+                )
 
     def _build_manifest(
         self,
@@ -283,11 +390,16 @@ class UniprotDb:
     ) -> UniprotTidyManifest:
         timestamp = datetime.now(UTC)
         source: dict[str, str | int] = {
-            "path": self.snapshot.file_idmapping_selected.as_posix(),
+            "path": self._required_path(
+                self.snapshot.file_idmapping_selected
+            ).as_posix(),
             "media_type": _media_type_for_kind(self.snapshot.kind),
         }
-        if self.snapshot.file_idmapping_selected.is_file():
-            source["bytes"] = self.snapshot.file_idmapping_selected.stat().st_size
+        file_idmapping_selected = self._required_path(
+            self.snapshot.file_idmapping_selected
+        )
+        if file_idmapping_selected.is_file():
+            source["bytes"] = file_idmapping_selected.stat().st_size
         return {
             "build_id": f"uniprot-idmapping-selected-{timestamp.strftime('%Y%m%dT%H%M%SZ')}",
             "schema_version": SCHEMA_VERSION,
@@ -296,6 +408,30 @@ class UniprotDb:
             "sources": [source],
             "assets": assets,
         }
+
+    def _require_idmapping_snapshot(self, action: str) -> None:
+        if self.snapshot.kind in {
+            _UniprotMappingKind.DAT,
+            _UniprotMappingKind.DAT_GZIP,
+        }:
+            raise ValueError(f"Cannot {action} from a UniProt flat-file snapshot")
+        if self.snapshot.file_idmapping_selected is None:
+            raise ValueError(f"Cannot {action}: idmapping selected path is missing")
+
+    def _require_dat_snapshot(self, action: str) -> None:
+        if self.snapshot.kind not in {
+            _UniprotMappingKind.DAT,
+            _UniprotMappingKind.DAT_GZIP,
+        }:
+            raise ValueError(f"Cannot {action} from a UniProt idmapping snapshot")
+        if self.snapshot.file_dat is None:
+            raise ValueError(f"Cannot {action}: UniProt flat-file path is missing")
+
+    @staticmethod
+    def _required_path(path: Path | None) -> Path:
+        if path is None:
+            raise ValueError("Required UniProt resource path is missing")
+        return path
 
 
 def _infer_mapping_kind(path: Path) -> _UniprotMappingKind:
@@ -313,6 +449,15 @@ def _infer_mapping_kind(path: Path) -> _UniprotMappingKind:
     if path.suffix == ".parquet":
         return _UniprotMappingKind.PARQUET
     raise ValueError(f"Unsupported UniProt idmapping selected input type: {path}")
+
+
+def _infer_dat_kind(path: Path) -> _UniprotMappingKind:
+    name = path.name
+    if name.endswith(".dat.gz"):
+        return _UniprotMappingKind.DAT_GZIP
+    if name.endswith(".dat"):
+        return _UniprotMappingKind.DAT
+    raise ValueError(f"Unsupported UniProt flat-file input type: {path}")
 
 
 def _publish_tidy_dir(

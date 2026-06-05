@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import gzip
 from pathlib import Path
+from typing import TextIO
 
 import polars as pl
 
 from bioextract._shared import validate_required_cols
 
-from .constant import COLS_IDMAPPING_SELECTED, REQUIRED_COLS_MAPPING, SCHEMA_MAPPING
+from .constant import (
+    COLS_EGGNOG_XREF,
+    COLS_IDMAPPING_SELECTED,
+    REQUIRED_COLS_MAPPING,
+    SCHEMA_EGGNOG_XREF,
+    SCHEMA_MAPPING,
+)
 
 
 def normalize_taxids(taxids: tuple[str | int, ...]) -> tuple[str, ...]:
@@ -60,3 +68,92 @@ def validate_mapping_schema(lf: pl.LazyFrame) -> None:
 
 def has_hive_parquet_candidates(dir_mapping: Path) -> bool:
     return any(path.is_file() for path in dir_mapping.glob("**/*.parquet"))
+
+
+def read_eggnog_xref_frame(
+    file_dat: Path,
+    *,
+    source_db: str,
+    input_ids: set[str] | None = None,
+) -> pl.DataFrame:
+    rows: list[dict[str, str | bool]] = []
+    with open_uniprot_dat(file_dat) as handle:
+        accessions: list[str] = []
+        eggnog_xrefs: list[tuple[str, str]] = []
+        for line in handle:
+            if line.startswith("//"):
+                append_eggnog_xref_rows(
+                    rows,
+                    accessions=accessions,
+                    eggnog_xrefs=eggnog_xrefs,
+                    source_db=source_db,
+                    input_ids=input_ids,
+                )
+                accessions = []
+                eggnog_xrefs = []
+                continue
+            if line.startswith("AC   "):
+                accessions.extend(parse_accession_line(line))
+            elif line.startswith("DR   eggNOG;"):
+                eggnog_xrefs.append(parse_eggnog_dr_line(line))
+
+        append_eggnog_xref_rows(
+            rows,
+            accessions=accessions,
+            eggnog_xrefs=eggnog_xrefs,
+            source_db=source_db,
+            input_ids=input_ids,
+        )
+
+    if not rows:
+        return pl.DataFrame(schema=SCHEMA_EGGNOG_XREF)
+    return pl.DataFrame(rows, schema=SCHEMA_EGGNOG_XREF).unique().sort(COLS_EGGNOG_XREF)
+
+
+def append_eggnog_xref_rows(
+    rows: list[dict[str, str | bool]],
+    *,
+    accessions: list[str],
+    eggnog_xrefs: list[tuple[str, str]],
+    source_db: str,
+    input_ids: set[str] | None,
+) -> None:
+    if not accessions or not eggnog_xrefs:
+        return
+    primary_accession = accessions[0]
+    for accession in accessions:
+        if input_ids is not None and accession not in input_ids:
+            continue
+        for eggnog_og_id, eggnog_level in eggnog_xrefs:
+            rows.append(
+                {
+                    "UniProtId": accession,
+                    "PrimaryUniProtId": primary_accession,
+                    "IsPrimaryAccession": accession == primary_accession,
+                    "EggnogOgId": eggnog_og_id,
+                    "EggnogLevel": eggnog_level,
+                    "SourceDb": source_db,
+                }
+            )
+
+
+def parse_accession_line(line: str) -> list[str]:
+    return [
+        accession.strip()
+        for accession in line[5:].strip().split(";")
+        if accession.strip()
+    ]
+
+
+def parse_eggnog_dr_line(line: str) -> tuple[str, str]:
+    payload = line.removeprefix("DR   eggNOG;").strip()
+    parts = [part.strip().rstrip(".") for part in payload.split(";") if part.strip()]
+    if len(parts) != 2:
+        raise ValueError(f"Unsupported UniProt eggNOG DR line: {line.rstrip()!r}")
+    return parts[0], parts[1]
+
+
+def open_uniprot_dat(file_dat: Path) -> TextIO:
+    if file_dat.name.endswith(".gz"):
+        return gzip.open(file_dat, "rt", encoding="utf-8", errors="replace")
+    return file_dat.open("r", encoding="utf-8", errors="replace")
