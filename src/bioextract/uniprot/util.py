@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import csv
 import gzip
 from pathlib import Path
+from typing import Protocol
+from typing import Sequence
 from typing import TextIO
 
 import polars as pl
@@ -15,6 +18,10 @@ from .constant import (
     SCHEMA_EGGNOG_XREF,
     SCHEMA_MAPPING,
 )
+
+
+class _RowWriter(Protocol):
+    def writerow(self, row: Sequence[object]) -> object: ...
 
 
 def normalize_taxids(taxids: tuple[str | int, ...]) -> tuple[str, ...]:
@@ -113,15 +120,16 @@ def write_eggnog_xref_tsv(
     source_db: str,
 ) -> None:
     file_out.parent.mkdir(parents=True, exist_ok=True)
-    with file_out.open("w", encoding="utf-8") as handle_out:
-        handle_out.write("\t".join(COLS_EGGNOG_XREF) + "\n")
+    with file_out.open("w", encoding="utf-8", newline="") as handle_out:
+        writer = csv.writer(handle_out, delimiter="\t", lineterminator="\n")
+        writer.writerow(COLS_EGGNOG_XREF)
         with open_uniprot_dat(file_dat) as handle_in:
             accessions: list[str] = []
             eggnog_xrefs: list[tuple[str, str]] = []
             for line in handle_in:
                 if line.startswith("//"):
                     write_eggnog_xref_rows(
-                        handle_out,
+                        writer,
                         accessions=accessions,
                         eggnog_xrefs=eggnog_xrefs,
                         source_db=source_db,
@@ -135,7 +143,7 @@ def write_eggnog_xref_tsv(
                     eggnog_xrefs.append(parse_eggnog_dr_line(line))
 
             write_eggnog_xref_rows(
-                handle_out,
+                writer,
                 accessions=accessions,
                 eggnog_xrefs=eggnog_xrefs,
                 source_db=source_db,
@@ -179,7 +187,7 @@ def append_eggnog_xref_rows(
 
 
 def write_eggnog_xref_rows(
-    handle: TextIO,
+    writer: _RowWriter,
     *,
     accessions: list[str],
     eggnog_xrefs: list[tuple[str, str]],
@@ -191,18 +199,15 @@ def write_eggnog_xref_rows(
     for accession in accessions:
         is_primary = "true" if accession == primary_accession else "false"
         for eggnog_og_id, eggnog_level in eggnog_xrefs:
-            handle.write(
-                "\t".join(
-                    [
-                        accession,
-                        primary_accession,
-                        is_primary,
-                        eggnog_og_id,
-                        eggnog_level,
-                        source_db,
-                    ]
-                )
-                + "\n"
+            writer.writerow(
+                [
+                    accession,
+                    primary_accession,
+                    is_primary,
+                    eggnog_og_id,
+                    eggnog_level,
+                    source_db,
+                ]
             )
 
 
