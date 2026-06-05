@@ -389,17 +389,19 @@ class ReactomeDb:
         return self._df_relations_raw
 
     def _build_tidy_frame(self, frame_name: str) -> pl.DataFrame:
-        if frame_name == "mapping":
-            return self.mapping_frame()
-        if frame_name == "pathway":
-            return self._pathway_frame()
-        if frame_name == "relation":
-            return self.extract_pathway_relations()
-        if frame_name == "term2gene":
-            return self.extract_term2gene()
-        if frame_name == "term2name":
-            return self.extract_term2name()
-        raise ValueError(f"Unsupported Reactome tidy frame: {frame_name}")
+        match frame_name:
+            case "mapping":
+                return self.mapping_frame()
+            case "pathway":
+                return self._pathway_frame()
+            case "relation":
+                return self.extract_pathway_relations()
+            case "term2gene":
+                return self.extract_term2gene()
+            case "term2name":
+                return self.extract_term2name()
+            case _:
+                raise ValueError(f"Unsupported Reactome tidy frame: {frame_name}")
 
     def _tidy_sources(self) -> tuple[TidySource, ...]:
         sources: list[TidySource] = []
