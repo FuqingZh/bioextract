@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 import polars as pl
@@ -13,7 +15,15 @@ from bioextract._shared import (
     validate_count_limit,
     validate_file_size,
 )
-from bioextract._tidy import TidyAsset, TidyDataset, TidySource, TidyWriteReport
+from bioextract._tidy import (
+    TidyAsset,
+    TidyDataset,
+    TidyManifest,
+    TidyReportAsset,
+    TidySource,
+    TidyWriteReport,
+    calculate_file_sha256,
+)
 
 from .constant import (
     ASSET_SPECS,
@@ -29,6 +39,7 @@ from .util import (
     extract_unmapped_input_ids_frame,
     read_interpro_xml_frames,
     read_mapping_frame,
+    scan_mapping_frame,
     select_mapping_frame,
     validate_kind_input_id,
 )
@@ -180,11 +191,61 @@ class InterProDb:
         *,
         should_write_manifest: bool = False,
     ) -> TidyWriteReport:
-        """Write the InterPro tidy dataset as flat parquet files."""
-        return self.build_tidy().write(
-            Path(dir_out),
-            should_write_manifest=should_write_manifest,
+        """Write the InterPro tidy dataset as a flat parquet file."""
+        dir_out = Path(dir_out)
+        dir_out.mkdir(parents=True, exist_ok=True)
+        file_out = dir_out / "mapping.parquet"
+        scan_mapping_frame(
+            self.snapshot.file_protein2ipr,
+            df_interpro_entry=self._xml_frame("entry"),
+            df_interpro_member=self._xml_frame("member"),
+        ).sink_parquet(file_out)
+
+        row_count = pl.scan_parquet(file_out).select(pl.len()).collect().item()
+        asset: TidyReportAsset = {
+            "path": "mapping.parquet",
+            "kind": "canonical",
+            "row_count": row_count,
+            "is_optional": False,
+        }
+        manifest = (
+            self._build_manifest(
+                {
+                    **asset,
+                    "sha256": calculate_file_sha256(file_out),
+                    "row_count": row_count,
+                }
+            )
+            if should_write_manifest
+            else None
         )
+        if manifest is not None:
+            (dir_out / "manifest.json").write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        return TidyWriteReport(dir_out=dir_out, assets=(asset,), manifest=manifest)
+
+    def _build_manifest(
+        self,
+        asset: dict[str, str | int | bool],
+    ) -> TidyManifest:
+        timestamp = datetime.now(UTC)
+        return {
+            "build_id": f"interpro-mapping-{timestamp.strftime('%Y%m%dT%H%M%SZ')}",
+            "schema_version": SCHEMA_VERSION,
+            "generated_at": timestamp.isoformat().replace("+00:00", "Z"),
+            "sources": [
+                {
+                    "path": source.path.as_posix(),
+                    "sha256": calculate_file_sha256(source.path),
+                    "bytes": source.path.stat().st_size,
+                    "media_type": source.media_type,
+                }
+                for source in self._tidy_sources()
+            ],
+            "assets": [asset],
+        }
 
     def _xml_frame(self, frame_name: str) -> pl.DataFrame:
         if self._frames_xml is None:

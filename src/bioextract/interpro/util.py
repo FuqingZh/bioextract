@@ -30,6 +30,65 @@ def read_mapping_frame(
     )
 
 
+def scan_mapping_frame(
+    file_protein2ipr: Path,
+    *,
+    df_interpro_entry: pl.DataFrame,
+    df_interpro_member: pl.DataFrame,
+) -> pl.LazyFrame:
+    lf_mapping = scan_protein2ipr_frame(file_protein2ipr)
+    if df_interpro_entry.height > 0:
+        lf_mapping = (
+            lf_mapping.drop("InterProType")
+            .join(df_interpro_entry.lazy(), on="InterProId", how="left")
+            .select(COLS_MAPPING)
+        )
+    if df_interpro_member.height > 0:
+        lf_mapping = (
+            lf_mapping.drop("MemberDb")
+            .join(
+                df_interpro_member.lazy(),
+                on=["InterProId", "MemberDbId"],
+                how="left",
+            )
+            .select(COLS_MAPPING)
+        )
+    return lf_mapping.select(COLS_MAPPING)
+
+
+def scan_protein2ipr_frame(file_protein2ipr: Path) -> pl.LazyFrame:
+    return (
+        pl.scan_csv(
+            file_protein2ipr,
+            separator="\t",
+            has_header=False,
+            new_columns=[
+                "UniProtId",
+                "InterProId",
+                "InterProName",
+                "MemberDbId",
+                "Start",
+                "End",
+            ],
+            schema_overrides={
+                "UniProtId": pl.String,
+                "InterProId": pl.String,
+                "InterProName": pl.String,
+                "MemberDbId": pl.String,
+                "Start": pl.Int64,
+                "End": pl.Int64,
+            },
+            infer_schema=False,
+            quote_char=None,
+        )
+        .with_columns(
+            pl.lit(None, dtype=pl.String).alias("InterProType"),
+            pl.lit(None, dtype=pl.String).alias("MemberDb"),
+        )
+        .select(COLS_MAPPING)
+    )
+
+
 def select_mapping_frame(
     file_protein2ipr: Path,
     df_input_ids: pl.DataFrame,
