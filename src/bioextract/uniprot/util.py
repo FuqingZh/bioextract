@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import csv
 import gzip
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Protocol
-from typing import Sequence
 from typing import TextIO
 
 import polars as pl
@@ -21,7 +21,7 @@ from .constant import (
 
 
 class _RowWriter(Protocol):
-    def writerow(self, row: Sequence[object]) -> object: ...
+    def writerow(self, row: Iterable[object], /) -> object: ...
 
 
 def normalize_taxids(taxids: tuple[str | int, ...]) -> tuple[str, ...]:

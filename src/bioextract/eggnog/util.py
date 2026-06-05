@@ -9,7 +9,6 @@ from collections.abc import Generator, Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Protocol
-from typing import Sequence
 
 import polars as pl
 
@@ -22,7 +21,7 @@ from .constant import (
 
 
 class _RowWriter(Protocol):
-    def writerow(self, row: Sequence[object]) -> object: ...
+    def writerow(self, row: Iterable[object], /) -> object: ...
 
 
 def read_cog_fun_frame(file_cog_fun: Path | None) -> pl.DataFrame:
