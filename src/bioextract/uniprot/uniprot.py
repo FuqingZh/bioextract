@@ -18,9 +18,11 @@ from bioextract._tidy import (
     TidyAsset,
     TidyDataset,
     TidyManifest,
+    TidyManifestAsset,
     TidyReportAsset,
     TidySource,
     TidyWriteReport,
+    calculate_file_sha256,
 )
 
 from .constant import (
@@ -263,6 +265,7 @@ class UniprotDb:
         *,
         should_allow_all: bool = False,
         should_write_manifest: bool = False,
+        should_hash_assets: bool = False,
         policy_existing: Literal["error", "overwrite", "skip"] = "error",
         dir_tmp: os.PathLike[str] | str | None = None,
         level_compression: int | None = None,
@@ -278,6 +281,8 @@ class UniprotDb:
             should_allow_all: Required when no taxids are selected, because all
                 taxa may be very large.
             should_write_manifest: Whether to write `manifest.json`.
+            should_hash_assets: Whether to calculate asset checksums in the
+                manifest.
             policy_existing: How to handle a non-empty output directory:
                 `error`, `overwrite`, or `skip`.
             dir_tmp: Optional scratch directory for staging output before it is
@@ -363,8 +368,19 @@ class UniprotDb:
                     "is_optional": False,
                 },
             )
+            assets_manifest: list[TidyManifestAsset] = [
+                {
+                    **asset,
+                    "sha256": calculate_file_sha256(file_out)
+                    if should_hash_assets
+                    else None,
+                }
+                for asset in assets
+            ]
 
-            manifest = self._build_manifest(assets) if should_write_manifest else None
+            manifest = (
+                self._build_manifest(assets_manifest) if should_write_manifest else None
+            )
             if manifest is not None:
                 (dir_stage / "manifest.json").write_text(
                     json.dumps(manifest, indent=2, sort_keys=True) + "\n",
@@ -399,7 +415,7 @@ class UniprotDb:
 
     def _build_manifest(
         self,
-        assets: tuple[TidyReportAsset, ...],
+        assets: list[TidyManifestAsset],
     ) -> UniprotTidyManifest:
         timestamp = datetime.now(UTC)
         source: dict[str, str | int] = {

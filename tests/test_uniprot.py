@@ -387,7 +387,14 @@ def test_write_tidy_skip_can_return_existing_manifest(tmp_path: Path) -> None:
 
     assert report_skip.manifest is not None
     assert report_skip.manifest["schema_version"] == "uniprot-idmapping-selected-v0.1"
-    assert report_skip.assets == tuple(report_skip.manifest["assets"])
+    assert report_skip.assets == tuple(
+        {
+            "path": asset["path"],
+            "kind": asset["kind"],
+            "is_optional": asset["is_optional"],
+        }
+        for asset in report_skip.manifest["assets"]
+    )
 
 
 def test_write_tidy_accepts_zstd_compression_level(tmp_path: Path) -> None:
