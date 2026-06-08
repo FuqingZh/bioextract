@@ -4,10 +4,10 @@
 
 The first UniProtDb test suite verifies lightweight construction, raw
 `idmapping_selected` parsing, taxid filtering, single parquet writing, hive
-dataset reading, single parquet reading, and schema/error handling.
+dataset reading, single parquet reading, eggNOG xref flat-file extraction, and
+schema/error handling.
 
-It should not test online UniProt services, `.dat` parsing, or full 9 GB
-all-taxid exports.
+It should not test online UniProt services or full 9 GB all-taxid exports.
 
 ## Fixtures
 
@@ -34,6 +34,7 @@ P31750	AKT1_MOUSE	11651	...	10090	...
 - all-taxid write requires `should_allow_all=True`.
 - non-empty output directories follow `policy_existing`.
 - `validate_schema()` reports missing required columns.
+- `.dat(.gz)` snapshots can emit eggNOG xref tidy output.
 
 ## Real-Data Smoke
 
@@ -48,3 +49,15 @@ Keep smoke tests conservative because the file is about 9.4 GB compressed:
 - `from_files()` should succeed.
 - optional `validate_schema()` can be run as a preflight.
 - taxid-scoped extraction can be tested on a known small taxid if needed.
+
+For Swiss-Prot knowledge-base validation, the local flat-file snapshot is:
+
+```text
+/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/uniprot/kb/2026_01/raw/knowledgebase/complete/uniprot_sprot.dat.gz
+```
+
+The eggNOG xref tidy path should verify:
+
+- `.dat.gz` parsing succeeds
+- `mapping.parquet` is written
+- `EggnogOgId` and `EggnogLevel` are populated from `DR   eggNOG;` records

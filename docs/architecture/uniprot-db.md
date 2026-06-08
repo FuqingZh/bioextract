@@ -16,10 +16,10 @@ The MVP covers:
 - `with_taxids(*taxids)` scoped extraction
 - full normalized mapping extraction
 - single parquet tidy writing
+- UniProt `.dat(.gz)` flat-file parsing for eggNOG xref extraction
 
 It intentionally does not cover:
 
-- UniProt `.dat` parsing
 - online UniProt ID mapping service calls
 - per-crossref public extraction APIs
 - enrichment statistics
@@ -113,6 +113,27 @@ overwrite  replace the output directory
 skip       return a write report without rewriting files
 ```
 
+For UniProt knowledge-base flat files, the implemented helper path is:
+
+```python
+db = UniprotDb.from_files(
+    file_dat="uniprot_sprot.dat.gz",
+    source_db="Swiss-Prot",
+)
+report = db.write_eggnog_xref_tidy("out/uniprot-eggnog-xref")
+```
+
+That path emits a canonical `mapping.parquet` with:
+
+```text
+UniProtId
+PrimaryUniProtId
+IsPrimaryAccession
+EggnogOgId
+EggnogLevel
+SourceDb
+```
+
 ## Implementation Notes
 
 Raw TSV and parquet inputs are scanned lazily. Tidy writing uses Polars
@@ -120,3 +141,10 @@ Raw TSV and parquet inputs are scanned lazily. Tidy writing uses Polars
 memory before writing. Hive parquet dataset reading remains supported for
 compatibility, but `write_tidy()` no longer creates `TaxId=` partitioned output
 because UniProt all-taxa data has very high `TaxId` cardinality.
+
+The shared tidy contract has also changed since the first draft:
+
+- report assets are dataclasses
+- manifest asset `sha256` is optional
+- `row_count` is no longer part of manifest metadata
+- hashing is opt-in through `should_hash_assets=True`

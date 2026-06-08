@@ -92,9 +92,11 @@ Each asset entry contains:
 - `path`
 - `kind`
 - `sha256`
-- `row_count`
 - `is_optional`
 
 The output is intentionally flat because `bioextract` is library-first. The
 prior `biotidy` `canonical/` and `derived/` directories are not part of the
 new default contract.
+
+`row_count` is no longer part of the manifest contract. Asset hashing is also
+opt-in rather than mandatory.

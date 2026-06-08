@@ -172,6 +172,41 @@ report = db.write_tidy("out/wikipathways-hsa", should_write_manifest=True)
 as NCBI Entrez Gene IDs; the library does not perform identifier conversion or
 calculate enrichment p-values.
 
+## eggNOG
+
+```python
+from bioextract.eggnog import EggnogDb
+
+db = EggnogDb.from_files(
+    file_eggnog_db="eggnog.db.gz",
+    file_cog_fun="cog-24.fun.tab",
+)
+
+df_mapping = db.extract_mapping()
+report = db.write_tidy("out/eggnog", should_write_manifest=True)
+```
+
+`EggnogDb` reads local eggNOG mapper SQLite snapshots and optional COG
+function lookup tables. It emits a wide protein-to-COG mapping table for
+annotation and enrichment-input preparation.
+
+## InterPro
+
+```python
+from bioextract.interpro import InterProDb
+
+db = InterProDb.from_mapping_files(
+    file_protein2ipr="protein2ipr.dat.gz",
+    file_interpro_xml="interpro.xml.gz",
+)
+
+df_mapping = db.extract_mapping()
+report = db.write_tidy("out/interpro", should_write_manifest=True)
+```
+
+`InterProDb` reads local `protein2ipr` mapping files and optional InterPro XML
+metadata, then emits one canonical UniProt-to-InterPro mapping parquet.
+
 ## UniProt
 
 ```python
@@ -194,6 +229,9 @@ files, or hive parquet dataset directories. Tidy writing emits a canonical
 `mapping.parquet`; all-taxid export requires `should_allow_all=True`.
 Use `policy_existing="overwrite"` or `policy_existing="skip"` when the output
 directory already exists.
+
+For UniProt knowledge-base flat files, `write_eggnog_xref_tidy()` can emit a
+canonical UniProt-to-eggNOG xref parquet from `uniprot_sprot.dat(.gz)`.
 
 ## Development
 
