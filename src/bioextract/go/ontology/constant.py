@@ -8,19 +8,23 @@ from .model import (
     AncestorColumnBuffer,
     DepthColumnBuffer,
     EdgeColumnBuffer,
+    SubsetDefinitionColumnBuffer,
+    SubsetMembershipColumnBuffer,
     SynonymColumnBuffer,
     TermColumnBuffer,
     XrefColumnBuffer,
 )
 
 LARGE_DISTANCE = 1 << 30
-SCHEMA_VERSION = "go-obo-tidy-v0.1"
+SCHEMA_VERSION = "go-obo-tidy-v0.2"
 MEDIA_TYPE_OBO = "text/obo"
 GO_NAMESPACE_VALUES = (
     "biological_process",
     "molecular_function",
     "cellular_component",
 )
+GO_SUBSET_GOSLIM_GENERIC = "goslim_generic"
+HIERARCHICAL_RELATION_TYPES = ("is_a", "part_of")
 
 RE_GO_ID = re.compile(r"^GO:\d{7}$")
 RE_DEFINITION = re.compile(r'^"(?P<text>(?:[^"\\]|\\.)*)"')
@@ -43,6 +47,8 @@ DEDUP_KEYS_BY_FRAME: dict[str, tuple[str, ...]] = {
     ),
     "xref": ("go_id", "xref_text"),
     "alt_id": ("alt_go_id",),
+    "subset_membership": ("go_id", "subset_id"),
+    "subset_definition": ("subset_id",),
 }
 
 ASSET_SPECS: tuple[tuple[str, str, str], ...] = (
@@ -51,6 +57,8 @@ ASSET_SPECS: tuple[tuple[str, str, str], ...] = (
     ("synonym.parquet", "canonical", "synonym"),
     ("xref.parquet", "canonical", "xref"),
     ("alt_id.parquet", "canonical", "alt_id"),
+    ("subset_membership.parquet", "canonical", "subset_membership"),
+    ("subset_definition.parquet", "canonical", "subset_definition"),
     ("ancestor_all.parquet", "derived", "ancestor_all"),
     ("depth.parquet", "derived", "depth"),
 )
@@ -75,6 +83,14 @@ SCHEMA_XREF: SchemaDict = {
 SCHEMA_ALT_ID: SchemaDict = {
     field_def.name: field_def.metadata["dtype"]
     for field_def in fields(AltIdColumnBuffer)
+}
+SCHEMA_SUBSET_MEMBERSHIP: SchemaDict = {
+    field_def.name: field_def.metadata["dtype"]
+    for field_def in fields(SubsetMembershipColumnBuffer)
+}
+SCHEMA_SUBSET_DEFINITION: SchemaDict = {
+    field_def.name: field_def.metadata["dtype"]
+    for field_def in fields(SubsetDefinitionColumnBuffer)
 }
 SCHEMA_ANCESTOR: SchemaDict = {
     field_def.name: field_def.metadata["dtype"]

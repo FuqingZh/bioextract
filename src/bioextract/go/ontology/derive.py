@@ -1,6 +1,6 @@
 from collections import defaultdict, deque
 
-from .constant import LARGE_DISTANCE
+from .constant import HIERARCHICAL_RELATION_TYPES, LARGE_DISTANCE
 from .model import (
     AncestorColumnBuffer,
     DepthColumnBuffer,
@@ -119,11 +119,14 @@ def derive_graph_tables(
     map_children: dict[str, list[str]] = defaultdict(list)
     map_indegree: dict[str, int] = {node: 0 for node in set_nodes}
 
-    for child_node, parent_node in zip(
+    for child_node, parent_node, relation_type in zip(
         edge_data.child_go_id,
         edge_data.parent_go_id,
+        edge_data.relation_type,
         strict=True,
     ):
+        if relation_type not in HIERARCHICAL_RELATION_TYPES:
+            continue
         map_parents[child_node].append(parent_node)
         map_children[parent_node].append(child_node)
         map_indegree[child_node] = map_indegree.get(child_node, 0) + 1

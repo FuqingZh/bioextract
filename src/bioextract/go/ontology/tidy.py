@@ -10,6 +10,8 @@ from .constant import (
     SCHEMA_DEPTH,
     SCHEMA_EDGE,
     SCHEMA_SUBCELL,
+    SCHEMA_SUBSET_DEFINITION,
+    SCHEMA_SUBSET_MEMBERSHIP,
     SCHEMA_SYNONYM,
     SCHEMA_TERM,
     SCHEMA_XREF,
@@ -18,6 +20,9 @@ from .derive import derive_graph_tables
 from .model import (
     AltIdColumnBuffer,
     EdgeColumnBuffer,
+    SubsetDefinitionColumnBuffer,
+    SubsetDefinitionRecord,
+    SubsetMembershipColumnBuffer,
     SynonymColumnBuffer,
     TermColumnBuffer,
     TermRecord,
@@ -27,6 +32,7 @@ from .parse import (
     normalize_whitespace,
     parse_synonym,
     parse_xref_lossless,
+    read_obo_subset_definitions,
     scan_obo_term_records,
     validate_go_id,
 )
@@ -44,6 +50,32 @@ def generate_alt_id_data_by_cols(go_id: str, alt_ids: list[str]) -> AltIdColumnB
         alt_id_cols.primary_go_id.append(go_id)
 
     return alt_id_cols
+
+
+def generate_subset_membership_data_by_cols(
+    go_id: str,
+    subsets: list[str],
+) -> SubsetMembershipColumnBuffer:
+    subset_cols = SubsetMembershipColumnBuffer()
+    for subset_id in subsets:
+        subset_id_normalized = normalize_whitespace(subset_id)
+        if not subset_id_normalized:
+            continue
+        subset_cols.go_id.append(go_id)
+        subset_cols.subset_id.append(subset_id_normalized)
+
+    return subset_cols
+
+
+def generate_subset_definition_data_by_cols(
+    records: Iterable[SubsetDefinitionRecord],
+) -> SubsetDefinitionColumnBuffer:
+    subset_definition_cols = SubsetDefinitionColumnBuffer()
+    for record in records:
+        subset_definition_cols.subset_id.append(record.subset_id)
+        subset_definition_cols.subset_name.append(record.subset_name)
+
+    return subset_definition_cols
 
 
 def generate_synonym_data_by_cols(
@@ -80,10 +112,15 @@ def generate_xref_data_by_cols(go_id: str, xrefs: list[str]) -> XrefColumnBuffer
 # #endregion
 ################################################################################
 # #region FrameBuilders
-def build_tidy_frames(records: Iterable[TermRecord]) -> dict[str, pl.DataFrame]:
+def build_tidy_frames(
+    records: Iterable[TermRecord],
+    *,
+    subset_definitions: Iterable[SubsetDefinitionRecord] = (),
+) -> dict[str, pl.DataFrame]:
     term_data = TermColumnBuffer()
     edge_data = EdgeColumnBuffer()
     alt_id_data = AltIdColumnBuffer()
+    subset_membership_data = SubsetMembershipColumnBuffer()
     synonym_data = SynonymColumnBuffer()
     xref_data = XrefColumnBuffer()
 
@@ -92,6 +129,9 @@ def build_tidy_frames(records: Iterable[TermRecord]) -> dict[str, pl.DataFrame]:
         for edge in record.parents:
             edge_data.append_edge(edge)
         alt_id_data.extend(generate_alt_id_data_by_cols(record.go_id, record.alt_ids))
+        subset_membership_data.extend(
+            generate_subset_membership_data_by_cols(record.go_id, record.subsets)
+        )
         synonym_data.extend(
             generate_synonym_data_by_cols(record.go_id, record.synonyms)
         )
@@ -122,6 +162,16 @@ def build_tidy_frames(records: Iterable[TermRecord]) -> dict[str, pl.DataFrame]:
         schema=SCHEMA_ALT_ID,
         dedup_keys=DEDUP_KEYS_BY_FRAME["alt_id"],
     )
+    df_subset_membership = build_deduped_frame(
+        subset_membership_data,
+        schema=SCHEMA_SUBSET_MEMBERSHIP,
+        dedup_keys=DEDUP_KEYS_BY_FRAME["subset_membership"],
+    )
+    df_subset_definition = build_deduped_frame(
+        generate_subset_definition_data_by_cols(subset_definitions),
+        schema=SCHEMA_SUBSET_DEFINITION,
+        dedup_keys=DEDUP_KEYS_BY_FRAME["subset_definition"],
+    )
 
     ancestor_data, depth_data = derive_graph_tables(term_data, edge_data)
     df_ancestor = build_deduped_frame(
@@ -141,6 +191,8 @@ def build_tidy_frames(records: Iterable[TermRecord]) -> dict[str, pl.DataFrame]:
         "synonym": df_synonym,
         "xref": df_xref,
         "alt_id": df_alt_id,
+        "subset_membership": df_subset_membership,
+        "subset_definition": df_subset_definition,
         "ancestor_all": df_ancestor,
         "depth": df_depth,
     }
@@ -179,7 +231,10 @@ def extract_subcell_frame(
 # #region Entrypoint
 def run_tidy_go_ontology(file_in: Path, dir_out: Path) -> None:
     records = scan_obo_term_records(file_in)
-    frames = build_tidy_frames(records)
+    frames = build_tidy_frames(
+        records,
+        subset_definitions=read_obo_subset_definitions(file_in),
+    )
     dir_out.mkdir(parents=True, exist_ok=True)
     write_frame_assets(dir_out=dir_out, frames=frames)
 

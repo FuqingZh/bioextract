@@ -91,12 +91,15 @@ df_group_interactions = (
 ```python
 from bioextract.go import GoDb
 
-tidy = GoDb.from_obo("go-basic.obo").build_tidy()
+go = GoDb.from_obo("go-basic.obo")
+tidy = go.build_tidy()
 
 df_term = tidy.frames["term"]
 df_edge = tidy.frames["edge"]
 df_ancestor = tidy.frames["ancestor_all"]
-df_subcell = GoDb.from_obo("go-basic.obo").extract_subcell()
+df_subsets = go.list_subsets()
+df_goslim_generic = go.select_terms(subset_id="goslim_generic")
+df_subcell = go.extract_subcell()
 
 report = tidy.write("out/go-basic")
 ```
@@ -106,6 +109,8 @@ convenience wrapper when only persisted parquet outputs are needed.
 Pass `should_write_manifest=True` to also write `manifest.json`.
 `GoDb.from_obo(...).write_subcell("out/subcell.parquet")` writes non-obsolete
 cellular component terms as a subcellular-location table.
+GO OBO subset memberships are available through `select_terms(subset_id=...)`
+and the `subset_membership` tidy frame.
 
 ## KEGG
 

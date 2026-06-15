@@ -28,6 +28,12 @@ class SynonymRecord:
 
 
 @dataclass(slots=True)
+class SubsetDefinitionRecord:
+    subset_id: str
+    subset_name: str
+
+
+@dataclass(slots=True)
 class TermRecord:
     go_id: str
     term_name: str
@@ -36,6 +42,7 @@ class TermRecord:
     is_obsolete: bool
     comment: str | None
     alt_ids: list[str] = field(default_factory=lambda: [])
+    subsets: list[str] = field(default_factory=lambda: [])
     xrefs: list[str] = field(default_factory=lambda: [])
     synonyms: list[str] = field(default_factory=lambda: [])
     parents: list[ParentEdge] = field(default_factory=lambda: [])
@@ -103,6 +110,28 @@ class AltIdColumnBuffer:
     def extend(self, other: AltIdColumnBuffer) -> None:
         self.alt_go_id.extend(other.alt_go_id)
         self.primary_go_id.extend(other.primary_go_id)
+
+
+@dataclass(slots=True)
+class SubsetMembershipColumnBuffer:
+    go_id: list[str] = field(default_factory=lambda: [], metadata={"dtype": pl.String})
+    subset_id: list[str] = field(
+        default_factory=lambda: [], metadata={"dtype": pl.String}
+    )
+
+    def extend(self, other: SubsetMembershipColumnBuffer) -> None:
+        self.go_id.extend(other.go_id)
+        self.subset_id.extend(other.subset_id)
+
+
+@dataclass(slots=True)
+class SubsetDefinitionColumnBuffer:
+    subset_id: list[str] = field(
+        default_factory=lambda: [], metadata={"dtype": pl.String}
+    )
+    subset_name: list[str] = field(
+        default_factory=lambda: [], metadata={"dtype": pl.String}
+    )
 
 
 @dataclass(slots=True)
@@ -178,6 +207,8 @@ FrameColumnBuffer = (
     EdgeColumnBuffer
     | TermColumnBuffer
     | SynonymColumnBuffer
+    | SubsetMembershipColumnBuffer
+    | SubsetDefinitionColumnBuffer
     | XrefColumnBuffer
     | AltIdColumnBuffer
     | AncestorColumnBuffer

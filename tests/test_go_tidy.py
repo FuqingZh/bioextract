@@ -3,13 +3,15 @@ from pathlib import Path
 
 import polars as pl
 
-from bioextract.go import GoDb
+from bioextract.go import GoDb, GoSubsetId
 from bioextract.go.ontology import run_tidy_go_ontology
 
 
 def write_minimal_obo(file_in: Path) -> None:
     file_in.write_text(
         """format-version: 1.2
+subsetdef: goslim_generic "Generic GO slim"
+subsetdef: goslim_plant "Plant GO slim"
 
 [Term]
 id: GO:0000001
@@ -17,6 +19,7 @@ name: root process
 namespace: biological_process
 def: "root definition" [GOC:ai]
 comment: root comment
+subset: goslim_generic
 xref: Wikipedia:Root
 synonym: "root proc" EXACT []
 
@@ -25,6 +28,8 @@ id: GO:0000002
 name: child process
 namespace: biological_process
 def: "child definition" [GOC:ai]
+subset: goslim_generic
+subset: goslim_plant
 is_a: GO:0000001 ! root process
 relationship: part_of GO:0000001 ! root process
 alt_id: GO:1234567
@@ -36,6 +41,7 @@ id: GO:0000003
 name: leaf function
 namespace: molecular_function
 def: "leaf definition" [GOC:ai]
+subset: goslim_plant
 is_a: GO:0000002 ! child process
 relationship: regulates GO:0000001 ! root process
 
@@ -44,6 +50,7 @@ id: GO:0000004
 name: obsolete component
 namespace: cellular_component
 def: "obsolete definition" [GOC:ai]
+subset: goslim_generic
 is_obsolete: true
 
 [Term]
@@ -51,12 +58,14 @@ id: GO:0005575
 name: cellular_component
 namespace: cellular_component
 def: "The part of a cell or its extracellular environment." [GOC:go_curators]
+subset: goslim_generic
 
 [Term]
 id: GO:0005737
 name: cytoplasm
 namespace: cellular_component
 def: "All of the contents of a cell excluding the plasma membrane and nucleus." [GOC:go_curators]
+subset: goslim_generic
 is_a: GO:0005575 ! cellular_component
 """,
         encoding="utf-8",
@@ -76,24 +85,29 @@ def test_go_db_build_tidy_exposes_frames_and_write_contract(tmp_path: Path) -> N
         "synonym",
         "xref",
         "alt_id",
+        "subset_membership",
+        "subset_definition",
         "ancestor_all",
         "depth",
     }
     assert tidy.frames["term"].select(pl.len()).collect().item() == 6
     assert tidy.frames["edge"].select(pl.len()).collect().item() == 5
+    assert tidy.frames["subset_membership"].select(pl.len()).collect().item() == 7
+    assert tidy.frames["subset_definition"].select(pl.len()).collect().item() == 2
 
     report = tidy.write(dir_out)
 
     assert report.dir_out == dir_out
     assert report.manifest is None
-    assert len(report.assets) == 7
+    assert len(report.assets) == 9
     assert (dir_out / "term.parquet").exists()
+    assert (dir_out / "subset_membership.parquet").exists()
     assert (dir_out / "ancestor_all.parquet").exists()
     assert not (dir_out / "manifest.json").exists()
 
     report_manifest = tidy.write(dir_out / "with_manifest", should_write_manifest=True)
     assert report_manifest.manifest is not None
-    assert report_manifest.manifest["schema_version"] == "go-obo-tidy-v0.1"
+    assert report_manifest.manifest["schema_version"] == "go-obo-tidy-v0.2"
     data_manifest = json.loads(
         (dir_out / "with_manifest" / "manifest.json").read_text("utf-8")
     )
@@ -122,6 +136,71 @@ def test_legacy_go_tidy_runner_still_writes_contract(tmp_path: Path) -> None:
 
     assert not (dir_out / "manifest.json").exists()
     assert pl.read_parquet(dir_out / "term.parquet").height == 6
+    assert pl.read_parquet(dir_out / "subset_membership.parquet").height == 7
+
+
+def test_go_db_lists_subsets(tmp_path: Path) -> None:
+    file_in = tmp_path / "go-basic.obo"
+    write_minimal_obo(file_in)
+
+    df_subsets = GoDb.from_obo(file_in).list_subsets()
+
+    assert df_subsets.to_dicts() == [
+        {
+            "subset_id": "goslim_generic",
+            "subset_name": "Generic GO slim",
+            "num_terms": 5,
+        },
+        {
+            "subset_id": "goslim_plant",
+            "subset_name": "Plant GO slim",
+            "num_terms": 2,
+        },
+    ]
+
+
+def test_go_db_selects_terms_by_namespace_subset_and_alt_id(tmp_path: Path) -> None:
+    file_in = tmp_path / "go-basic.obo"
+    write_minimal_obo(file_in)
+    db = GoDb.from_obo(file_in)
+
+    df_cellular_generic = db.select_terms(
+        namespace="cellular_component",
+        subset_id=GoSubsetId.GOSLIM_GENERIC,
+    )
+    assert df_cellular_generic.select("go_id", "subset_id").to_dicts() == [
+        {"go_id": "GO:0005575", "subset_id": "goslim_generic"},
+        {"go_id": "GO:0005737", "subset_id": "goslim_generic"},
+    ]
+
+    df_selected = db.select_terms(term_ids=["GO:1234567", "GO:0000003"])
+    assert df_selected.select("input_go_id", "go_id", "term_name").to_dicts() == [
+        {
+            "input_go_id": "GO:1234567",
+            "go_id": "GO:0000002",
+            "term_name": "child process",
+        },
+        {
+            "input_go_id": "GO:0000003",
+            "go_id": "GO:0000003",
+            "term_name": "leaf function",
+        },
+    ]
+
+
+def test_go_db_select_terms_keeps_one_row_per_term_for_subset(tmp_path: Path) -> None:
+    file_in = tmp_path / "go-basic.obo"
+    write_minimal_obo(file_in)
+
+    df_terms = GoDb.from_obo(file_in).select_terms(subset_id="goslim_generic")
+
+    assert df_terms["go_id"].to_list() == [
+        "GO:0000001",
+        "GO:0000002",
+        "GO:0005575",
+        "GO:0005737",
+    ]
+    assert df_terms["subset_id"].to_list() == ["goslim_generic"] * 4
 
 
 def test_go_db_extracts_subcell_from_cellular_component(tmp_path: Path) -> None:

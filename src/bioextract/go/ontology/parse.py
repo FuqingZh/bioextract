@@ -4,7 +4,13 @@ from itertools import chain
 from pathlib import Path
 
 from .constant import RE_DEFINITION, RE_GO_ID, RE_SYNONYM
-from .model import ParentEdge, SynonymRecord, TermRecord, XrefParts
+from .model import (
+    ParentEdge,
+    SubsetDefinitionRecord,
+    SynonymRecord,
+    TermRecord,
+    XrefParts,
+)
 
 
 # #region OboParsing
@@ -71,6 +77,17 @@ def parse_xref_lossless(xref: str) -> XrefParts:
         return XrefParts(None, None)
 
     return XrefParts(xref_db, xref_id)
+
+
+def parse_subset_definition(raw_subsetdef: str) -> SubsetDefinitionRecord | None:
+    subset_id, _, raw_subset_name = raw_subsetdef.partition(" ")
+    subset_id = subset_id.strip()
+    subset_name = raw_subset_name.strip()
+    if not subset_id or not subset_name:
+        return None
+    if subset_name.startswith('"') and subset_name.endswith('"'):
+        subset_name = subset_name[1:-1]
+    return SubsetDefinitionRecord(subset_id=subset_id, subset_name=subset_name)
 
 
 def parse_parent_edges(
@@ -143,6 +160,7 @@ def parse_term_record(block: dict[str, list[str]]) -> TermRecord | None:
         is_obsolete=is_obsolete,
         comment=comment,
         alt_ids=[extract_inline_value(value) for value in block.get("alt_id", [])],
+        subsets=[extract_inline_value(value) for value in block.get("subset", [])],
         xrefs=[extract_inline_value(value) for value in block.get("xref", [])],
         synonyms=[value.strip() for value in block.get("synonym", [])],
         parents=parse_parent_edges(block=block, child_go_id=go_id),
@@ -188,6 +206,23 @@ def scan_obo_term_records(file_in: Path) -> Iterator[TermRecord]:
 
 def read_obo_term_records(file_in: Path) -> list[TermRecord]:
     return list(scan_obo_term_records(file_in))
+
+
+def read_obo_subset_definitions(file_in: Path) -> list[SubsetDefinitionRecord]:
+    definitions: list[SubsetDefinitionRecord] = []
+    with file_in.open("r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line_stripped = raw_line.rstrip("\n").strip()
+            if line_stripped.startswith("["):
+                break
+            if not line_stripped.startswith("subsetdef: "):
+                continue
+            definition = parse_subset_definition(
+                line_stripped.removeprefix("subsetdef: ")
+            )
+            if definition is not None:
+                definitions.append(definition)
+    return definitions
 
 
 # #endregion

@@ -9,6 +9,8 @@ artifacts. Manifest writing is optional.
 The implemented MVP covers:
 
 - GO OBO to ontology tidy tables
+- GO OBO subset membership and subset definition tables
+- GO term selection by ID, namespace, and subset membership
 - KEGG BRITE JSON to pathway tidy tables
 - in-memory use through `build_tidy().frames`
 - persisted use through `build_tidy().write(dir_out)`
@@ -19,7 +21,7 @@ The MVP intentionally does not cover:
 - GO GAF or GPAD annotation
 - protein or gene identifier selection for GO
 - ORA, GSEA, or clusterProfiler replacement logic
-- GO slim mapping
+- projecting arbitrary GO annotations to GO slim ancestors
 
 ## Public API
 
@@ -27,8 +29,13 @@ The MVP intentionally does not cover:
 from bioextract.go import GoDb
 from bioextract.kegg import KeggDb
 
-go_tidy = GoDb.from_obo("go-basic.obo").build_tidy()
+go = GoDb.from_obo("go-basic.obo")
+go_tidy = go.build_tidy()
 df_terms = go_tidy.frames["term"]
+df_subsets = go.list_subsets()
+df_goslim_generic = go.select_terms(
+    subset_id="goslim_generic",
+)
 go_report = go_tidy.write("out/go-basic")
 go_report_with_manifest = go_tidy.write(
     "out/go-basic-archive",
@@ -53,6 +60,11 @@ GO OBO parsing is stanza-streamed through `scan_obo_term_records()`. The tidy
 builder consumes records once into column buffers, then materializes Polars
 frames at the artifact boundary.
 
+The `edge` frame preserves parsed OBO parent and relationship edges. Derived
+`ancestor_all` and `depth` frames use hierarchical relation types only
+(`is_a`, `part_of`) so non-hierarchical relationships such as `has_part` do not
+create graph cycles in subset OBO snapshots.
+
 KEGG BRITE JSON currently uses the standard library JSON parser, so the JSON
 tree is loaded before row traversal. The traversal and frame construction are
 linear and deterministic. True streaming JSON parsing would require an
@@ -68,6 +80,8 @@ edge.parquet
 synonym.parquet
 xref.parquet
 alt_id.parquet
+subset_membership.parquet
+subset_definition.parquet
 ancestor_all.parquet
 depth.parquet
 ```
