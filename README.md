@@ -237,6 +237,28 @@ directory already exists.
 
 For UniProt knowledge-base flat files, `write_eggnog_xref_tidy()` can emit a
 canonical UniProt-to-eggNOG xref parquet from `uniprot_sprot.dat(.gz)`.
+The same flat-file handle can also extract curated Swiss-Prot subcellular
+location comments:
+
+```python
+from bioextract.uniprot import UniprotDb
+
+db = UniprotDb.from_dat(
+    file_dat="uniprot_sprot.dat.gz",
+    source_db="sprot",
+)
+
+df_subcell = db.extract_subcellular_location()
+
+report = db.write_subcellular_location_tidy(
+    "out/subcellular_location",
+    should_write_manifest=True,
+)
+```
+
+Subcellular location tidy output writes `data.parquet`. It preserves the
+UniProtKB `CC   -!- SUBCELLULAR LOCATION:` comment text and ECO evidence; it
+does not infer GO cellular-component terms.
 
 ## Development
 

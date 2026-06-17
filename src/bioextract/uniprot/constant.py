@@ -5,6 +5,7 @@ from polars._typing import SchemaDict
 
 SCHEMA_VERSION = "uniprot-idmapping-selected-v0.1"
 SCHEMA_VERSION_EGGNOG_XREF = "uniprot-eggnog-xref-v0.1"
+SCHEMA_VERSION_SUBCELLULAR_LOCATION = "uniprot-subcellular-location-v0.1"
 MEDIA_TYPE_TSV_GZIP = "text/tab-separated-values+gzip"
 MEDIA_TYPE_TSV = "text/tab-separated-values"
 MEDIA_TYPE_PARQUET = "application/vnd.apache.parquet"
@@ -56,5 +57,33 @@ SCHEMA_EGGNOG_XREF: SchemaDict = {
     "IsPrimaryAccession": pl.Boolean,
     "EggnogOgId": pl.String,
     "EggnogLevel": pl.String,
+    "SourceDb": pl.String,
+}
+
+COLS_SUBCELLULAR_LOCATION = [
+    "UniProtId",
+    "PrimaryUniProtId",
+    "UniProtEntryName",
+    "GeneName",
+    "ProteinName",
+    "SubcellularLocation",
+    "SubcellularLocationNote",
+    "EvidenceCode",
+    "EvidenceSource",
+    "EvidenceId",
+    "SourceDb",
+]
+
+SCHEMA_SUBCELLULAR_LOCATION: SchemaDict = {
+    "UniProtId": pl.String,
+    "PrimaryUniProtId": pl.String,
+    "UniProtEntryName": pl.String,
+    "GeneName": pl.String,
+    "ProteinName": pl.String,
+    "SubcellularLocation": pl.String,
+    "SubcellularLocationNote": pl.String,
+    "EvidenceCode": pl.String,
+    "EvidenceSource": pl.String,
+    "EvidenceId": pl.String,
     "SourceDb": pl.String,
 }

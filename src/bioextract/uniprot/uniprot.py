@@ -35,6 +35,7 @@ from .constant import (
     MEDIA_TYPE_TSV,
     MEDIA_TYPE_TSV_GZIP,
     SCHEMA_VERSION_EGGNOG_XREF,
+    SCHEMA_VERSION_SUBCELLULAR_LOCATION,
     SCHEMA_VERSION,
 )
 from .util import (
@@ -42,11 +43,14 @@ from .util import (
     has_hive_parquet_candidates,
     normalize_taxids,
     read_eggnog_xref_frame,
+    read_subcellular_location_frame,
     scan_eggnog_xref_tsv,
     scan_hive_mapping_dataset,
     scan_raw_idmapping_selected,
+    scan_subcellular_location_tsv,
     validate_mapping_schema,
     write_eggnog_xref_tsv,
+    write_subcellular_location_tsv,
 )
 
 __all__ = [
@@ -220,6 +224,14 @@ class UniprotDb:
             input_ids=input_ids,
         )
 
+    def extract_subcellular_location(self) -> pl.DataFrame:
+        """Extract curated UniProtKB subcellular location comments."""
+        self._require_dat_snapshot("extract UniProt subcellular locations")
+        return read_subcellular_location_frame(
+            self._required_path(self.snapshot.file_dat),
+            source_db=self.snapshot.source_db or "",
+        )
+
     def write_eggnog_xref_tidy(
         self,
         dir_out: os.PathLike[str] | str,
@@ -251,6 +263,43 @@ class UniprotDb:
                     TidyAsset(
                         path="mapping.parquet", kind="canonical", frame_name="mapping"
                     ),
+                ),
+            )
+            return dataset.write(
+                Path(dir_out),
+                should_write_manifest=should_write_manifest,
+                should_hash_assets=should_hash_assets,
+            )
+
+    def write_subcellular_location_tidy(
+        self,
+        dir_out: os.PathLike[str] | str,
+        *,
+        should_write_manifest: bool = False,
+        should_hash_assets: bool = False,
+    ) -> TidyWriteReport:
+        """Write curated UniProtKB subcellular locations as canonical parquet."""
+        self._require_dat_snapshot("write UniProt subcellular location tidy")
+        file_dat = self._required_path(self.snapshot.file_dat)
+        media_type = (
+            MEDIA_TYPE_FLAT_FILE_GZIP
+            if self.snapshot.kind == _UniprotMappingKind.DAT_GZIP
+            else MEDIA_TYPE_FLAT_FILE
+        )
+        with tempfile.TemporaryDirectory(prefix="bioextract-uniprot-subcell-") as dir_tmp:
+            file_subcell_tsv = Path(dir_tmp) / "data.tsv"
+            write_subcellular_location_tsv(
+                file_dat,
+                file_subcell_tsv,
+                source_db=self.snapshot.source_db or "",
+            )
+            dataset = TidyDataset(
+                frames={"data": scan_subcellular_location_tsv(file_subcell_tsv)},
+                source=TidySource(path=file_dat, media_type=media_type),
+                schema_version=SCHEMA_VERSION_SUBCELLULAR_LOCATION,
+                build_id_prefix=f"uniprot-subcellular-location-{self.snapshot.source_db}",
+                assets=(
+                    TidyAsset(path="data.parquet", kind="canonical", frame_name="data"),
                 ),
             )
             return dataset.write(

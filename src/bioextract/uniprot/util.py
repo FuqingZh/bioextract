@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import gzip
+import re
+from collections.abc import Iterable
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
 
@@ -11,10 +14,27 @@ from bioextract._shared import RowWriter, create_tsv_writer, validate_required_c
 from .constant import (
     COLS_EGGNOG_XREF,
     COLS_IDMAPPING_SELECTED,
+    COLS_SUBCELLULAR_LOCATION,
     REQUIRED_COLS_MAPPING,
     SCHEMA_EGGNOG_XREF,
     SCHEMA_MAPPING,
+    SCHEMA_SUBCELLULAR_LOCATION,
 )
+
+_SUBCELLULAR_LOCATION_PREFIX = "CC   -!- SUBCELLULAR LOCATION:"
+_CC_TOPIC_PREFIX = "CC   -!- "
+_EVIDENCE_RE = re.compile(r"\{([^{}]+)\}")
+_GENE_NAME_RE = re.compile(r"(?:^|;\s*)Name=([^;]+)")
+_PROTEIN_FULL_RE = re.compile(r"RecName:\s+Full=([^;]+)")
+
+
+@dataclass(slots=True)
+class _UniProtDatRecord:
+    accessions: list[str] = field(default_factory=list)
+    entry_name: str | None = None
+    gene_name: str | None = None
+    protein_name: str | None = None
+    subcellular_location_comments: list[str] = field(default_factory=list)
 
 
 def normalize_taxids(taxids: tuple[str | int, ...]) -> tuple[str, ...]:
@@ -106,6 +126,237 @@ def read_eggnog_xref_frame(
     return pl.DataFrame(rows, schema=SCHEMA_EGGNOG_XREF).unique().sort(COLS_EGGNOG_XREF)
 
 
+def read_subcellular_location_frame(
+    file_dat: Path,
+    *,
+    source_db: str,
+) -> pl.DataFrame:
+    rows: list[dict[str, str | None]] = []
+    for record in iter_subcellular_location_records(file_dat):
+        append_subcellular_location_rows(
+            rows,
+            record=record,
+            source_db=source_db,
+        )
+
+    if not rows:
+        return pl.DataFrame(schema=SCHEMA_SUBCELLULAR_LOCATION)
+    return (
+        pl.DataFrame(rows, schema=SCHEMA_SUBCELLULAR_LOCATION)
+        .unique()
+        .sort(COLS_SUBCELLULAR_LOCATION)
+    )
+
+
+def iter_subcellular_location_records(file_dat: Path) -> Iterable[_UniProtDatRecord]:
+    with open_uniprot_dat(file_dat) as handle:
+        record = _UniProtDatRecord()
+        is_subcellular_comment = False
+        subcellular_comment_parts: list[str] = []
+        for line in handle:
+            if line.startswith("//"):
+                if is_subcellular_comment:
+                    record.subcellular_location_comments.append(
+                        join_wrapped_comment_lines(subcellular_comment_parts)
+                    )
+                yield record
+                record = _UniProtDatRecord()
+                is_subcellular_comment = False
+                subcellular_comment_parts = []
+                continue
+
+            if is_subcellular_comment and line.startswith(_CC_TOPIC_PREFIX):
+                record.subcellular_location_comments.append(
+                    join_wrapped_comment_lines(subcellular_comment_parts)
+                )
+                is_subcellular_comment = False
+                subcellular_comment_parts = []
+
+            if line.startswith(_SUBCELLULAR_LOCATION_PREFIX):
+                is_subcellular_comment = True
+                subcellular_comment_parts = [
+                    line.removeprefix(_SUBCELLULAR_LOCATION_PREFIX).strip()
+                ]
+                continue
+            if is_subcellular_comment and line.startswith("CC       "):
+                subcellular_comment_parts.append(line[9:].strip())
+                continue
+
+            update_dat_record_identity(record, line)
+
+        if is_subcellular_comment:
+            record.subcellular_location_comments.append(
+                join_wrapped_comment_lines(subcellular_comment_parts)
+            )
+        if (
+            record.accessions
+            or record.entry_name
+            or record.subcellular_location_comments
+        ):
+            yield record
+
+
+def update_dat_record_identity(record: _UniProtDatRecord, line: str) -> None:
+    if line.startswith("ID   "):
+        record.entry_name = line[5:].strip().split()[0]
+    elif line.startswith("AC   "):
+        record.accessions.extend(parse_accession_line(line))
+    elif record.gene_name is None and line.startswith("GN   "):
+        record.gene_name = parse_gene_name_line(line)
+    elif record.protein_name is None and line.startswith("DE   RecName: Full="):
+        record.protein_name = parse_recommended_protein_name_line(line)
+
+
+def append_subcellular_location_rows(
+    rows: list[dict[str, str | None]],
+    *,
+    record: _UniProtDatRecord,
+    source_db: str,
+) -> None:
+    if not record.accessions or not record.subcellular_location_comments:
+        return
+    primary_accession = record.accessions[0]
+    for comment in record.subcellular_location_comments:
+        entries = parse_subcellular_location_comment(comment)
+        for accession in record.accessions:
+            for entry in entries:
+                for evidence_code, evidence_source, evidence_id in entry["evidences"]:
+                    rows.append(
+                        {
+                            "UniProtId": accession,
+                            "PrimaryUniProtId": primary_accession,
+                            "UniProtEntryName": record.entry_name,
+                            "GeneName": record.gene_name,
+                            "ProteinName": record.protein_name,
+                            "SubcellularLocation": entry["location"],
+                            "SubcellularLocationNote": entry["note"],
+                            "EvidenceCode": evidence_code,
+                            "EvidenceSource": evidence_source,
+                            "EvidenceId": evidence_id,
+                            "SourceDb": source_db,
+                        }
+                    )
+
+
+def parse_subcellular_location_comment(
+    comment: str,
+) -> list[dict[str, str | None | list[tuple[str | None, str | None, str | None]]]]:
+    location_text, note_text = split_subcellular_location_note(comment)
+    statements = split_top_level_periods(location_text)
+    entries = [
+        create_subcellular_location_entry(statement, note_text)
+        for statement in statements
+        if statement.strip()
+    ]
+    if not entries and note_text:
+        entries.append(create_subcellular_location_entry("", note_text))
+    return entries
+
+
+def create_subcellular_location_entry(
+    text: str,
+    note_text: str | None,
+) -> dict[str, str | None | list[tuple[str | None, str | None, str | None]]]:
+    location_text, evidences = extract_evidence_references(text)
+    return {
+        "location": location_text or None,
+        "note": note_text,
+        "evidences": evidences or [(None, None, None)],
+    }
+
+
+def split_subcellular_location_note(comment: str) -> tuple[str, str | None]:
+    if "Note=" not in comment:
+        return comment.strip(), None
+    location_text, note_text = comment.split("Note=", 1)
+    note_text, _ = extract_evidence_references(note_text)
+    return location_text.strip(), note_text.strip().rstrip(".") or None
+
+
+def join_wrapped_comment_lines(parts: list[str]) -> str:
+    text = ""
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+        if not text:
+            text = part
+        elif text.endswith("-"):
+            text += part
+        else:
+            text += f" {part}"
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def split_top_level_periods(text: str) -> list[str]:
+    statements: list[str] = []
+    start = 0
+    depth_brace = 0
+    for index, character in enumerate(text):
+        if character == "{":
+            depth_brace += 1
+        elif character == "}":
+            depth_brace = max(0, depth_brace - 1)
+        elif character == "." and depth_brace == 0:
+            statement = text[start:index].strip()
+            if statement:
+                statements.append(statement)
+            start = index + 1
+    tail = text[start:].strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
+def extract_evidence_references(
+    text: str,
+) -> tuple[str, list[tuple[str | None, str | None, str | None]]]:
+    evidences: list[tuple[str | None, str | None, str | None]] = []
+    for evidence_block in _EVIDENCE_RE.findall(text):
+        for evidence_reference in evidence_block.split(","):
+            evidence_reference = evidence_reference.strip()
+            if not evidence_reference:
+                continue
+            evidence_code, evidence_source, evidence_id = parse_evidence_reference(
+                evidence_reference
+            )
+            evidences.append((evidence_code, evidence_source, evidence_id))
+    cleaned = _EVIDENCE_RE.sub("", text)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ;")
+    return cleaned, evidences
+
+
+def parse_evidence_reference(
+    evidence_reference: str,
+) -> tuple[str | None, str | None, str | None]:
+    evidence_code, separator, source_reference = evidence_reference.partition("|")
+    evidence_code = evidence_code.strip() or None
+    if not separator:
+        return evidence_code, None, None
+    evidence_source, source_separator, evidence_id = source_reference.strip().partition(
+        ":"
+    )
+    if not source_separator:
+        return evidence_code, evidence_source.strip() or None, None
+    return evidence_code, evidence_source.strip() or None, evidence_id.strip() or None
+
+
+def parse_gene_name_line(line: str) -> str | None:
+    match = _GENE_NAME_RE.search(line[5:].strip())
+    if match is None:
+        return None
+    gene_name, _ = extract_evidence_references(match.group(1))
+    return gene_name or None
+
+
+def parse_recommended_protein_name_line(line: str) -> str | None:
+    match = _PROTEIN_FULL_RE.search(line[5:].strip())
+    if match is None:
+        return None
+    protein_name, _ = extract_evidence_references(match.group(1))
+    return protein_name or None
+
+
 def write_eggnog_xref_tsv(
     file_dat: Path,
     file_out: Path,
@@ -143,6 +394,24 @@ def write_eggnog_xref_tsv(
             )
 
 
+def write_subcellular_location_tsv(
+    file_dat: Path,
+    file_out: Path,
+    *,
+    source_db: str,
+) -> None:
+    file_out.parent.mkdir(parents=True, exist_ok=True)
+    with file_out.open("w", encoding="utf-8", newline="") as handle_out:
+        writer = create_tsv_writer(handle_out)
+        writer.writerow(COLS_SUBCELLULAR_LOCATION)
+        for record in iter_subcellular_location_records(file_dat):
+            write_subcellular_location_rows(
+                writer,
+                record=record,
+                source_db=source_db,
+            )
+
+
 def scan_eggnog_xref_tsv(file_tsv: Path) -> pl.LazyFrame:
     return pl.scan_csv(
         file_tsv,
@@ -150,6 +419,22 @@ def scan_eggnog_xref_tsv(file_tsv: Path) -> pl.LazyFrame:
         has_header=True,
         schema_overrides=SCHEMA_EGGNOG_XREF,
     ).select(COLS_EGGNOG_XREF)
+
+
+def scan_subcellular_location_tsv(file_tsv: Path) -> pl.LazyFrame:
+    return (
+        pl.scan_csv(
+            file_tsv,
+            separator="\t",
+            has_header=True,
+            schema_overrides=SCHEMA_SUBCELLULAR_LOCATION,
+            infer_schema=False,
+            null_values=[""],
+        )
+        .select(COLS_SUBCELLULAR_LOCATION)
+        .unique()
+        .sort(COLS_SUBCELLULAR_LOCATION)
+    )
 
 
 def append_eggnog_xref_rows(
@@ -202,6 +487,22 @@ def write_eggnog_xref_rows(
                     source_db,
                 ]
             )
+
+
+def write_subcellular_location_rows(
+    writer: RowWriter,
+    *,
+    record: _UniProtDatRecord,
+    source_db: str,
+) -> None:
+    rows: list[dict[str, str | None]] = []
+    append_subcellular_location_rows(
+        rows,
+        record=record,
+        source_db=source_db,
+    )
+    for row in rows:
+        writer.writerow([row[column] or "" for column in COLS_SUBCELLULAR_LOCATION])
 
 
 def parse_accession_line(line: str) -> list[str]:

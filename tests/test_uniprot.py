@@ -9,7 +9,13 @@ import pytest
 import bioextract.uniprot.uniprot as uniprot_module
 from bioextract._tidy import TidyReportAsset
 from bioextract.uniprot import UniprotDb, UniprotResourceLimits
-from bioextract.uniprot.constant import COLS_IDMAPPING_SELECTED
+from bioextract.uniprot.constant import (
+    COLS_IDMAPPING_SELECTED,
+    COLS_SUBCELLULAR_LOCATION,
+    SCHEMA_SUBCELLULAR_LOCATION,
+    SCHEMA_VERSION_SUBCELLULAR_LOCATION,
+)
+from bioextract.uniprot.util import read_subcellular_location_frame
 
 
 def write_idmapping_fixture(tmp_path: Path, *, should_gzip: bool = True) -> Path:
@@ -122,6 +128,40 @@ AC   P31750;
     return file_in
 
 
+def write_uniprot_subcellular_dat_fixture(
+    tmp_path: Path,
+    *,
+    should_gzip: bool = True,
+) -> Path:
+    suffix = ".dat.gz" if should_gzip else ".dat"
+    file_in = tmp_path / f"uniprot_sprot_subcellular{suffix}"
+    text = """ID   TEST1_HUMAN              Reviewed;         100 AA.
+AC   P12345; Q11111;
+DE   RecName: Full=Cellular tumor antigen p53;
+GN   Name=TP53; Synonyms=P53;
+CC   -!- SUBCELLULAR LOCATION: Cytoplasm {ECO:0000269|PubMed:123456}.
+CC       Nucleus {ECO:0000305}. Note=Shuttles between cytoplasm and nucleus.
+CC   -!- FUNCTION: DNA-binding transcription factor.
+DR   eggNOG; KOG0001; Eukaryota.
+//
+ID   TEST2_HUMAN              Reviewed;         200 AA.
+AC   Q9Y243;
+DE   RecName: Full=RAC-gamma serine/threonine-protein kinase {ECO:0000303|Ref.6};
+GN   ORFNames=CG14996;
+CC   -!- SUBCELLULAR LOCATION: Membrane.
+//
+ID   TEST3_HUMAN              Reviewed;         300 AA.
+AC   P31750;
+//
+"""
+    if should_gzip:
+        with gzip.open(file_in, "wt", encoding="utf-8") as handle:
+            handle.write(text)
+    else:
+        file_in.write_text(text, encoding="utf-8")
+    return file_in
+
+
 def test_extract_mapping_filters_taxids_from_raw_gzip(tmp_path: Path) -> None:
     file_in = write_idmapping_fixture(tmp_path)
 
@@ -210,6 +250,145 @@ def test_select_eggnog_xref_ids_filters_accessions(tmp_path: Path) -> None:
     ]
 
 
+def test_subcellular_location_schema_constants_are_declared() -> None:
+    assert SCHEMA_VERSION_SUBCELLULAR_LOCATION == "uniprot-subcellular-location-v0.1"
+    assert COLS_SUBCELLULAR_LOCATION == [
+        "UniProtId",
+        "PrimaryUniProtId",
+        "UniProtEntryName",
+        "GeneName",
+        "ProteinName",
+        "SubcellularLocation",
+        "SubcellularLocationNote",
+        "EvidenceCode",
+        "EvidenceSource",
+        "EvidenceId",
+        "SourceDb",
+    ]
+    assert list(SCHEMA_SUBCELLULAR_LOCATION) == COLS_SUBCELLULAR_LOCATION
+
+
+def test_read_subcellular_location_frame_from_dat_gzip(tmp_path: Path) -> None:
+    file_dat = write_uniprot_subcellular_dat_fixture(tmp_path)
+
+    df_subcellular = read_subcellular_location_frame(file_dat, source_db="sprot")
+
+    assert df_subcellular.columns == COLS_SUBCELLULAR_LOCATION
+    assert df_subcellular.to_dicts() == [
+        {
+            "UniProtId": "P12345",
+            "PrimaryUniProtId": "P12345",
+            "UniProtEntryName": "TEST1_HUMAN",
+            "GeneName": "TP53",
+            "ProteinName": "Cellular tumor antigen p53",
+            "SubcellularLocation": "Cytoplasm",
+            "SubcellularLocationNote": "Shuttles between cytoplasm and nucleus",
+            "EvidenceCode": "ECO:0000269",
+            "EvidenceSource": "PubMed",
+            "EvidenceId": "123456",
+            "SourceDb": "sprot",
+        },
+        {
+            "UniProtId": "P12345",
+            "PrimaryUniProtId": "P12345",
+            "UniProtEntryName": "TEST1_HUMAN",
+            "GeneName": "TP53",
+            "ProteinName": "Cellular tumor antigen p53",
+            "SubcellularLocation": "Nucleus",
+            "SubcellularLocationNote": "Shuttles between cytoplasm and nucleus",
+            "EvidenceCode": "ECO:0000305",
+            "EvidenceSource": None,
+            "EvidenceId": None,
+            "SourceDb": "sprot",
+        },
+        {
+            "UniProtId": "Q11111",
+            "PrimaryUniProtId": "P12345",
+            "UniProtEntryName": "TEST1_HUMAN",
+            "GeneName": "TP53",
+            "ProteinName": "Cellular tumor antigen p53",
+            "SubcellularLocation": "Cytoplasm",
+            "SubcellularLocationNote": "Shuttles between cytoplasm and nucleus",
+            "EvidenceCode": "ECO:0000269",
+            "EvidenceSource": "PubMed",
+            "EvidenceId": "123456",
+            "SourceDb": "sprot",
+        },
+        {
+            "UniProtId": "Q11111",
+            "PrimaryUniProtId": "P12345",
+            "UniProtEntryName": "TEST1_HUMAN",
+            "GeneName": "TP53",
+            "ProteinName": "Cellular tumor antigen p53",
+            "SubcellularLocation": "Nucleus",
+            "SubcellularLocationNote": "Shuttles between cytoplasm and nucleus",
+            "EvidenceCode": "ECO:0000305",
+            "EvidenceSource": None,
+            "EvidenceId": None,
+            "SourceDb": "sprot",
+        },
+        {
+            "UniProtId": "Q9Y243",
+            "PrimaryUniProtId": "Q9Y243",
+            "UniProtEntryName": "TEST2_HUMAN",
+            "GeneName": None,
+            "ProteinName": "RAC-gamma serine/threonine-protein kinase",
+            "SubcellularLocation": "Membrane",
+            "SubcellularLocationNote": None,
+            "EvidenceCode": None,
+            "EvidenceSource": None,
+            "EvidenceId": None,
+            "SourceDb": "sprot",
+        },
+    ]
+
+
+def test_read_subcellular_location_frame_from_plain_dat(tmp_path: Path) -> None:
+    file_dat = write_uniprot_subcellular_dat_fixture(tmp_path, should_gzip=False)
+
+    df_subcellular = read_subcellular_location_frame(file_dat, source_db="sprot")
+
+    assert df_subcellular.height == 5
+    assert df_subcellular.select("UniProtId", "SubcellularLocation").to_dicts()[-1] == {
+        "UniProtId": "Q9Y243",
+        "SubcellularLocation": "Membrane",
+    }
+
+
+def test_extract_subcellular_location_from_dat_handle(tmp_path: Path) -> None:
+    file_dat = write_uniprot_subcellular_dat_fixture(tmp_path)
+
+    df_subcellular = UniprotDb.from_dat(
+        file_dat=file_dat,
+        source_db="sprot",
+    ).extract_subcellular_location()
+
+    assert df_subcellular.columns == COLS_SUBCELLULAR_LOCATION
+    assert df_subcellular.height == 5
+    assert sorted(
+        df_subcellular.select("PrimaryUniProtId").unique().to_series().to_list()
+    ) == ["P12345", "Q9Y243"]
+
+
+def test_write_subcellular_location_tidy_writes_data_parquet_and_manifest(
+    tmp_path: Path,
+) -> None:
+    file_dat = write_uniprot_subcellular_dat_fixture(tmp_path)
+    db = UniprotDb.from_dat(file_dat=file_dat, source_db="sprot")
+
+    report = db.write_subcellular_location_tidy(
+        tmp_path / "subcellular_location",
+        should_write_manifest=True,
+    )
+
+    assert report.manifest is not None
+    assert report.manifest["schema_version"] == "uniprot-subcellular-location-v0.1"
+    assert [asset.path for asset in report.assets] == ["data.parquet"]
+    df_written = pl.read_parquet(tmp_path / "subcellular_location" / "data.parquet")
+    assert df_written.columns == COLS_SUBCELLULAR_LOCATION
+    assert df_written.height == 5
+
+
 def test_write_eggnog_xref_tidy_writes_mapping_parquet_and_manifest(
     tmp_path: Path,
 ) -> None:
@@ -238,6 +417,8 @@ def test_uniprot_dat_and_idmapping_methods_are_separated(tmp_path: Path) -> None
     db_idmapping = UniprotDb.from_files(file_idmapping_selected=file_idmapping)
     with pytest.raises(ValueError, match="eggNOG"):
         db_idmapping.extract_eggnog_xref()
+    with pytest.raises(ValueError, match="subcellular"):
+        db_idmapping.extract_subcellular_location()
 
 
 def test_write_tidy_writes_single_parquet_by_default(tmp_path: Path) -> None:

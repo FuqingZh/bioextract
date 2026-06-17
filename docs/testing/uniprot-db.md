@@ -5,7 +5,8 @@
 The first UniProtDb test suite verifies lightweight construction, raw
 `idmapping_selected` parsing, taxid filtering, single parquet writing, hive
 dataset reading, single parquet reading, eggNOG xref flat-file extraction, and
-schema/error handling.
+Swiss-Prot subcellular location flat-file extraction, and schema/error
+handling.
 
 It should not test online UniProt services or full 9 GB all-taxid exports.
 
@@ -35,6 +36,10 @@ P31750	AKT1_MOUSE	11651	...	10090	...
 - non-empty output directories follow `policy_existing`.
 - `validate_schema()` reports missing required columns.
 - `.dat(.gz)` snapshots can emit eggNOG xref tidy output.
+- `.dat(.gz)` snapshots can extract subcellular location comments.
+- subcellular fixtures cover simple locations, multiple locations, ECO
+  evidence, no-evidence comments, and `Note=` text.
+- `write_subcellular_location_tidy()` emits canonical `data.parquet`.
 
 ## Real-Data Smoke
 
@@ -61,3 +66,11 @@ The eggNOG xref tidy path should verify:
 - `.dat.gz` parsing succeeds
 - `mapping.parquet` is written
 - `EggnogOgId` and `EggnogLevel` are populated from `DR   eggNOG;` records
+
+The subcellular location tidy path should verify:
+
+- `.dat.gz` parsing succeeds
+- `data.parquet` is written
+- distinct primary accessions and row counts are stable for the snapshot
+- evidence coverage is non-zero
+- location text and `Note=` text are populated in a deterministic preview

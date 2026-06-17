@@ -17,12 +17,16 @@ The MVP covers:
 - full normalized mapping extraction
 - single parquet tidy writing
 - UniProt `.dat(.gz)` flat-file parsing for eggNOG xref extraction
+- UniProt `.dat(.gz)` flat-file parsing for curated Swiss-Prot subcellular
+  location comments
 
 It intentionally does not cover:
 
 - online UniProt ID mapping service calls
-- per-crossref public extraction APIs
+- broad per-crossref public extraction APIs beyond the explicitly supported
+  eggNOG and subcellular-location paths
 - enrichment statistics
+- GO cellular-component inference from UniProtKB comment text
 
 ## Raw Columns
 
@@ -116,7 +120,7 @@ skip       return a write report without rewriting files
 For UniProt knowledge-base flat files, the implemented helper path is:
 
 ```python
-db = UniprotDb.from_files(
+db = UniprotDb.from_dat(
     file_dat="uniprot_sprot.dat.gz",
     source_db="Swiss-Prot",
 )
@@ -133,6 +137,40 @@ EggnogOgId
 EggnogLevel
 SourceDb
 ```
+
+Swiss-Prot subcellular location comments use the same flat-file constructor:
+
+```python
+db = UniprotDb.from_dat(
+    file_dat="uniprot_sprot.dat.gz",
+    source_db="sprot",
+)
+
+df_subcell = db.extract_subcellular_location()
+report = db.write_subcellular_location_tidy("out/subcellular_location")
+```
+
+That path emits `data.parquet` with one row per
+`UniProt accession x subcellular location text x evidence`:
+
+```text
+UniProtId
+PrimaryUniProtId
+UniProtEntryName
+GeneName
+ProteinName
+SubcellularLocation
+SubcellularLocationNote
+EvidenceCode
+EvidenceSource
+EvidenceId
+SourceDb
+```
+
+The extractor is deliberately conservative. It preserves curated UniProtKB
+`CC   -!- SUBCELLULAR LOCATION:` annotation text and ECO evidence, but it does
+not map locations to GO terms or interpret missing comments as negative
+localization evidence.
 
 ## Implementation Notes
 
