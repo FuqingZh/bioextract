@@ -1,8 +1,12 @@
-# EggnogDb Test Plan
+# EggnogDb Test Standard
+
+Version: v1.0
+Date: 2026-07-14
+Status: current
 
 ## Scope
 
-The EggnogDb test plan covers:
+The EggnogDb test standard covers:
 
 - lightweight construction
 - COG function lookup parsing
@@ -31,39 +35,10 @@ It does not cover:
 
 ## Real-Data Validation
 
-Validated inputs:
+Real-snapshot publication must verify the exact schema, a stable row count for
+the selected snapshot, readable Parquet output, and cleanup of the temporary
+SQLite/TSV workspace. Keep this outside the default pytest suite because the
+compressed database and decompressed workspace are large.
 
-```text
-/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/eggnog/mapper/5.0.2/raw/eggnog.db.gz
-/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/eggnog/cog/COG2024/raw/cog-24.fun.tab
-```
-
-Validated output:
-
-```text
-/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/eggnog/mapper/5.0.2/tidy/mapping.parquet
-```
-
-Observed publication result on 2026-06-08:
-
-- parquet size: about 949 MB
-- row count: 118,683,777
-- schema:
-  - `EggnogProteinId`
-  - `EggnogOgId`
-  - `EggnogLevel`
-  - `CogCategory`
-  - `CogClass`
-  - `CogName`
-  - `OgDescription`
-
-Observed runtime characteristics:
-
-- compressed input `eggnog.db.gz`: about 6.4 GB
-- temporary decompressed SQLite: about 41 GB
-- temporary TSV peak: about 12 GB+
-- temporary workspace peak under `/tmp/bioextract-eggnog-run`: about 57 GB
-- process RSS observed around 2.8 GB
-- thread count observed around 29
-
-The temporary workspace was automatically cleaned after successful completion.
+The observed eggNOG 5.0.2 sizes and resource usage are recorded in the
+[eggNOG 5.0.2 benchmark](../benchmarks/20260608-v1.0-eggnog-5.0.2-benchmark.md).

@@ -1,5 +1,9 @@
 # GO and KEGG Tidy Architecture
 
+Version: v1.0
+Date: 2026-07-14
+Status: current
+
 ## Goal
 
 `bioextract` owns local resource snapshot access. The GO and KEGG tidy layer

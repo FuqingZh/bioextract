@@ -1,10 +1,14 @@
 # UniprotDb Architecture
 
+Version: v1.0
+Date: 2026-07-14
+Status: current
+
 ## Goal
 
 `bioextract.uniprot.UniprotDb` provides path-first access to UniProt
 `idmapping_selected` resources. The resource is large, so the database handle
-must not load data during construction. It should support raw UniProt selected
+must not load data during construction. It supports raw UniProt selected
 mapping files, normalized parquet files, and hive parquet datasets from
 external or legacy sources.
 

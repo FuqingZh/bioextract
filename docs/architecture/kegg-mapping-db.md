@@ -1,8 +1,12 @@
 # KEGG Mapping Db Architecture
 
+Version: v1.0
+Date: 2026-07-14
+Status: current
+
 ## Goal
 
-`bioextract.kegg.KeggDb` should support local KEGG organism mapping snapshots
+`bioextract.kegg.KeggDb` supports local KEGG organism mapping snapshots
 in addition to the existing BRITE JSON tidy path. The mapping path turns
 explicit KEGG raw files into a stable annotation table for downstream
 proteomics enrichment.
@@ -156,7 +160,7 @@ kegg-mapping-v0.1
 ```
 
 The existing BRITE JSON path keeps its current `pathway.parquet` contract.
-`KeggDb` should internally distinguish snapshot kinds and dispatch
+`KeggDb` internally distinguishes snapshot kinds and dispatches
 `build_tidy()` accordingly.
 
 ## Implementation Notes
@@ -172,7 +176,7 @@ The existing BRITE JSON path keeps its current `pathway.parquet` contract.
 
 ## Tests
 
-Add focused tests for:
+Focused tests cover:
 
 - `from_mapping_files()` with required and optional files
 - `extract_mapping()` normalization and many-to-many expansion

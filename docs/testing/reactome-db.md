@@ -1,12 +1,16 @@
-# ReactomeDb Test Plan
+# ReactomeDb Test Standard
+
+Version: v1.0
+Date: 2026-07-14
+Status: current
 
 ## Scope
 
-The first ReactomeDb test suite should verify local raw-file parsing,
+The ReactomeDb test suite verifies local raw-file parsing,
 selection behavior, species scoping, enrichment input extraction, relation
 filtering, tidy writing, and error handling.
 
-It should not test online Reactome services, ReactomePA behavior, or statistical
+It does not test online Reactome services, ReactomePA behavior, or statistical
 enrichment calculations.
 
 ## Fixtures

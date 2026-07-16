@@ -1,5 +1,9 @@
 # GO Term Selection Plan
 
+Version: v1.0
+Date: 2026-06-15
+Status: superseded by [GO and KEGG Tidy Architecture](../architecture/go-kegg-tidy.md)
+
 ## Goal
 
 Add a term-selection layer to `GoDb` that works for both full GO OBO snapshots

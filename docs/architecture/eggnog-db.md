@@ -1,5 +1,9 @@
 # EggnogDb Architecture
 
+Version: v1.0
+Date: 2026-07-14
+Status: current
+
 ## Goal
 
 `bioextract.eggnog.EggnogDb` provides path-first access to local eggNOG mapper
@@ -144,5 +148,6 @@ The local COG function lookup is:
 /cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/eggnog/cog/COG2024/raw/cog-24.fun.tab
 ```
 
-Validation details for the published tidy artifact are recorded in
-`docs/testing/eggnog-db.md`.
+Validation details are recorded in the
+[EggnogDb test standard](../testing/eggnog-db.md) and the
+[eggNOG 5.0.2 benchmark](../benchmarks/20260608-v1.0-eggnog-5.0.2-benchmark.md).

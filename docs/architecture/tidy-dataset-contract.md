@@ -1,5 +1,9 @@
 # Tidy Dataset Contract
 
+Version: v1.0
+Date: 2026-07-14
+Status: current
+
 ## Goal
 
 `bioextract._tidy` defines the shared write contract for resource snapshots
@@ -104,6 +108,10 @@ When hashing is disabled:
 When hashing is enabled:
 
 - each written parquet asset receives a SHA256 digest
+
+Resource writers may also expose opt-in source hashing. A calculated source
+digest is emitted as `sources[].sha256`; when source hashing is disabled, that
+key is omitted rather than written as `null`.
 
 The default avoids a second full-file read for large artifacts such as
 UniProt, InterPro, and eggNOG outputs.

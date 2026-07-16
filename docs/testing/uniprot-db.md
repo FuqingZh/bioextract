@@ -1,14 +1,18 @@
-# UniprotDb Test Plan
+# UniprotDb Test Standard
+
+Version: v1.0
+Date: 2026-07-14
+Status: current
 
 ## Scope
 
-The first UniProtDb test suite verifies lightweight construction, raw
+The UniProtDb test suite verifies lightweight construction, raw
 `idmapping_selected` parsing, taxid filtering, single parquet writing, hive
 dataset reading, single parquet reading, eggNOG xref flat-file extraction, and
 Swiss-Prot subcellular location flat-file extraction, and schema/error
 handling.
 
-It should not test online UniProt services or full 9 GB all-taxid exports.
+It does not test online UniProt services or full 9 GB all-taxid exports.
 
 ## Fixtures
 

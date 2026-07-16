@@ -1,5 +1,9 @@
 # UniProtKB Subcellular Location Plan
 
+Version: v1.0
+Date: 2026-06-17
+Status: superseded by [UniprotDb Architecture](../architecture/uniprot-db.md)
+
 ## Goal
 
 Add a local, reproducible extractor for Swiss-Prot curated subcellular location

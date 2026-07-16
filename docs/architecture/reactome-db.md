@@ -1,13 +1,17 @@
 # ReactomeDb Architecture
 
+Version: v1.0
+Date: 2026-07-14
+Status: current
+
 ## Goal
 
 `bioextract.reactome.ReactomeDb` provides path-first access to local Reactome
-mapping snapshots. The first version should support annotation lookup and
+mapping snapshots. It supports annotation lookup and
 standard enrichment inputs from Reactome open-data files without calling the
 Reactome web services at runtime.
 
-The implemented MVP should cover:
+The implemented MVP covers:
 
 - UniProt accession to Reactome pathway mapping
 - Reactome pathway metadata
@@ -19,7 +23,7 @@ The implemented MVP should cover:
 - composable input files, so annotation-only and metadata-only use cases do
   not need unrelated raw files
 
-The MVP intentionally should not cover:
+The MVP intentionally does not cover:
 
 - Reactome online Analysis Service calls
 - ReactomePA result compatibility

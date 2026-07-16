@@ -1,5 +1,9 @@
 # WikiPathwaysDb Architecture
 
+Version: v1.0
+Date: 2026-07-14
+Status: current
+
 ## Goal
 
 `bioextract.wikipathways.WikiPathwaysDb` provides path-first access to local

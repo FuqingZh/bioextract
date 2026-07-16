@@ -1,8 +1,12 @@
-# WikiPathwaysDb Test Plan
+# WikiPathwaysDb Test Standard
+
+Version: v1.0
+Date: 2026-07-14
+Status: current
 
 ## Scope
 
-The first WikiPathwaysDb tests verify GMT parsing, metadata extraction,
+The WikiPathwaysDb tests verify GMT parsing, metadata extraction,
 species filtering, enrichment input extraction, single and grouped selections,
 tidy writing, and error handling.
 
