@@ -14,12 +14,28 @@ import polars as pl
 
 @dataclass(frozen=True, slots=True)
 class TidySource:
+    """Describe one source file recorded in a tidy manifest.
+
+    Attributes:
+        path: Source file whose path and byte size are recorded.
+        media_type: Stable media-type label for the source format.
+        sha256: Optional precomputed source digest. When omitted, the manifest
+            leaves out the source `sha256` key instead of recording `null`.
+    """
+
     path: Path
     media_type: str
+    sha256: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class TidyAsset:
+    """Map one lazy frame to its relative output path and artifact kind.
+
+    `is_optional` is delivery metadata propagated to reports and manifests; it
+    does not permit `write()` to skip a missing frame.
+    """
+
     path: str
     kind: str
     frame_name: str
@@ -28,6 +44,8 @@ class TidyAsset:
 
 @dataclass(frozen=True, slots=True)
 class TidyReportAsset:
+    """Describe a relative output asset returned after a tidy write."""
+
     path: str
     kind: str
     is_optional: bool = False
@@ -35,6 +53,11 @@ class TidyReportAsset:
 
 @dataclass(frozen=True, slots=True)
 class TidyManifestAsset:
+    """Describe an asset in the serializable tidy manifest.
+
+    A missing digest is serialized as a JSON `null` value.
+    """
+
     path: str
     kind: str
     sha256: str | None
@@ -42,6 +65,8 @@ class TidyManifestAsset:
 
 
 class TidyManifest(TypedDict):
+    """JSON-compatible manifest emitted for one tidy dataset build."""
+
     build_id: str
     schema_version: str
     generated_at: str
@@ -51,6 +76,12 @@ class TidyManifest(TypedDict):
 
 @dataclass(frozen=True, slots=True)
 class TidyWriteReport:
+    """Report persisted assets and the optional manifest returned by a write.
+
+    Asset paths are relative to `dir_out`. `manifest` is `None` unless the
+    caller requested manifest generation.
+    """
+
     dir_out: Path
     assets: tuple[TidyReportAsset, ...]
     manifest: TidyManifest | None = None
@@ -58,6 +89,33 @@ class TidyWriteReport:
 
 @dataclass(slots=True)
 class TidyDataset:
+    """Bind lazy resource frames to a versioned flat-file output contract.
+
+    Each asset maps a relative output path to one entry in `frames`. The asset
+    tuple defines write and report order; frames not referenced by an asset are
+    not persisted. Sources provide provenance for an optional manifest.
+
+    Attributes:
+        frames: Lazy frames keyed by the names referenced from `assets`.
+        source: One source or an ordered tuple of sources for provenance.
+        schema_version: Version of the resource-specific output schema.
+        build_id_prefix: Stable prefix used to construct manifest build IDs.
+        assets: Ordered output specifications for frames to persist.
+
+    Examples:
+        Bind one in-memory frame to a parquet asset:
+
+        >>> dataset = TidyDataset(
+        ...     frames={"term": pl.DataFrame({"id": ["T1"]}).lazy()},
+        ...     source=TidySource(Path("data/source.tsv"), "text/tab-separated-values"),
+        ...     schema_version="example-v1",
+        ...     build_id_prefix="example",
+        ...     assets=(TidyAsset("term.parquet", "canonical", "term"),),
+        ... )
+        >>> sorted(dataset.frames)
+        ['term']
+    """
+
     frames: Mapping[str, pl.LazyFrame]
     source: TidySource | tuple[TidySource, ...]
     schema_version: str
@@ -71,6 +129,38 @@ class TidyDataset:
         should_write_manifest: bool = False,
         should_hash_assets: bool = False,
     ) -> TidyWriteReport:
+        """Persist configured frames as parquet assets.
+
+        Args:
+            dir_out: Output directory. Relative asset paths are resolved below
+                this directory.
+            should_write_manifest: Whether to also write `manifest.json` and
+                return its content.
+            should_hash_assets: Whether to calculate SHA256 digests for
+                manifest asset entries.
+
+        Returns:
+            A report whose assets follow the configured asset order.
+
+        Raises:
+            KeyError: If an asset references a frame missing from `frames`.
+
+        Examples:
+            Write a one-frame dataset to a temporary directory:
+
+            >>> from tempfile import TemporaryDirectory
+            >>> dataset = TidyDataset(
+            ...     frames={"term": pl.DataFrame({"id": ["T1"]}).lazy()},
+            ...     source=TidySource(Path("data/source.tsv"), "text/tab-separated-values"),
+            ...     schema_version="example-v1",
+            ...     build_id_prefix="example",
+            ...     assets=(TidyAsset("term.parquet", "canonical", "term"),),
+            ... )
+            >>> with TemporaryDirectory() as dir_out:
+            ...     report = dataset.write(dir_out)
+            ...     [asset.path for asset in report.assets]
+            ['term.parquet']
+        """
         dir_out = Path(dir_out)
         dir_out.mkdir(parents=True, exist_ok=True)
 
@@ -116,6 +206,38 @@ class TidyDataset:
         self,
         assets: list[TidyManifestAsset],
     ) -> TidyManifest:
+        """Build manifest content from source metadata and prepared assets.
+
+        Args:
+            assets: Ordered asset records, including any digests calculated at
+                the write boundary.
+
+        Returns:
+            JSON-compatible manifest content with a UTC build timestamp.
+
+        Examples:
+            Build manifest metadata from a local source file:
+
+            >>> from tempfile import TemporaryDirectory
+            >>> with TemporaryDirectory() as dir_source:
+            ...     source_path = Path(dir_source) / "source.tsv"
+            ...     _ = source_path.write_text("id\\nT1\\n", encoding="utf-8")
+            ...     dataset = TidyDataset(
+            ...         frames={},
+            ...         source=TidySource(source_path, "text/tab-separated-values"),
+            ...         schema_version="example-v1",
+            ...         build_id_prefix="example",
+            ...         assets=(),
+            ...     )
+            ...     manifest = dataset.build_manifest([])
+            ...     manifest["schema_version"]
+            'example-v1'
+
+        Notes:
+            This method does not read assets to calculate hashes. Callers must
+            supply any source or asset digest that should appear in the
+            manifest.
+        """
         timestamp = datetime.now(UTC)
         return {
             "build_id": f"{self.build_id_prefix}-{timestamp.strftime('%Y%m%dT%H%M%SZ')}",
@@ -126,6 +248,7 @@ class TidyDataset:
                     "path": source.path.as_posix(),
                     "bytes": source.path.stat().st_size,
                     "media_type": source.media_type,
+                    **({"sha256": source.sha256} if source.sha256 is not None else {}),
                 }
                 for source in self._sources
             ],

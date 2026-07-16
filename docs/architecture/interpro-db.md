@@ -1,5 +1,9 @@
 # InterProDb Architecture
 
+Version: v1.0
+Date: 2026-07-14
+Status: current
+
 ## Goal
 
 `bioextract.interpro.InterProDb` provides path-first access to local InterPro
@@ -13,6 +17,7 @@ The current version covers:
 - full mapping extraction
 - single and grouped UniProt selection
 - flat tidy writing to one canonical `mapping.parquet`
+- direct raw-to-Pfam compact publication
 
 It intentionally does not cover:
 
@@ -58,6 +63,29 @@ df_unmapped = selection.extract_unmapped_input_ids()
 
 Grouped selections mirror the other DB contracts by prepending `GroupId`.
 
+Compact Pfam publication is an InterPro tidy configuration:
+
+```python
+from bioextract.interpro import InterProDb
+
+db = InterProDb.from_mapping_files(
+    file_protein2ipr="108.0/raw/protein2ipr.dat.gz",
+    file_interpro_xml="108.0/raw/interpro.xml.gz",
+)
+
+dataset = db.build_tidy(config="pfam")
+report = db.write_tidy(
+    "108.0/tidy/pfam",
+    config="pfam",
+    should_write_manifest=True,
+    should_hash_sources=True,
+    should_hash_assets=True,
+)
+```
+
+Both inputs must be under the same `<version>/raw/` directory, and the
+directory version must match the `INTERPRO` release declared in XML.
+
 ## Output Contract
 
 The mapping table exposes:
@@ -97,6 +125,55 @@ The write path is lazy:
 This keeps the main publication path aligned with the shared tidy contract
 without forcing a full materialized DataFrame before write.
 
+`build_tidy()` and `write_tidy()` default to `config="mapping"`.
+`config="pfam"` selects the compact Pfam asset contract without adding a
+parallel standalone API.
+
+## Pfam Compact Contract
+
+Pfam publication reads `protein2ipr.dat.gz` and `interpro.xml.gz` directly.
+It does not consume or require the full `tidy/mapping.parquet`.
+
+`protein_term.parquet`:
+
+```text
+UniProtId
+PfamId
+```
+
+`term.parquet`:
+
+```text
+PfamId
+PfamName
+```
+
+`term_xref.parquet`:
+
+```text
+PfamId
+InterProId
+InterProName
+InterProType
+```
+
+Only IDs matching `PF[0-9]{5}` and present in the raw protein mapping are
+published. Positional repeats collapse to one `UniProtId + PfamId` row.
+Pfam names come from the XML member `db_xref name`; InterPro names are kept
+separately in the trace table. Missing names, conflicting names, incomplete
+xrefs, invalid IDs, and cross-version inputs fail before asset writing. Raw
+member relationships are validated against XML by the exact
+`InterProId + PfamId` pair, so a valid Pfam ID cannot hide a mismatched
+InterPro reference.
+
+The compact manifest schema is `interpro-pfam-v0.1`. Source and asset hashes
+are optional API costs and are enabled for formal resource publication.
+
+All three published frames remain lazy. XML parsing materializes one compact
+Pfam metadata index, and a streaming raw-file aggregation materializes one
+compact used-pair index for validation and term filtering. Derived term and
+xref outputs are not materialized before their Parquet sinks.
+
 ## Selection Contract
 
 Accepted `kind_input_id` values:
@@ -131,5 +208,6 @@ The validated local InterPro snapshot is:
 /cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/interpro/mapping/108.0/raw
 ```
 
-Published tidy output validation is recorded in
-`docs/testing/interpro-db.md`.
+Published tidy output validation is recorded in the
+[InterProDb test standard](../testing/interpro-db.md) and the
+[InterPro 108.0 benchmark](../benchmarks/20260714-v1.0-interpro-108-benchmark.md).

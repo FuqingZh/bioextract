@@ -11,6 +11,7 @@ MEDIA_TYPE_TSV_GZIP = "application/gzip+tab-separated-values"
 
 KIND_INPUT_ID_VALUES = ("uniprot",)
 InterProInputIdKind = Literal["uniprot"]
+InterProTidyConfig = Literal["mapping", "pfam"]
 
 COLS_MAPPING = [
     "UniProtId",

@@ -178,9 +178,45 @@ def test_build_tidy_writes_mapping_parquet_and_manifest(tmp_path: Path) -> None:
     report = db.write_tidy(tmp_path / "out", should_write_manifest=True)
 
     assert report.manifest is not None
+    assert set(report.manifest) == {
+        "assets",
+        "build_id",
+        "generated_at",
+        "schema_version",
+        "sources",
+    }
     assert report.manifest["schema_version"] == "interpro-mapping-v0.1"
+    assert report.manifest["build_id"].startswith("interpro-mapping-")
+    assert all(
+        set(source) == {"bytes", "media_type", "path"}
+        for source in report.manifest["sources"]
+    )
+    assert all(
+        set(asset) == {"is_optional", "kind", "path", "sha256"}
+        for asset in report.manifest["assets"]
+    )
     assert [asset.path for asset in report.assets] == ["mapping.parquet"]
     assert pl.read_parquet(tmp_path / "out" / "mapping.parquet").height == 3
+
+
+def test_write_tidy_can_hash_mapping_sources(tmp_path: Path) -> None:
+    files = write_interpro_fixture(tmp_path)
+    db = InterProDb.from_mapping_files(
+        file_protein2ipr=files["protein2ipr"],
+        file_interpro_xml=files["xml"],
+    )
+
+    report = db.write_tidy(
+        tmp_path / "out",
+        should_write_manifest=True,
+        should_hash_sources=True,
+    )
+
+    assert report.manifest is not None
+    assert all(
+        isinstance(sha256 := source.get("sha256"), str) and len(sha256) == 64
+        for source in report.manifest["sources"]
+    )
 
 
 def test_validates_kind_input_id(tmp_path: Path) -> None:

@@ -1,8 +1,12 @@
-# InterProDb Test Plan
+# InterProDb Test Standard
+
+Version: v1.0
+Date: 2026-07-14
+Status: current
 
 ## Scope
 
-The InterProDb test plan covers:
+The InterProDb test standard covers:
 
 - lightweight construction
 - `protein2ipr.dat.gz` parsing
@@ -11,6 +15,7 @@ The InterProDb test plan covers:
 - single and grouped UniProt selection
 - unmapped reporting
 - lazy tidy writing of one canonical parquet
+- raw-to-Pfam compact generation without a full mapping prerequisite
 
 It does not cover:
 
@@ -29,45 +34,35 @@ It does not cover:
 - unmapped IDs are reported correctly.
 - `write_tidy()` writes canonical `mapping.parquet`.
 - invalid `kind_input_id` raises targeted `ValueError`.
+- duplicate positional Pfam matches collapse to one protein-term row.
+- non-PFAM signatures are excluded.
+- Pfam names remain distinct from InterPro entry names.
+- missing or conflicting Pfam names, incomplete xrefs, malformed Pfam IDs, and
+  cross-version raw inputs raise targeted `ValueError`.
+- a raw Pfam ID paired with the wrong InterPro ID fails even when both IDs exist
+  independently in XML.
+- formal manifests contain hashes for both raw sources and all three assets.
+- `config="mapping"` remains the default and `config="pfam"` selects the
+  compact contract.
+- unknown configurations and Pfam requests without XML fail explicitly.
+- all three Pfam output frames are lazy and expose the exact public schemas.
 
 ## Real-Data Validation
 
-Validated inputs:
+Canonical and compact publication are validated against same-version
+`protein2ipr.dat.gz` and `interpro.xml.gz` files. Canonical acceptance checks
+include exact schema, readable row count, and a deterministic sample after
+write. Compact acceptance checks include:
 
-```text
-/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/interpro/mapping/108.0/raw/protein2ipr.dat.gz
-/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/interpro/mapping/108.0/raw/interpro.xml.gz
-```
+- exact schemas for `protein_term.parquet`, `term.parquet`, and
+  `term_xref.parquet`
+- global `UniProtId + PfamId` uniqueness
+- one non-empty name per published Pfam ID
+- complete Pfam-to-InterPro xrefs
+- equality with the PFAM projection of the full canonical mapping for a
+  deterministic UniProt sample
+- recorded output sizes, elapsed time, peak RSS, and selected-ID query time
 
-Validated output:
-
-```text
-/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/interpro/mapping/108.0/tidy/mapping.parquet
-```
-
-Observed publication result on 2026-06-08:
-
-- parquet size: about 13 GB
-- row count: 1,175,529,272
-- schema:
-  - `UniProtId`
-  - `InterProId`
-  - `InterProName`
-  - `InterProType`
-  - `MemberDb`
-  - `MemberDbId`
-  - `Start`
-  - `End`
-
-Observed runtime characteristics:
-
-- `POLARS_MAX_THREADS=8`
-- thread count stayed around 31
-- RSS was observed up to about 17 GB
-- the invalid earlier partial parquet was removed before rerun
-
-Smoke validation after write:
-
-- parquet schema could be scanned
-- row count could be read via `pl.scan_parquet(...).select(pl.len())`
-- `head()` sampling returned valid rows
+Keep full-snapshot runs outside the default pytest suite. The observed canonical
+and compact 108.0 baselines are recorded in the
+[InterPro 108.0 benchmark](../benchmarks/20260714-v1.0-interpro-108-benchmark.md).
