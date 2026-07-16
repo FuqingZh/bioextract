@@ -57,6 +57,20 @@ class _KeggSnapshotKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class KeggResourceLimits:
+    """Optional fail-fast limits for KEGG resources and selections.
+
+    File limits are measured in bytes and checked when a snapshot handle is
+    created. Count limits apply after input IDs and group names are normalized;
+    ``None`` disables the corresponding limit.
+
+    Examples:
+        Limit one normalized selection to 1,000 IDs:
+
+        >>> limits = KeggResourceLimits(num_input_ids_max=1_000)
+        >>> limits.num_input_ids_max
+        1000
+    """
+
     file_brite_json_bytes_max: int | None = None
     file_conv_uniprot_bytes_max: int | None = None
     file_gene_ko_bytes_max: int | None = None
@@ -84,7 +98,34 @@ KeggTidyDataset = TidyDataset
 
 @dataclass(slots=True)
 class KeggDb:
-    """Path-first access to local KEGG resource snapshots."""
+    """Path-first access to a local KEGG resource snapshot.
+
+    A handle represents either a BRITE JSON hierarchy or one organism's KEGG
+    mapping files. BRITE handles expose the pathway tidy dataset; mapping
+    handles expose the canonical gene mapping, ID selections, and mapping tidy
+    dataset. Operations from the other snapshot mode fail explicitly instead
+    of interpreting files heuristically.
+
+    Examples:
+        Build a BRITE pathway snapshot:
+
+        >>> brite = KeggDb.from_brite_json("data/kegg/tcar00001.json")
+        >>> sorted(brite.build_tidy().frames)
+        ['pathway']
+
+        Select UniProt IDs from an organism mapping snapshot:
+
+        >>> mapping = KeggDb.from_mapping_files(
+        ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
+        ...     file_gene_ko="data/kegg/gene_ko.tsv",
+        ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
+        ...     organism_code="hsa",
+        ... )
+        >>> mapping.select_ids(
+        ...     ["P12345"], kind_input_id="uniprot"
+        ... ).extract_mapping()["KeggGeneId"].to_list()
+        ['hsa:1', 'hsa:1']
+    """
 
     snapshot: _KeggSnapshot
     limits: KeggResourceLimits
@@ -99,7 +140,27 @@ class KeggDb:
         *,
         limits: KeggResourceLimits | None = None,
     ) -> KeggDb:
-        """Create a dataset handle from a local KEGG BRITE JSON file."""
+        """Create a dataset handle from a local KEGG BRITE JSON file.
+
+        Args:
+            file_brite_json: Path to a KEGG BRITE hierarchy in JSON form.
+            limits: Optional resource policy. When omitted, no finite size or
+                selection limits are imposed.
+
+        Returns:
+            A BRITE-mode handle that can build or write the pathway tidy asset.
+
+        Raises:
+            FileNotFoundError: If the JSON file does not exist.
+            ValueError: If the file exceeds the configured byte limit.
+
+        Examples:
+            Open a compact local BRITE hierarchy:
+
+            >>> db = KeggDb.from_brite_json("data/kegg/tcar00001.json")
+            >>> db.build_tidy().schema_version
+            'kegg-brite-tidy-v0.1'
+        """
         limits_resolved = KeggResourceLimits() if limits is None else limits
         file_brite_json = _validate_file(
             file_brite_json,
@@ -126,7 +187,42 @@ class KeggDb:
         file_conv_ncbi_geneid: os.PathLike[str] | str | None = None,
         limits: KeggResourceLimits | None = None,
     ) -> KeggDb:
-        """Create a dataset handle from explicit KEGG organism mapping files."""
+        """Create a dataset handle from one organism's KEGG mapping files.
+
+        The three required files are KEGG ``conv``/``link`` responses for
+        UniProt IDs, KO IDs, and pathways. The optional files add NCBI Gene IDs
+        and gene display metadata without changing the output schema.
+
+        Args:
+            file_conv_uniprot: KEGG UniProt-to-gene conversion table.
+            file_gene_ko: KEGG gene-to-KO link table.
+            file_gene_pathway: KEGG gene-to-pathway link table.
+            organism_code: KEGG organism code expected as the gene-ID prefix.
+            file_gene_list: Optional KEGG gene list with symbol and description.
+            file_conv_ncbi_geneid: Optional NCBI-Gene-to-KEGG conversion table.
+            limits: Optional resource policy. When omitted, no finite size or
+                selection limits are imposed.
+
+        Returns:
+            A mapping-mode handle for extraction, selection, and tidy output.
+
+        Raises:
+            FileNotFoundError: If any provided file does not exist.
+            ValueError: If ``organism_code`` is empty or a file exceeds its
+                configured byte limit.
+
+        Examples:
+            Open one organism's compact mapping fixture:
+
+            >>> db = KeggDb.from_mapping_files(
+            ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
+            ...     file_gene_ko="data/kegg/gene_ko.tsv",
+            ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
+            ...     organism_code="hsa",
+            ... )
+            >>> db.extract_mapping().columns[:3]
+            ['OrganismCode', 'KeggGeneId', 'UniProtId']
+        """
         organism_code = str(organism_code).strip()
         if not organism_code:
             raise ValueError("KEGG organism_code must be non-empty after normalization")
@@ -174,7 +270,29 @@ class KeggDb:
         )
 
     def extract_mapping(self) -> pl.DataFrame:
-        """Extract the full KEGG organism mapping table."""
+        """Extract the normalized many-to-many organism mapping.
+
+        Returns:
+            One row per distinct joined mapping combination across KEGG gene,
+            UniProt, NCBI Gene, KO, and pathway IDs. Columns backed by omitted
+            optional files remain nullable.
+
+        Raises:
+            ValueError: If called for a BRITE snapshot or if input KEGG gene IDs
+                do not match the configured organism code.
+
+        Examples:
+            Inspect the compact organism mapping schema:
+
+            >>> db = KeggDb.from_mapping_files(
+            ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
+            ...     file_gene_ko="data/kegg/gene_ko.tsv",
+            ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
+            ...     organism_code="hsa",
+            ... )
+            >>> db.extract_mapping().columns[:3]
+            ['OrganismCode', 'KeggGeneId', 'UniProtId']
+        """
         self._require_mapping_snapshot("extract KEGG mapping")
         if self._df_mapping is None:
             self._df_mapping = build_mapping_frame(
@@ -201,7 +319,34 @@ class KeggDb:
         *,
         kind_input_id: KeggInputIdKind,
     ) -> KeggSelection:
-        """Create a single-query KEGG mapping selection."""
+        """Create a KEGG mapping selection for one set of input IDs.
+
+        Args:
+            ids: UniProt, NCBI Gene, or KEGG gene IDs. Empty values are removed,
+                duplicates are folded, and pipe-style UniProt IDs are reduced
+                to their accession.
+            kind_input_id: Namespace used to join the normalized IDs. Supported
+                values are ``uniprot``, ``ncbi_geneid``, and ``kegg_gene``.
+
+        Returns:
+            A selection that can materialize matched rows and unmapped IDs.
+
+        Raises:
+            ValueError: If this is a BRITE snapshot, the namespace is invalid,
+                or the normalized input count exceeds its configured limit.
+
+        Examples:
+            Create an ungrouped UniProt selection:
+
+            >>> db = KeggDb.from_mapping_files(
+            ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
+            ...     file_gene_ko="data/kegg/gene_ko.tsv",
+            ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
+            ...     organism_code="hsa",
+            ... )
+            >>> db.select_ids(["P12345"], kind_input_id="uniprot").is_grouped
+            False
+        """
         self._require_mapping_snapshot("select KEGG IDs")
         validate_kind_input_id(kind_input_id)
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
@@ -223,7 +368,35 @@ class KeggDb:
         *,
         kind_input_id: KeggInputIdKind,
     ) -> KeggSelection:
-        """Create a grouped KEGG mapping selection."""
+        """Create a KEGG mapping selection for named input-ID groups.
+
+        Args:
+            group_to_ids: Mapping from group name to IDs in one shared namespace.
+                Group names and IDs are normalized before limits are checked.
+            kind_input_id: Namespace used to join the normalized IDs. Supported
+                values are ``uniprot``, ``ncbi_geneid``, and ``kegg_gene``.
+
+        Returns:
+            A selection whose matched and unmapped outputs retain ``GroupId``.
+
+        Raises:
+            ValueError: If this is a BRITE snapshot, the namespace or a group
+                name is invalid, or a configured group/input limit is exceeded.
+
+        Examples:
+            Create a grouped UniProt selection:
+
+            >>> db = KeggDb.from_mapping_files(
+            ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
+            ...     file_gene_ko="data/kegg/gene_ko.tsv",
+            ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
+            ...     organism_code="hsa",
+            ... )
+            >>> db.select_groups(
+            ...     {"up": ["P12345"]}, kind_input_id="uniprot"
+            ... ).is_grouped
+            True
+        """
         self._require_mapping_snapshot("select grouped KEGG IDs")
         validate_kind_input_id(kind_input_id)
         grp_in_frames = create_group_input_frames(
@@ -249,7 +422,31 @@ class KeggDb:
         )
 
     def build_tidy(self) -> KeggTidyDataset:
-        """Build the lazy KEGG tidy dataset for this snapshot kind."""
+        """Build the lazy tidy dataset defined by the snapshot mode.
+
+        Returns:
+            A BRITE dataset containing ``pathway`` or a mapping dataset
+            containing ``mapping``. Source paths and the mode-specific schema
+            version are retained for optional manifest generation.
+
+        Examples:
+            Build a BRITE dataset:
+
+            >>> brite = KeggDb.from_brite_json("data/kegg/tcar00001.json")
+            >>> sorted(brite.build_tidy().frames)
+            ['pathway']
+
+            Build an organism mapping dataset:
+
+            >>> mapping = KeggDb.from_mapping_files(
+            ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
+            ...     file_gene_ko="data/kegg/gene_ko.tsv",
+            ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
+            ...     organism_code="hsa",
+            ... )
+            >>> sorted(mapping.build_tidy().frames)
+            ['mapping']
+        """
         if self.snapshot.kind == _KeggSnapshotKind.BRITE_JSON:
             file_brite_json = self._required_path(self.snapshot.file_brite_json)
             frames = {
@@ -288,7 +485,25 @@ class KeggDb:
         should_write_manifest: bool = False,
         should_hash_assets: bool = False,
     ) -> TidyWriteReport:
-        """Write the KEGG tidy dataset as flat parquet files."""
+        """Write the mode-specific KEGG tidy assets as flat parquet files.
+
+        Args:
+            dir_out: Output directory for the declared tidy assets.
+            should_write_manifest: Whether to also write ``manifest.json``.
+            should_hash_assets: Whether manifest asset records include SHA-256
+                checksums. This has no effect unless a manifest is requested.
+
+        Returns:
+            A report containing written asset paths and optional manifest data.
+
+        Examples:
+            Write the declared BRITE asset:
+
+            >>> db = KeggDb.from_brite_json("data/kegg/tcar00001.json")
+            >>> report = db.write_tidy("build/kegg-brite")
+            >>> [asset.path for asset in report.assets]
+            ['pathway.parquet']
+        """
         return self.build_tidy().write(
             Path(dir_out),
             should_write_manifest=should_write_manifest,
@@ -336,7 +551,26 @@ class KeggDb:
 
 @dataclass(slots=True)
 class KeggSelection:
-    """Selection handle for single and grouped KEGG mapping queries."""
+    """Deferred single or grouped query against a KEGG mapping snapshot.
+
+    Selections are created by :meth:`KeggDb.select_ids` or
+    :meth:`KeggDb.select_groups`. Matched output retains the normalized
+    ``InputId`` and its ``KindInputId``; grouped selections additionally prepend
+    ``GroupId``.
+
+    Examples:
+        Create a selection through its dataset handle:
+
+        >>> db = KeggDb.from_mapping_files(
+        ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
+        ...     file_gene_ko="data/kegg/gene_ko.tsv",
+        ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
+        ...     organism_code="hsa",
+        ... )
+        >>> selection = db.select_ids(["P12345"], kind_input_id="uniprot")
+        >>> isinstance(selection, KeggSelection)
+        True
+    """
 
     dataset: KeggDb
     _df_input_ids: pl.DataFrame = field(repr=False)
@@ -347,7 +581,23 @@ class KeggSelection:
 
     @property
     def is_grouped(self) -> bool:
-        """Report whether this selection carries `GroupId` through outputs."""
+        """Report whether this selection carries `GroupId` through outputs.
+
+        Examples:
+            Inspect a grouped selection:
+
+            >>> db = KeggDb.from_mapping_files(
+            ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
+            ...     file_gene_ko="data/kegg/gene_ko.tsv",
+            ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
+            ...     organism_code="hsa",
+            ... )
+            >>> selection = db.select_groups(
+            ...     {"up": ["P12345"]}, kind_input_id="uniprot"
+            ... )
+            >>> selection.is_grouped
+            True
+        """
         return self._df_groups is not None
 
     @property
@@ -355,7 +605,21 @@ class KeggSelection:
         return ("GroupId",) if self.is_grouped else ()
 
     def extract_mapping(self) -> pl.DataFrame:
-        """Extract selected KEGG mapping rows."""
+        """Extract every KEGG mapping row matched by the selected input IDs.
+
+        Examples:
+            Materialize KEGG genes matched by one UniProt accession:
+
+            >>> db = KeggDb.from_mapping_files(
+            ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
+            ...     file_gene_ko="data/kegg/gene_ko.tsv",
+            ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
+            ...     organism_code="hsa",
+            ... )
+            >>> selection = db.select_ids(["P12345"], kind_input_id="uniprot")
+            >>> selection.extract_mapping()["KeggGeneId"].to_list()
+            ['hsa:1', 'hsa:1']
+        """
         if self._df_mapping is None:
             self._df_mapping = extract_mapping_frame(
                 self.dataset.extract_mapping(),
@@ -366,7 +630,26 @@ class KeggSelection:
         return self._df_mapping
 
     def extract_unmapped_input_ids(self) -> pl.DataFrame:
-        """Extract normalized input IDs that did not map to KEGG rows."""
+        """Extract normalized input IDs with no KEGG mapping row.
+
+        Grouped selections report an ID as unmapped independently within each
+        group and include ``GroupId`` in the result.
+
+        Examples:
+            Retain a normalized input accession that did not map:
+
+            >>> db = KeggDb.from_mapping_files(
+            ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
+            ...     file_gene_ko="data/kegg/gene_ko.tsv",
+            ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
+            ...     organism_code="hsa",
+            ... )
+            >>> selection = db.select_ids(
+            ...     ["P12345", "MISSING"], kind_input_id="uniprot"
+            ... )
+            >>> selection.extract_unmapped_input_ids().to_dicts()
+            [{'InputId': 'MISSING'}]
+        """
         if self._df_unmapped is None:
             self._df_unmapped = extract_unmapped_input_ids_frame(
                 self._df_input_ids,

@@ -48,11 +48,37 @@ class _GoNamespace(StrEnum):
 
 
 class GoSubsetId(StrEnum):
+    """Provide named GO subset IDs without restricting arbitrary subset text.
+
+    `GoDb.select_terms()` also accepts ordinary strings so snapshots can expose
+    subsets added outside this convenience enum.
+
+    Examples:
+        Use the built-in generic GO slim identifier:
+
+        >>> GoSubsetId.GOSLIM_GENERIC.value
+        'goslim_generic'
+    """
+
     GOSLIM_GENERIC = GO_SUBSET_GOSLIM_GENERIC
 
 
 @dataclass(frozen=True, slots=True)
 class GoResourceLimits:
+    """Configure fail-fast limits for a GO OBO snapshot.
+
+    Attributes:
+        file_obo_bytes_max: Maximum on-disk OBO file size in bytes, or `None`
+            to disable the size check.
+
+    Examples:
+        Limit the accepted OBO snapshot to one mebibyte:
+
+        >>> limits = GoResourceLimits(file_obo_bytes_max=1_048_576)
+        >>> limits.file_obo_bytes_max
+        1048576
+    """
+
     file_obo_bytes_max: int | None = None
 
 
@@ -76,6 +102,13 @@ class GoDb:
     The default tidy output is a flat ontology snapshot with canonical term and
     edge tables plus derived graph tables. `extract_subcell()` is a convenience
     view over cellular component terms for subcellular-location workflows.
+
+    Examples:
+        Open a compact local snapshot:
+
+        >>> db = GoDb.from_obo("data/go-basic.obo")
+        >>> len(db.build_tidy().frames)
+        9
     """
 
     snapshot: _GoSnapshot
@@ -95,8 +128,8 @@ class GoDb:
 
         Args:
             file_obo: Path to a local Gene Ontology OBO file.
-            limits: Dataset-level resource limits. When omitted, default
-                fail-fast limits are used.
+            limits: Optional resource policy. When omitted, the file-size
+                check is disabled.
 
         Returns:
             A dataset handle that can build tidy ontology frames and subcellular
@@ -105,6 +138,13 @@ class GoDb:
         Raises:
             FileNotFoundError: If the OBO file does not exist.
             ValueError: If the configured file-size limit is exceeded.
+
+        Examples:
+            Open a local GO fixture without imposing a size limit:
+
+            >>> db = GoDb.from_obo("data/go-basic.obo")
+            >>> db.limits.file_obo_bytes_max is None
+            True
         """
         file_obo = Path(file_obo)
         if not file_obo.exists():
@@ -119,12 +159,19 @@ class GoDb:
         return cls(snapshot=_GoSnapshot(file_obo=file_obo), limits=limits_resolved)
 
     def build_tidy(self) -> GoTidyDataset:
-        """Build the lazy GO tidy dataset.
+        """Build the GO tidy dataset.
 
         Returns:
             A `TidyDataset` with `term`, `edge`, `synonym`, `xref`, `alt_id`,
             `subset_membership`, `subset_definition`, `ancestor_all`, and
             `depth` frames.
+
+        Examples:
+            Inspect the frame names built from a local OBO snapshot:
+
+            >>> db = GoDb.from_obo("data/go-basic.obo")
+            >>> sorted(db.build_tidy().frames)
+            ['alt_id', 'ancestor_all', 'depth', 'edge', 'subset_definition', 'subset_membership', 'synonym', 'term', 'xref']
         """
         if self._tidy is not None:
             return self._tidy
@@ -173,6 +220,15 @@ class GoDb:
         Returns:
             A stable term view. When `term_ids` is provided, `input_go_id` is
             included to show canonicalization.
+
+        Examples:
+            Resolve an alternate ID from the compact GO fixture:
+
+            >>> db = GoDb.from_obo("data/go-basic.obo")
+            >>> db.select_terms(term_ids=["GO:1234567"]).select(
+            ...     "input_go_id", "go_id"
+            ... ).to_dicts()
+            [{'input_go_id': 'GO:1234567', 'go_id': 'GO:0000002'}]
         """
         frames = {
             frame_name: frame.collect()
@@ -226,7 +282,20 @@ class GoDb:
         return df_selected.sort("go_id")
 
     def list_subsets(self) -> pl.DataFrame:
-        """List OBO subset definitions and term counts in this snapshot."""
+        """List OBO subset definitions and term counts in this snapshot.
+
+        Returns:
+            A table sorted by `subset_id` with `subset_id`, `subset_name`, and
+            `num_terms`. Declared subsets with no members are retained with a
+            zero count.
+
+        Examples:
+            Inspect the subset table shape from a compact fixture:
+
+            >>> db = GoDb.from_obo("data/go-basic.obo")
+            >>> db.list_subsets().columns
+            ['subset_id', 'subset_name', 'num_terms']
+        """
         frames = {
             frame_name: frame.collect()
             for frame_name, frame in self.build_tidy().frames.items()
@@ -269,6 +338,14 @@ class GoDb:
 
         Returns:
             A write report with asset paths and optional manifest content.
+
+        Examples:
+            Write the nine declared GO assets:
+
+            >>> db = GoDb.from_obo("data/go-basic.obo")
+            >>> report = db.write_tidy("build/go-basic")
+            >>> (report.assets[0].path, report.assets[-1].path)
+            ('term.parquet', 'depth.parquet')
         """
         return self.build_tidy().write(
             Path(dir_out),
@@ -284,6 +361,13 @@ class GoDb:
 
         Returns:
             A DataFrame with GO ID, subcell name, definition, and depth columns.
+
+        Examples:
+            Extract cellular-component IDs from the compact fixture:
+
+            >>> db = GoDb.from_obo("data/go-basic.obo")
+            >>> db.extract_subcell()["go_id"].to_list()
+            ['GO:0005575', 'GO:0005737']
         """
         return extract_subcell_frame(
             {
@@ -307,6 +391,13 @@ class GoDb:
 
         Returns:
             The output path that was written.
+
+        Examples:
+            Write the subcell projection to a relative output path:
+
+            >>> db = GoDb.from_obo("data/go-basic.obo")
+            >>> db.write_subcell("build/subcell.parquet").as_posix()
+            'build/subcell.parquet'
         """
         file_out = Path(file_out)
         file_out.parent.mkdir(parents=True, exist_ok=True)

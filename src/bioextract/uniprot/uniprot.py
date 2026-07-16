@@ -60,6 +60,8 @@ __all__ = [
 
 
 class UniprotTidyManifest(TidyManifest):
+    """Manifest schema for a taxid-scoped UniProt mapping publication."""
+
     taxids: list[str]
 
 
@@ -74,6 +76,23 @@ class _UniprotMappingKind(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class UniprotResourceLimits:
+    """Optional guards for UniProt source-file sizes.
+
+    Attributes:
+        file_idmapping_selected_bytes_max: Maximum size of a raw TSV or single
+            parquet mapping file, in bytes. `None` disables the limit. Dataset
+            directories are checked structurally instead.
+        file_dat_bytes_max: Maximum size of a UniProtKB `.dat` or `.dat.gz`
+            source, in bytes. `None` disables the limit.
+
+    Examples:
+        Cap a local flat-file snapshot at two gigabytes:
+
+        >>> limits = UniprotResourceLimits(file_dat_bytes_max=2 * 1024**3)
+        >>> limits.file_dat_bytes_max
+        2147483648
+    """
+
     file_idmapping_selected_bytes_max: int | None = None
     file_dat_bytes_max: int | None = None
 
@@ -89,13 +108,34 @@ class _UniprotSnapshot:
 
 @dataclass(slots=True)
 class UniprotDb:
-    """Path-first access to UniProt idmapping selected resources.
+    """Access one UniProt mapping or knowledge-base flat-file snapshot.
 
-    `UniprotDb` reads either the raw UniProt `idmapping_selected.tab(.gz)` file,
-    a single normalized parquet file, or a hive-partitioned parquet dataset.
-    Construction is deliberately lightweight:
-    paths are validated, but data and schemas are not scanned until extraction,
-    validation, or writing is requested.
+    `from_files()` creates an idmapping handle over raw TSV, one normalized
+    parquet, or a hive-partitioned parquet dataset. `from_dat()` creates a
+    mutually exclusive flat-file handle for curated eggNOG cross-references and
+    subcellular-location comments. Calling a method from the other mode raises
+    `ValueError` instead of silently interpreting the wrong resource.
+
+    Construction is deliberately lightweight: paths and configured file sizes
+    are validated, but mapping data and schemas are not scanned until requested.
+
+    Examples:
+        Scope an idmapping resource before extraction:
+
+        >>> db = UniprotDb.from_files(
+        ...     file_idmapping_selected="fixtures/uniprot/idmapping_selected.tab.gz"
+        ... )
+        >>> db.snapshot.file_idmapping_selected.name
+        'idmapping_selected.tab.gz'
+
+        Read curated annotations from a UniProtKB flat file:
+
+        >>> kb = UniprotDb.from_dat(
+        ...     file_dat="fixtures/uniprot/uniprot_sprot.dat.gz",
+        ...     source_db="Swiss-Prot",
+        ... )
+        >>> kb.snapshot.source_db
+        'Swiss-Prot'
     """
 
     snapshot: _UniprotSnapshot
@@ -113,7 +153,7 @@ class UniprotDb:
         """Create a dataset handle from raw or tidy UniProt mapping data.
 
         Args:
-            file_idmapping_selected: Path to `idmapping_selected.tab.gz`, a
+            file_idmapping_selected: Path to `idmapping_selected.tab(.gz)`, a
                 normalized parquet file, or a hive parquet dataset directory.
             limits: Dataset-level resource limits. Size limits apply to file
                 inputs; hive dataset directories are checked structurally only.
@@ -125,6 +165,15 @@ class UniprotDb:
             FileNotFoundError: If the path does not exist.
             ValueError: If the path type is unsupported, a directory contains
                 no parquet files, or a configured file-size limit is exceeded.
+
+        Examples:
+            Open a compressed idmapping fixture:
+
+            >>> db = UniprotDb.from_files(
+            ...     file_idmapping_selected="fixtures/uniprot/idmapping_selected.tab.gz"
+            ... )
+            >>> db.snapshot.file_idmapping_selected.name
+            'idmapping_selected.tab.gz'
         """
         path = Path(file_idmapping_selected)
         if not path.exists():
@@ -156,8 +205,33 @@ class UniprotDb:
     ) -> UniprotDb:
         """Create a dataset handle from a UniProtKB flat file.
 
-        The flat-file handle is currently used for cross-reference extraction,
-        not for the normalized idmapping-selected table.
+        Args:
+            file_dat: Path to a UniProtKB `.dat` or `.dat.gz` flat file.
+            source_db: Non-empty provenance label copied to extracted rows and
+                tidy build IDs.
+            limits: Optional flat-file size guard.
+
+        Returns:
+            A flat-file handle for eggNOG xref and subcellular-location APIs.
+
+        Raises:
+            FileNotFoundError: If `file_dat` does not exist.
+            ValueError: If `source_db` is empty, the suffix is unsupported, or
+                the file exceeds its configured size limit.
+
+        Notes:
+            This handle cannot serve normalized idmapping extraction or
+            `write_tidy()`; use `from_files()` for those operations.
+
+        Examples:
+            Open a curated UniProtKB fixture with an explicit provenance label:
+
+            >>> db = UniprotDb.from_dat(
+            ...     file_dat="fixtures/uniprot/uniprot_sprot.dat.gz",
+            ...     source_db="Swiss-Prot",
+            ... )
+            >>> db.snapshot.source_db
+            'Swiss-Prot'
         """
         source_db = str(source_db).strip()
         if not source_db:
@@ -179,7 +253,29 @@ class UniprotDb:
         )
 
     def with_taxids(self, *taxids: str | int) -> UniprotDb:
-        """Create a taxid-scoped view of this UniProt mapping resource."""
+        """Create a taxid-scoped view of an idmapping resource.
+
+        Args:
+            *taxids: NCBI taxonomy IDs. Values are normalized to non-empty
+                strings and must remain distinct after normalization.
+
+        Returns:
+            A new handle sharing the same source and limits with the requested
+            taxid scope.
+
+        Raises:
+            ValueError: If this is a flat-file handle, a taxid normalizes to an
+                empty value, or normalized taxids are duplicated.
+
+        Examples:
+            Scope a mapping snapshot to human and mouse records:
+
+            >>> db = UniprotDb.from_files(
+            ...     file_idmapping_selected="fixtures/uniprot/idmapping_selected.tab.gz"
+            ... )
+            >>> db.with_taxids("9606", 10090).snapshot.taxids
+            ('9606', '10090')
+        """
         self._require_idmapping_snapshot("scope UniProt idmapping by taxid")
         return UniprotDb(
             snapshot=_UniprotSnapshot(
@@ -191,12 +287,51 @@ class UniprotDb:
         )
 
     def validate_schema(self) -> None:
-        """Validate that the backing data exposes the normalized mapping schema."""
+        """Validate the normalized idmapping schema without collecting rows.
+
+        Raises:
+            ValueError: If this is a flat-file handle or required mapping
+                columns are missing.
+
+        Examples:
+            Normalize a compact raw fixture, then validate the resulting
+            parquet without collecting it:
+
+            >>> from tempfile import TemporaryDirectory
+            >>> raw_db = UniprotDb.from_files(
+            ...     file_idmapping_selected="fixtures/uniprot/idmapping_selected.tab.gz"
+            ... ).with_taxids("9606")
+            >>> with TemporaryDirectory() as dir_out:
+            ...     dir_normalized = Path(dir_out) / "normalized"
+            ...     report = raw_db.write_tidy(dir_normalized)
+            ...     file_mapping = dir_normalized / report.assets[0].path
+            ...     db = UniprotDb.from_files(file_idmapping_selected=file_mapping)
+            ...     db.validate_schema() is None
+            True
+        """
         self._require_idmapping_snapshot("validate UniProt idmapping schema")
         validate_mapping_schema(self._scan_mapping())
 
     def extract_mapping(self) -> pl.DataFrame:
-        """Extract normalized UniProt idmapping rows for the current taxid scope."""
+        """Extract normalized idmapping rows for the current taxid scope.
+
+        Returns:
+            All canonical mapping columns in contract order. An unscoped handle
+            returns all taxids.
+
+        Raises:
+            ValueError: If this is a flat-file handle or the mapping schema is
+                incomplete.
+
+        Examples:
+            Extract human rows and inspect the canonical column prefix:
+
+            >>> db = UniprotDb.from_files(
+            ...     file_idmapping_selected="fixtures/uniprot/idmapping_selected.tab.gz"
+            ... )
+            >>> db.with_taxids("9606").extract_mapping().columns[:3]
+            ['UniProtId', 'UniProtEntryName', 'GeneId']
+        """
         self._require_idmapping_snapshot("extract UniProt idmapping")
         lf_mapping = self._scan_mapping()
         validate_mapping_schema(lf_mapping)
@@ -207,7 +342,25 @@ class UniprotDb:
         )
 
     def extract_eggnog_xref(self) -> pl.DataFrame:
-        """Extract UniProt flat-file eggNOG cross-reference rows."""
+        """Extract all eggNOG cross-reference rows from a flat-file handle.
+
+        Returns:
+            A canonical frame that retains primary and secondary UniProt
+            accessions, eggNOG identifiers, and source provenance.
+
+        Raises:
+            ValueError: If this is an idmapping handle.
+
+        Examples:
+            Extract the canonical eggNOG cross-reference columns:
+
+            >>> db = UniprotDb.from_dat(
+            ...     file_dat="fixtures/uniprot/uniprot_sprot.dat.gz",
+            ...     source_db="Swiss-Prot",
+            ... )
+            >>> db.extract_eggnog_xref().columns
+            ['UniProtId', 'PrimaryUniProtId', 'IsPrimaryAccession', 'EggnogOgId', 'EggnogLevel', 'SourceDb']
+        """
         self._require_dat_snapshot("extract UniProt eggNOG xrefs")
         return read_eggnog_xref_frame(
             self._required_path(self.snapshot.file_dat),
@@ -215,7 +368,28 @@ class UniprotDb:
         )
 
     def select_eggnog_xref_ids(self, ids: Iterable[str]) -> pl.DataFrame:
-        """Extract eggNOG xref rows for selected UniProt accessions."""
+        """Extract eggNOG xrefs for selected UniProt accessions.
+
+        Args:
+            ids: UniProt accessions. Empty values are discarded and duplicates
+                collapse before the flat file is scanned.
+
+        Returns:
+            The canonical eggNOG xref frame restricted to matching accessions.
+
+        Raises:
+            ValueError: If this is an idmapping handle.
+
+        Examples:
+            Restrict the flat-file scan to one secondary accession:
+
+            >>> db = UniprotDb.from_dat(
+            ...     file_dat="fixtures/uniprot/uniprot_sprot.dat.gz",
+            ...     source_db="Swiss-Prot",
+            ... )
+            >>> db.select_eggnog_xref_ids(["Q11111"]).get_column("UniProtId").unique().to_list()
+            ['Q11111']
+        """
         self._require_dat_snapshot("select UniProt eggNOG xrefs")
         input_ids = {str(input_id).strip() for input_id in ids if str(input_id).strip()}
         return read_eggnog_xref_frame(
@@ -225,7 +399,26 @@ class UniprotDb:
         )
 
     def extract_subcellular_location(self) -> pl.DataFrame:
-        """Extract curated UniProtKB subcellular location comments."""
+        """Extract curated UniProtKB subcellular-location comments.
+
+        Returns:
+            One row per accession, location text, and evidence reference,
+            preserving comment notes and source provenance. Missing comments
+            do not produce negative-location rows.
+
+        Raises:
+            ValueError: If this is an idmapping handle.
+
+        Examples:
+            Inspect the stable identity prefix of curated location rows:
+
+            >>> db = UniprotDb.from_dat(
+            ...     file_dat="fixtures/uniprot/uniprot_sprot.dat.gz",
+            ...     source_db="Swiss-Prot",
+            ... )
+            >>> db.extract_subcellular_location().columns[:3]
+            ['UniProtId', 'PrimaryUniProtId', 'UniProtEntryName']
+        """
         self._require_dat_snapshot("extract UniProt subcellular locations")
         return read_subcellular_location_frame(
             self._required_path(self.snapshot.file_dat),
@@ -239,7 +432,33 @@ class UniprotDb:
         should_write_manifest: bool = False,
         should_hash_assets: bool = False,
     ) -> TidyWriteReport:
-        """Write UniProt eggNOG xrefs as a canonical parquet mapping."""
+        """Write flat-file eggNOG xrefs as a canonical parquet mapping.
+
+        Args:
+            dir_out: Destination directory for `mapping.parquet` and the
+                optional manifest.
+            should_write_manifest: Whether to write `manifest.json` and return
+                its content in the report.
+            should_hash_assets: Whether a requested manifest should contain the
+                mapping SHA-256 value.
+
+        Returns:
+            A report describing the mapping asset and optional manifest.
+
+        Raises:
+            ValueError: If this is an idmapping handle.
+
+        Examples:
+            Write the xref mapping and inspect the published asset name:
+
+            >>> db = UniprotDb.from_dat(
+            ...     file_dat="fixtures/uniprot/uniprot_sprot.dat.gz",
+            ...     source_db="Swiss-Prot",
+            ... )
+            >>> report = db.write_eggnog_xref_tidy("out/uniprot-eggnog")
+            >>> [asset.path for asset in report.assets]
+            ['mapping.parquet']
+        """
         self._require_dat_snapshot("write UniProt eggNOG xref tidy")
         file_dat = self._required_path(self.snapshot.file_dat)
         media_type = (
@@ -278,7 +497,33 @@ class UniprotDb:
         should_write_manifest: bool = False,
         should_hash_assets: bool = False,
     ) -> TidyWriteReport:
-        """Write curated UniProtKB subcellular locations as canonical parquet."""
+        """Write curated subcellular locations as canonical parquet.
+
+        Args:
+            dir_out: Destination directory for `data.parquet` and the optional
+                manifest.
+            should_write_manifest: Whether to write `manifest.json` and return
+                its content in the report.
+            should_hash_assets: Whether a requested manifest should contain the
+                data-asset SHA-256 value.
+
+        Returns:
+            A report describing the data asset and optional manifest.
+
+        Raises:
+            ValueError: If this is an idmapping handle.
+
+        Examples:
+            Write curated locations and inspect the published asset name:
+
+            >>> db = UniprotDb.from_dat(
+            ...     file_dat="fixtures/uniprot/uniprot_sprot.dat.gz",
+            ...     source_db="Swiss-Prot",
+            ... )
+            >>> report = db.write_subcellular_location_tidy("out/uniprot-subcell")
+            >>> [asset.path for asset in report.assets]
+            ['data.parquet']
+        """
         self._require_dat_snapshot("write UniProt subcellular location tidy")
         file_dat = self._required_path(self.snapshot.file_dat)
         media_type = (
@@ -286,7 +531,9 @@ class UniprotDb:
             if self.snapshot.kind == _UniprotMappingKind.DAT_GZIP
             else MEDIA_TYPE_FLAT_FILE
         )
-        with tempfile.TemporaryDirectory(prefix="bioextract-uniprot-subcell-") as dir_tmp:
+        with tempfile.TemporaryDirectory(
+            prefix="bioextract-uniprot-subcell-"
+        ) as dir_tmp:
             file_subcell_tsv = Path(dir_tmp) / "data.tsv"
             write_subcellular_location_tsv(
                 file_dat,
@@ -347,6 +594,30 @@ class UniprotDb:
 
         Returns:
             A write report with asset paths and optional manifest content.
+
+        Raises:
+            FileExistsError: If `dir_out` is non-empty and
+                `policy_existing="error"`.
+            ValueError: If this is a flat-file handle, the policy is invalid,
+                an all-taxid write was not acknowledged, the schema is invalid,
+                or CephFS staging requirements are not met.
+            RuntimeError: If enabled RSS, thread, or D-state safety thresholds
+                are exceeded.
+
+        Notes:
+            The mapping is written to a staging directory and published only
+            after the parquet and optional manifest are complete. Set a stop
+            threshold to `None` to disable that individual resource check.
+
+        Examples:
+            Write a taxid-scoped mapping and inspect the published asset:
+
+            >>> db = UniprotDb.from_files(
+            ...     file_idmapping_selected="fixtures/uniprot/idmapping_selected.tab.gz"
+            ... ).with_taxids("9606")
+            >>> report = db.write_tidy("out/uniprot-human")
+            >>> [asset.path for asset in report.assets]
+            ['mapping.parquet']
         """
         self._require_idmapping_snapshot("write UniProt idmapping tidy")
         if policy_existing not in {"error", "overwrite", "skip"}:

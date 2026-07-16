@@ -65,6 +65,12 @@ def parse_synonym(synonym: str) -> SynonymRecord | None:
 
 
 def parse_xref_lossless(xref: str) -> XrefParts:
+    """Split only unambiguous ``DB:ID`` xrefs into structured fields.
+
+    Whitespace, quotes, missing components, or a missing colon make the xref
+    unsafe to normalize. Those values return two ``None`` fields so the tidy
+    layer can keep the original xref text without inventing structure.
+    """
     is_empty = not xref
     is_whitespace_present = any(char.isspace() for char in xref)
     is_quote_present = '"' in xref
@@ -94,6 +100,13 @@ def parse_parent_edges(
     block: dict[str, list[str]],
     child_go_id: str,
 ) -> list[ParentEdge]:
+    """Parse ``is_a`` and generic OBO relationship clauses as parent edges.
+
+    Malformed generic relationship payloads are skipped, while syntactically
+    present parent IDs are validated as GO identifiers. ``source_clause``
+    remains distinct from ``relation_type`` so downstream graph policy can
+    distinguish OBO syntax from biological relation semantics.
+    """
     parents: list[ParentEdge] = []
     for raw_parent in block.get("is_a", []):
         parent_go_id = extract_inline_value(raw_parent)
@@ -168,6 +181,12 @@ def parse_term_record(block: dict[str, list[str]]) -> TermRecord | None:
 
 
 def scan_obo_term_records(file_in: Path) -> Iterator[TermRecord]:
+    """Stream complete ``[Term]`` records from a GO OBO snapshot.
+
+    Non-term stanzas and term blocks missing ID, name, or namespace are
+    ignored. EOF is treated as a stanza boundary, so a final term does not
+    require a trailing blank line.
+    """
     current_stanza_kind: str | None = None
     block: dict[str, list[str]] = defaultdict(list)
 

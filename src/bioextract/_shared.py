@@ -14,19 +14,36 @@ RE_UNIPROT_PIPE = re.compile(r"^[^|]+\|([^|]+)\|")
 
 @dataclass(frozen=True, slots=True)
 class GroupInputFrames:
+    """Carry a normalized group registry and its deduplicated input-ID rows."""
+
     df_groups: pl.DataFrame
     df_input_ids: pl.DataFrame
 
 
 class RowWriter(Protocol):
+    """Minimal row-writer contract shared by streaming TSV producers."""
+
     def writerow(self, row: Iterable[object], /) -> object: ...
 
 
 def create_tsv_writer(handle: TextIO) -> RowWriter:
+    """Create a tab-delimited writer with deterministic LF row endings."""
     return csv.writer(handle, delimiter="\t", lineterminator="\n")
 
 
 def normalize_input_id(value: str) -> str:
+    """Normalize an identifier shared by all selection APIs.
+
+    Surrounding whitespace is removed. UniProt pipe-style identifiers are
+    reduced to the accession between the first two pipes; other identifiers
+    are returned unchanged after trimming.
+
+    Examples:
+        >>> normalize_input_id(" sp|P04637|P53_HUMAN ")
+        'P04637'
+        >>> normalize_input_id(" TP53 ")
+        'TP53'
+    """
     value = value.strip()
     if (match_pipe := RE_UNIPROT_PIPE.match(value)) is not None:
         return match_pipe.group(1).strip()
@@ -39,6 +56,16 @@ def validate_file_size(
     size_max: int | None,
     label: str,
 ) -> None:
+    """Enforce an inclusive upper bound on a file's on-disk byte size.
+
+    Args:
+        file_path: Existing file to inspect.
+        size_max: Maximum allowed byte size, or `None` to disable the check.
+        label: Resource label included in a caller-visible error.
+
+    Raises:
+        ValueError: If the file is larger than `size_max`.
+    """
     if size_max is None:
         return
     file_size = file_path.stat().st_size
@@ -55,6 +82,16 @@ def validate_count_limit(
     limit_max: int | None,
     label: str,
 ) -> None:
+    """Enforce an inclusive upper bound on a normalized item count.
+
+    Args:
+        count: Count produced by the calling normalization boundary.
+        limit_max: Maximum allowed count, or `None` to disable the check.
+        label: Count label included in a caller-visible error.
+
+    Raises:
+        ValueError: If `count` is greater than `limit_max`.
+    """
     if limit_max is None:
         return
     if count > limit_max:
@@ -91,6 +128,15 @@ def create_input_id_frame(
     *,
     schema_unmapped: SchemaDict,
 ) -> pl.DataFrame:
+    """Build the canonical single-selection input table.
+
+    Args:
+        input_ids: Raw identifiers to normalize.
+        schema_unmapped: Output schema containing the `InputId` column.
+
+    Returns:
+        A table of non-empty, unique normalized IDs sorted by `InputId`.
+    """
     ids_normalized: list[str] = []
     for input_id in input_ids:
         if input_id_normalized := normalize_input_id(str(input_id)):
@@ -112,6 +158,24 @@ def create_group_input_frames(
     schema_groups: SchemaDict,
     schema_group_input_ids: SchemaDict,
 ) -> GroupInputFrames:
+    """Build canonical group and grouped-input tables.
+
+    Group labels are stripped and must remain non-empty and unique. Input IDs
+    use `normalize_input_id()` and are deduplicated within each group. Groups
+    with no retained IDs remain present in the group registry.
+
+    Args:
+        group_to_ids: Mapping of raw group labels to raw identifiers.
+        schema_groups: Output schema containing `GroupId`.
+        schema_group_input_ids: Output schema containing `GroupId` and
+            `InputId`.
+
+    Returns:
+        Sorted group-registry and grouped-input tables.
+
+    Raises:
+        ValueError: If a normalized group label is empty or duplicated.
+    """
     group_ids_normalized: list[str] = []
     group_ids_col: list[str] = []
     input_ids_col: list[str] = []

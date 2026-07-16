@@ -60,6 +60,12 @@ jobs:
       - name: Sync dependencies
         run: pdm sync -G dev --no-self
 
+      - name: Run static checks
+        run: |
+          pdm run ruff format --check .
+          pdm run ruff check .
+          pdm run typecheck
+
       - name: Run tests
         run: PYTHONPATH=src pdm run pytest
 

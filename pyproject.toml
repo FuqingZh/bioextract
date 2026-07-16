@@ -16,23 +16,33 @@ license = {text = "MIT"}
 requires = ["pdm-backend"]
 build-backend = "pdm.backend"
 
-[tool.pdm]
-distribution = true
-
-
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
     "ruff>=0.15.14",
+    "pyright>=1.1.411",
 ]
 
 [tool.ruff]
 target-version = "py313"
 line-length = 88
 
+[tool.pyright]
+include = ["src", "tests", "scripts"]
+exclude = [".venv"]
+extraPaths = ["src"]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.13"
+typeCheckingMode = "standard"
+
+[tool.pdm]
+distribution = true
+
 [tool.pdm.scripts]
 format = "ruff format ."
 lint = "ruff check ."
 lint-fix = "ruff check --fix ."
+typecheck = "pyright"
 test = {cmd = "pytest", env = {PYTHONPATH = "src"}}
-precommit = {composite = ["format", "lint-fix", "test"]}
+precommit = {composite = ["format", "lint-fix", "typecheck", "test"]}

@@ -5,7 +5,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TextIO
+from typing import TextIO, TypedDict
 
 import polars as pl
 
@@ -26,6 +26,14 @@ _CC_TOPIC_PREFIX = "CC   -!- "
 _EVIDENCE_RE = re.compile(r"\{([^{}]+)\}")
 _GENE_NAME_RE = re.compile(r"(?:^|;\s*)Name=([^;]+)")
 _PROTEIN_FULL_RE = re.compile(r"RecName:\s+Full=([^;]+)")
+
+type _EvidenceReference = tuple[str | None, str | None, str | None]
+
+
+class _SubcellularLocationEntry(TypedDict):
+    location: str | None
+    note: str | None
+    evidences: list[_EvidenceReference]
 
 
 @dataclass(slots=True)
@@ -131,6 +139,12 @@ def read_subcellular_location_frame(
     *,
     source_db: str,
 ) -> pl.DataFrame:
+    """Extract a deduplicated accession-by-location-by-evidence table.
+
+    Secondary accessions receive the same curated annotation as the primary
+    accession. Locations without evidence retain one row with null evidence
+    fields, keeping missing evidence distinct from a missing annotation.
+    """
     rows: list[dict[str, str | None]] = []
     for record in iter_subcellular_location_records(file_dat):
         append_subcellular_location_rows(
@@ -149,6 +163,12 @@ def read_subcellular_location_frame(
 
 
 def iter_subcellular_location_records(file_dat: Path) -> Iterable[_UniProtDatRecord]:
+    """Yield UniProt flat-file records with identity and wrapped CC comments.
+
+    Record termination uses ``//``. The final partial record is yielded only
+    when it contains identity or subcellular-location content, which supports
+    compact fixtures without weakening normal flat-file boundaries.
+    """
     with open_uniprot_dat(file_dat) as handle:
         record = _UniProtDatRecord()
         is_subcellular_comment = False
@@ -240,7 +260,13 @@ def append_subcellular_location_rows(
 
 def parse_subcellular_location_comment(
     comment: str,
-) -> list[dict[str, str | None | list[tuple[str | None, str | None, str | None]]]]:
+) -> list[_SubcellularLocationEntry]:
+    """Project one UniProt subcellular-location comment into long entries.
+
+    Top-level location statements become separate entries; a trailing
+    ``Note=`` applies to every entry. Each entry always contains at least one
+    evidence tuple, using an all-null tuple when no evidence was supplied.
+    """
     location_text, note_text = split_subcellular_location_note(comment)
     statements = split_top_level_periods(location_text)
     entries = [
@@ -256,7 +282,7 @@ def parse_subcellular_location_comment(
 def create_subcellular_location_entry(
     text: str,
     note_text: str | None,
-) -> dict[str, str | None | list[tuple[str | None, str | None, str | None]]]:
+) -> _SubcellularLocationEntry:
     location_text, evidences = extract_evidence_references(text)
     return {
         "location": location_text or None,
@@ -289,6 +315,7 @@ def join_wrapped_comment_lines(parts: list[str]) -> str:
 
 
 def split_top_level_periods(text: str) -> list[str]:
+    """Split location statements on periods outside evidence braces."""
     statements: list[str] = []
     start = 0
     depth_brace = 0
@@ -310,8 +337,14 @@ def split_top_level_periods(text: str) -> list[str]:
 
 def extract_evidence_references(
     text: str,
-) -> tuple[str, list[tuple[str | None, str | None, str | None]]]:
-    evidences: list[tuple[str | None, str | None, str | None]] = []
+) -> tuple[str, list[_EvidenceReference]]:
+    """Remove evidence blocks and return their parsed ECO/source references.
+
+    Multiple comma-separated references in one brace block are preserved in
+    source order. Unrecognized partial references retain the components that
+    can be parsed rather than discarding the surrounding annotation text.
+    """
+    evidences: list[_EvidenceReference] = []
     for evidence_block in _EVIDENCE_RE.findall(text):
         for evidence_reference in evidence_block.split(","):
             evidence_reference = evidence_reference.strip()

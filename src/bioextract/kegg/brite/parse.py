@@ -1,5 +1,5 @@
-from pathlib import Path
 import json
+from pathlib import Path
 
 from .model import (
     BriteColumnBuffer,
@@ -17,6 +17,15 @@ def parse_category(raw: str) -> PathwayLevelRecord:
 
 
 def parse_pathway_level3(raw: str) -> PathwayLevelRecord:
+    """Parse a KEGG BRITE pathway node in plain or bracketed PATH form.
+
+    Accepted shapes are ``NUMBER NAME`` and
+    ``NUMBER NAME [PATH:PATHWAY_ID]``. The numeric BRITE node ID and optional
+    KEGG pathway ID remain separate fields.
+
+    Raises:
+        ValueError: If the node does not match either supported shape.
+    """
     text = raw.strip()
     if text.endswith("]") and " [" in text:
         pathway_description, level3_payload = text[:-1].rsplit(" [", 1)
@@ -47,6 +56,13 @@ def parse_pathway_level3(raw: str) -> PathwayLevelRecord:
 
 
 def parse_entry_and_ko(raw: str) -> PathwayLeafRecord:
+    """Parse a BRITE leaf containing an entry and optional tab-separated KO.
+
+    Entry-only leaves are retained with ``ko=None`` rather than dropped.
+
+    Raises:
+        ValueError: If an entry or present KO segment has no identifier.
+    """
     parts = raw.split("\t", 1)
     if len(parts) == 1:
         entry_tokens = parts[0].strip().split(maxsplit=1)
@@ -80,6 +96,12 @@ def parse_entry_and_ko(raw: str) -> PathwayLeafRecord:
 
 
 def read_brite(file_in: Path) -> BriteColumnBuffer:
+    """Read the three-level KEGG BRITE pathway hierarchy into column buffers.
+
+    A level-3 pathway without leaf nodes still emits one row with null entry
+    and KO fields. This preserves pathway presence independently of annotation
+    coverage.
+    """
     data = json.loads(file_in.read_text(encoding="utf-8"))
     records = BriteColumnBuffer()
 

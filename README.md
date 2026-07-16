@@ -124,8 +124,8 @@ df_pathway = tidy.frames["pathway"]
 report = tidy.write("out/br08901")
 ```
 
-The GO and KEGG tidy writers emit flat parquet files by default. See
-`docs/architecture/go-kegg-tidy.md`.
+The GO and KEGG tidy writers emit flat parquet files by default. See the
+[GO and KEGG Tidy Architecture](docs/architecture/go-kegg-tidy.md).
 
 ## Reactome
 
@@ -201,16 +201,25 @@ annotation and enrichment-input preparation.
 from bioextract.interpro import InterProDb
 
 db = InterProDb.from_mapping_files(
-    file_protein2ipr="protein2ipr.dat.gz",
-    file_interpro_xml="interpro.xml.gz",
+    file_protein2ipr="108.0/raw/protein2ipr.dat.gz",
+    file_interpro_xml="108.0/raw/interpro.xml.gz",
 )
 
 df_mapping = db.extract_mapping()
 report = db.write_tidy("out/interpro", should_write_manifest=True)
+
+pfam_report = db.write_tidy(
+    "out/interpro-pfam",
+    config="pfam",
+    should_write_manifest=True,
+)
 ```
 
 `InterProDb` reads local `protein2ipr` mapping files and optional InterPro XML
 metadata, then emits one canonical UniProt-to-InterPro mapping parquet.
+`config="pfam"` derives compact UniProt-to-Pfam assets directly from the same
+raw snapshot; it does not require the full `mapping.parquet` to be generated
+first.
 
 ## UniProt
 
@@ -262,7 +271,13 @@ does not infer GO cellular-component terms.
 
 ## Development
 
-- `PYTHONPATH=src pytest`
+- Project architecture, test standards, benchmarks, and archived plans are
+  indexed in [docs/README.md](docs/README.md).
+- `pdm run format`
+- `pdm run lint`
+- `pdm run typecheck`
+- `pdm run test`
+- `pdm run precommit` runs the complete local gate in that order.
 - `PYTHONPATH=src python scripts/benchmark_stringdb.py`
 
 ## Release

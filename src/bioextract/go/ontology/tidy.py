@@ -117,6 +117,39 @@ def build_tidy_frames(
     *,
     subset_definitions: Iterable[SubsetDefinitionRecord] = (),
 ) -> dict[str, pl.DataFrame]:
+    """Build canonical and graph-derived GO ontology frames.
+
+    Args:
+        records: Parsed GO term records. The iterable is consumed once.
+        subset_definitions: Optional OBO header definitions used to populate
+            the subset lookup frame.
+
+    Returns:
+        DataFrames keyed by `term`, `edge`, `synonym`, `xref`, `alt_id`,
+        `subset_membership`, `subset_definition`, `ancestor_all`, and `depth`.
+        Every frame is deduplicated according to its canonical key.
+
+    Raises:
+        ValueError: If an alternate GO identifier is invalid or hierarchical
+            edges contain a cycle, which prevents ancestor and depth
+            derivation.
+
+    Examples:
+        Build all frames from one root term record:
+
+        >>> from bioextract.go.ontology.model import TermRecord
+        >>> root = TermRecord(
+        ...     go_id="GO:0000001",
+        ...     term_name="root process",
+        ...     namespace="biological_process",
+        ...     definition=None,
+        ...     is_obsolete=False,
+        ...     comment=None,
+        ... )
+        >>> frames = build_tidy_frames([root])
+        >>> (len(frames), frames["term"].height)
+        (9, 1)
+    """
     term_data = TermColumnBuffer()
     edge_data = EdgeColumnBuffer()
     alt_id_data = AltIdColumnBuffer()
@@ -203,6 +236,19 @@ def extract_subcell_frame(
     *,
     include_obsolete: bool = False,
 ) -> pl.DataFrame:
+    """Project GO cellular-component terms into the subcell output schema.
+
+    Args:
+        frames: Tidy frame mapping containing `term` and `depth`.
+        include_obsolete: Whether to retain obsolete cellular-component terms.
+
+    Returns:
+        A table sorted by `go_id` with subcell names, definitions, and minimum
+        and maximum depths from an ontology root.
+
+    Raises:
+        KeyError: If either required frame is absent.
+    """
     df_term = frames["term"]
     df_depth = frames["depth"]
     df_subcell = (
@@ -230,6 +276,31 @@ def extract_subcell_frame(
 ################################################################################
 # #region Entrypoint
 def run_tidy_go_ontology(file_in: Path, dir_out: Path) -> None:
+    """Parse a GO OBO snapshot and write its nine tidy parquet assets.
+
+    Args:
+        file_in: GO OBO input path.
+        dir_out: Output directory for canonical and graph-derived parquet
+            assets.
+
+    Raises:
+        ValueError: If parsed identifiers are invalid or the hierarchical graph
+            contains a cycle.
+
+    Notes:
+        This low-level entrypoint does not write a manifest. Use
+        `GoDb.write_tidy()` when a shared tidy write report or manifest is
+        required.
+
+    Examples:
+        Write the compact local OBO fixture without a manifest:
+
+        >>> file_in = Path("data/go-basic.obo")
+        >>> dir_out = Path("build/go-basic")
+        >>> run_tidy_go_ontology(file_in, dir_out)
+        >>> (dir_out / "term.parquet").is_file()
+        True
+    """
     records = scan_obo_term_records(file_in)
     frames = build_tidy_frames(
         records,

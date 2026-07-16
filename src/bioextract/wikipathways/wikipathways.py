@@ -38,6 +38,20 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class WikiPathwaysResourceLimits:
+    """Optional fail-fast limits for WikiPathways resources and selections.
+
+    The GMT file limit is measured in bytes and checked when a snapshot handle
+    is created. Count limits apply after input IDs and group names are
+    normalized; ``None`` disables the corresponding limit.
+
+    Examples:
+        Limit one normalized selection to 500 Entrez IDs:
+
+        >>> limits = WikiPathwaysResourceLimits(num_input_ids_max=500)
+        >>> limits.num_input_ids_max
+        500
+    """
+
     file_gmt_bytes_max: int | None = None
     num_input_ids_max: int | None = None
     num_groups_max: int | None = None
@@ -64,6 +78,16 @@ class WikiPathwaysDb:
     Construct instances with :meth:`from_gmt`, then either extract whole
     resource frames or create single/grouped Entrez ID selections through
     :meth:`select_ids` and :meth:`select_groups`.
+
+    Examples:
+        Extract pathway mappings while preserving unmapped Entrez IDs:
+
+        >>> db = WikiPathwaysDb.from_gmt(
+        ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt",
+        ...     species="Homo sapiens",
+        ... )
+        >>> db.select_ids(["2687", "MISSING"]).extract_mapping().height
+        1
     """
 
     snapshot: _WikiPathwaysSnapshot
@@ -90,8 +114,8 @@ class WikiPathwaysDb:
             file_gmt: Path to a local WikiPathways GMT file.
             species: Optional species display name used as an exact metadata
                 filter after parsing.
-            limits: Dataset-level resource limits. When omitted, default
-                fail-fast limits are used.
+            limits: Optional resource policy. When omitted, no finite size or
+                selection limits are imposed.
 
         Returns:
             A dataset handle that can build pathway, term2gene, and term2name
@@ -101,6 +125,16 @@ class WikiPathwaysDb:
             FileNotFoundError: If the GMT file does not exist.
             ValueError: If the species string is empty after normalization or
                 a configured file-size limit is exceeded.
+
+        Examples:
+            Open a compact human WikiPathways fixture:
+
+            >>> db = WikiPathwaysDb.from_gmt(
+            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt",
+            ...     species="Homo sapiens",
+            ... )
+            >>> db.extract_pathway().height
+            2
         """
         file_gmt = Path(file_gmt)
         if not file_gmt.exists():
@@ -137,6 +171,15 @@ class WikiPathwaysDb:
         Raises:
             ValueError: If the normalized input-ID count exceeds the configured
                 limit.
+
+        Examples:
+            Create an ungrouped Entrez ID selection:
+
+            >>> db = WikiPathwaysDb.from_gmt(
+            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt"
+            ... )
+            >>> db.select_ids(["2687"]).is_grouped
+            False
         """
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
         validate_count_limit(
@@ -165,6 +208,15 @@ class WikiPathwaysDb:
         Raises:
             ValueError: If group or input-ID limits are exceeded, or if group
                 IDs are invalid after normalization.
+
+        Examples:
+            Create a grouped Entrez ID selection:
+
+            >>> db = WikiPathwaysDb.from_gmt(
+            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt"
+            ... )
+            >>> db.select_groups({"case": ["2687"]}).is_grouped
+            True
         """
         grp_in_frames = create_group_input_frames(
             group_to_ids,
@@ -188,22 +240,66 @@ class WikiPathwaysDb:
         )
 
     def extract_pathway(self) -> pl.DataFrame:
-        """Extract WikiPathways pathway metadata with gene counts."""
+        """Extract one metadata row per pathway in the current species scope.
+
+        ``GeneCount`` counts distinct, non-empty Entrez Gene IDs in the GMT row.
+
+        Examples:
+            List pathway IDs in the compact human fixture:
+
+            >>> db = WikiPathwaysDb.from_gmt(
+            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt",
+            ...     species="Homo sapiens",
+            ... )
+            >>> db.extract_pathway()["WikiPathwaysId"].to_list()
+            ['WP100', 'WP106']
+        """
         return self.lazy_frame("pathway").collect()
 
     def extract_term2gene(self) -> pl.DataFrame:
-        """Extract a WikiPathways pathway-to-Entrez table."""
+        """Extract distinct WikiPathways-pathway-to-Entrez enrichment pairs.
+
+        Examples:
+            Inspect the compact human enrichment mapping shape:
+
+            >>> db = WikiPathwaysDb.from_gmt(
+            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt",
+            ...     species="Homo sapiens",
+            ... )
+            >>> db.extract_term2gene().shape
+            (4, 2)
+        """
         return self.lazy_frame("term2gene").collect()
 
     def extract_term2name(self) -> pl.DataFrame:
-        """Extract WikiPathways pathway display metadata for enrichment callers."""
+        """Extract one pathway display-metadata row per WikiPathways ID.
+
+        Examples:
+            Inspect the enrichment label schema:
+
+            >>> db = WikiPathwaysDb.from_gmt(
+            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt"
+            ... )
+            >>> db.extract_term2name().columns
+            ['WikiPathwaysId', 'PathwayName', 'Species', 'Collection', 'Version', 'Url']
+        """
         return self.lazy_frame("term2name").collect()
 
     def build_tidy(self) -> WikiPathwaysTidyDataset:
-        """Build the in-memory WikiPathways tidy dataset.
+        """Build the lazy WikiPathways tidy dataset for the current scope.
 
         Returns:
-            A `TidyDataset` with `pathway`, `term2gene`, and `term2name` frames.
+            A `TidyDataset` with species-consistent ``pathway``, ``term2gene``,
+            and ``term2name`` frames.
+
+        Examples:
+            Build the three declared WikiPathways frames:
+
+            >>> db = WikiPathwaysDb.from_gmt(
+            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt"
+            ... )
+            >>> sorted(db.build_tidy().frames)
+            ['pathway', 'term2gene', 'term2name']
         """
         return WikiPathwaysTidyDataset(
             frames={
@@ -233,10 +329,20 @@ class WikiPathwaysDb:
             dir_out: Output directory for parquet assets.
             should_write_manifest: Whether to write `manifest.json`.
             should_hash_assets: Whether to calculate asset checksums in the
-                manifest.
+                manifest. This has no effect unless a manifest is requested.
 
         Returns:
             A write report with asset paths and optional manifest content.
+
+        Examples:
+            Write the three declared WikiPathways assets:
+
+            >>> db = WikiPathwaysDb.from_gmt(
+            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt"
+            ... )
+            >>> report = db.write_tidy("build/wikipathways")
+            >>> [asset.path for asset in report.assets]
+            ['pathway.parquet', 'term2gene.parquet', 'term2name.parquet']
         """
         return self.build_tidy().write(
             Path(dir_out),
@@ -245,6 +351,29 @@ class WikiPathwaysDb:
         )
 
     def lazy_frame(self, frame_name: str) -> pl.LazyFrame:
+        """Return a cached lazy tidy frame in the current species scope.
+
+        Args:
+            frame_name: One of ``pathway``, ``term2gene``, or ``term2name``.
+
+        Returns:
+            The requested lazy frame. Parsing is deferred until the first frame
+            request, then the frame mapping is reused by subsequent operations.
+
+        Raises:
+            KeyError: If ``frame_name`` is not a declared tidy frame.
+            ValueError: If the GMT content is malformed when first parsed.
+
+        Examples:
+            Materialize only the pathway frame:
+
+            >>> db = WikiPathwaysDb.from_gmt(
+            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt",
+            ...     species="Homo sapiens",
+            ... )
+            >>> db.lazy_frame("pathway").collect().height
+            2
+        """
         if self._frames is None:
             frames = read_gmt_frames(self.snapshot.file_gmt)
             if self.snapshot.species is not None:
@@ -278,6 +407,16 @@ class WikiPathwaysSelection:
     Selections are created by :meth:`WikiPathwaysDb.select_ids` or
     :meth:`WikiPathwaysDb.select_groups`. Single selections return tables keyed
     by `InputId`; grouped selections prepend `GroupId`.
+
+    Examples:
+        Create a selection through a local dataset handle:
+
+        >>> db = WikiPathwaysDb.from_gmt(
+        ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt"
+        ... )
+        >>> selection = db.select_ids(["2687"])
+        >>> isinstance(selection, WikiPathwaysSelection)
+        True
     """
 
     dataset: WikiPathwaysDb
@@ -288,7 +427,18 @@ class WikiPathwaysSelection:
 
     @property
     def is_grouped(self) -> bool:
-        """Report whether this selection carries `GroupId` through outputs."""
+        """Report whether this selection carries `GroupId` through outputs.
+
+        Examples:
+            Inspect a grouped selection:
+
+            >>> db = WikiPathwaysDb.from_gmt(
+            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt"
+            ... )
+            >>> selection = db.select_groups({"case": ["2687"]})
+            >>> selection.is_grouped
+            True
+        """
         return self._df_groups is not None
 
     @property
@@ -297,7 +447,19 @@ class WikiPathwaysSelection:
         return ("GroupId",) if self.is_grouped else ()
 
     def extract_mapping(self) -> pl.DataFrame:
-        """Extract selected Entrez-to-WikiPathways pathway mappings."""
+        """Extract every pathway mapping matched by the selected Entrez IDs.
+
+        Examples:
+            Materialize the pathway mapped to Entrez ID 2687:
+
+            >>> db = WikiPathwaysDb.from_gmt(
+            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt",
+            ...     species="Homo sapiens",
+            ... )
+            >>> selection = db.select_ids(["2687"])
+            >>> selection.extract_mapping()["WikiPathwaysId"].to_list()
+            ['WP100']
+        """
         return self._lazy_mapping().collect()
 
     def _lazy_mapping(self) -> pl.LazyFrame:
@@ -311,7 +473,21 @@ class WikiPathwaysSelection:
         return self._lf_mapping
 
     def extract_unmapped_input_ids(self) -> pl.DataFrame:
-        """Extract normalized input IDs that did not map to WikiPathways."""
+        """Extract normalized input IDs with no WikiPathways mapping.
+
+        Grouped selections report an ID as unmapped independently within each
+        group and include ``GroupId`` in the result.
+
+        Examples:
+            Retain an Entrez ID absent from the snapshot:
+
+            >>> db = WikiPathwaysDb.from_gmt(
+            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt"
+            ... )
+            >>> selection = db.select_ids(["2687", "MISSING"])
+            >>> selection.extract_unmapped_input_ids().to_dicts()
+            [{'InputId': 'MISSING'}]
+        """
         if self._lf_unmapped is None:
             self._lf_unmapped = extract_unmapped_input_ids_frame(
                 self._df_input_ids,

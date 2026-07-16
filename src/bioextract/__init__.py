@@ -1,3 +1,11 @@
+"""Public resource namespaces exposed through lazy package attributes.
+
+Importing :mod:`bioextract` does not import Polars-backed resource modules.
+Each name in ``__all__`` is loaded on first attribute access and then cached in
+the package globals. Keep this boundary lazy so callers can inspect or package
+``bioextract`` without initializing every resource implementation.
+"""
+
 from importlib import import_module
 from types import ModuleType
 from typing import TYPE_CHECKING, Any
@@ -39,6 +47,11 @@ _ALIAS_MODULES: dict[str, str] = {
 
 
 def __getattr__(name: str) -> Any:
+    """Load one declared resource namespace on first attribute access.
+
+    Raises:
+        AttributeError: If ``name`` is not one of the namespaces in ``__all__``.
+    """
     module_name = _ALIAS_MODULES.get(name)
     if module_name is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

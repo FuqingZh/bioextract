@@ -77,29 +77,19 @@ class StringDb:
     until the final materialized result is requested.
 
     Examples:
-        Single query:
+        Create one snapshot handle and run a single query:
 
-            db = StringDb.from_files(
-                file_aliases="9606.protein.aliases.v12.0.txt.gz",
-                file_links="9606.protein.links.v12.0.txt.gz",
-            )
-            df_edges = (
-                db.select_ids(["TP53", "EGFR"])
-                .with_score_min(400)
-                .extract_edges()
-            )
-
-        Grouped query:
-
-            db = StringDb.from_files(
-                file_aliases="9606.protein.aliases.v12.0.txt.gz",
-                file_links="9606.protein.links.v12.0.txt.gz",
-            )
-            df_edges = (
-                db.select_groups({"TumorA": ["TP53", "EGFR"], "TumorB": ["CDK2"]})
-                .with_score_min(400)
-                .extract_edges()
-            )
+        >>> db = StringDb.from_files(
+        ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
+        ...     file_links="fixtures/string/9606.protein.links.v12.0.txt.gz",
+        ... )
+        >>> (
+        ...     db.select_ids(["TP53", "EGFR"])
+        ...     .with_score_min(400)
+        ...     .extract_edges()
+        ...     .columns
+        ... )
+        ['StringIdA', 'StringIdB', 'Score']
     """
 
     snapshot: _StringSnapshot
@@ -144,6 +134,16 @@ class StringDb:
             FileNotFoundError: If either input file does not exist.
             ValueError: If the requested version is unsupported or a configured
                 file-size limit is exceeded.
+
+        Examples:
+            Open a STRING v12 fixture snapshot:
+
+            >>> db = StringDb.from_files(
+            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
+            ...     file_links="fixtures/string/9606.protein.links.v12.0.txt.gz",
+            ... )
+            >>> db.snapshot.version
+            'v12.0'
         """
         if version not in SCHEMA_ALIASES or version not in SCHEMA_LINKS:
             raise ValueError(f"Unsupported STRING version: {version}")
@@ -204,6 +204,15 @@ class StringDb:
         Raises:
             ValueError: If the normalized input-ID count exceeds the configured
                 dataset limits.
+
+        Examples:
+            Create a single-query selection:
+
+            >>> db = StringDb.from_files(
+            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
+            ... )
+            >>> db.select_ids(["TP53", "EGFR"]).is_grouped
+            False
         """
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
         validate_count_limit(
@@ -243,6 +252,15 @@ class StringDb:
                 `GroupId` values are duplicated, if the number of groups
                 exceeds the configured limit, or if the total normalized
                 input-ID count exceeds the configured limit.
+
+        Examples:
+            Create a grouped selection with isolated comparison labels:
+
+            >>> db = StringDb.from_files(
+            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
+            ... )
+            >>> db.select_groups({"up": ["TP53"], "down": ["EGFR"]}).is_grouped
+            True
         """
         grp_in_frames = create_group_input_frames(
             group_to_ids,
@@ -268,6 +286,25 @@ class StringDb:
 
     @property
     def alias_schema(self) -> _StringAliasInfo | None:
+        """Inspect and cache the aliases-file identity columns.
+
+        Returns:
+            Schema information required by mapping extraction, or ``None``
+            when the snapshot has no aliases file.
+
+        Raises:
+            ValueError: If an aliases file is present but its required columns
+                do not match the declared STRING version.
+
+        Examples:
+            Inspect the identity column inferred from a v12 aliases fixture:
+
+            >>> db = StringDb.from_files(
+            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
+            ... )
+            >>> db.alias_schema.col_string_id
+            '#string_protein_id'
+        """
         if self._alias_schema_cached is not None:
             return self._alias_schema_cached
 
@@ -303,6 +340,16 @@ class StringSelection:
       tables without `GroupId`
     - selections created by :meth:`StringDb.select_groups` return grouped flat
       tables with leading `GroupId`
+
+    Examples:
+        Create a selection through its dataset handle:
+
+        >>> db = StringDb.from_files(
+        ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
+        ... )
+        >>> selection = db.select_ids(["TP53"])
+        >>> isinstance(selection, StringSelection)
+        True
     """
 
     dataset: StringDb
@@ -321,6 +368,13 @@ class StringSelection:
         Returns:
             `True` when the selection was created by :meth:`StringDb.select_groups`;
             otherwise `False`.
+
+        Examples:
+            >>> db = StringDb.from_files(
+            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
+            ... )
+            >>> db.select_groups({"up": ["TP53"]}).is_grouped
+            True
         """
         return self._df_groups is not None
 
@@ -357,6 +411,16 @@ class StringSelection:
         Returns:
             A new selection sharing cached mapping state with the current
             selection.
+
+        Examples:
+            Raise the minimum combined score to 700:
+
+            >>> db = StringDb.from_files(
+            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
+            ...     file_links="fixtures/string/9606.protein.links.v12.0.txt.gz",
+            ... )
+            >>> db.select_ids(["TP53", "EGFR"]).with_score_min(700).thr_score_min
+            700
         """
         return StringSelection(
             dataset=self.dataset,
@@ -380,6 +444,15 @@ class StringSelection:
         Raises:
             ValueError: If the aliases file is missing required columns for the
                 configured STRING version.
+
+        Examples:
+            Inspect the stable single-query mapping schema:
+
+            >>> db = StringDb.from_files(
+            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
+            ... )
+            >>> db.select_ids(["TP53"]).extract_string_mapping().columns
+            ['InputId', 'StringId', 'MapSource']
         """
         if self.dataset.alias_schema is None:
             raise ValueError("Cannot extract STRING mapping without aliases file")
@@ -424,6 +497,15 @@ class StringSelection:
 
             Each row represents a normalized input ID that did not resolve
             through the aliases table.
+
+        Examples:
+            Report an identifier absent from the aliases fixture:
+
+            >>> db = StringDb.from_files(
+            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
+            ... )
+            >>> db.select_ids(["MISSING"]).extract_unmapped_input_ids().to_dicts()
+            [{'InputId': 'MISSING'}]
         """
         if self._df_unmapped is None:
             cols_index = list(self._col_group_id) + ["InputId"]
@@ -452,6 +534,16 @@ class StringSelection:
         Raises:
             ValueError: If the links file is missing required columns for the
                 configured STRING version.
+
+        Examples:
+            Extract the induced network and inspect its stable schema:
+
+            >>> db = StringDb.from_files(
+            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
+            ...     file_links="fixtures/string/9606.protein.links.v12.0.txt.gz",
+            ... )
+            >>> db.select_ids(["TP53", "EGFR"]).extract_edges().columns
+            ['StringIdA', 'StringIdB', 'Score']
         """
         if self.dataset.snapshot.file_links is None:
             raise ValueError("Cannot extract STRING edges without links file")
