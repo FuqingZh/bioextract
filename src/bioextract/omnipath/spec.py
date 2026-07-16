@@ -14,10 +14,22 @@ class OmniPathResourceLimits:
     ``None`` to disable that check.
 
     Examples:
-        Disable the interactions-file size guard while keeping other defaults:
+        Reject an oversized interaction snapshot before parsing it:
 
-        >>> limits = OmniPathResourceLimits(file_interactions_bytes_max=None)
-        >>> limits.file_interactions_bytes_max is None
+        >>> from pathlib import Path
+        >>> from tempfile import TemporaryDirectory
+        >>> from bioextract.omnipath import OmniPathDb
+        >>> with TemporaryDirectory() as dir_tmp:
+        ...     file_interactions = Path(dir_tmp) / "interactions.tsv"
+        ...     _ = file_interactions.write_text("source\\ttarget\\n")
+        ...     limits = OmniPathResourceLimits(file_interactions_bytes_max=1)
+        ...     try:
+        ...         OmniPathDb.from_files(
+        ...             file_interactions=file_interactions,
+        ...             limits=limits,
+        ...         )
+        ...     except ValueError as error:
+        ...         print("exceeds configured size limit" in str(error))
         True
     """
 

@@ -64,11 +64,18 @@ class KeggResourceLimits:
     ``None`` disables the corresponding limit.
 
     Examples:
-        Limit one normalized selection to 1,000 IDs:
+        Reject an oversized BRITE snapshot before parsing it:
 
-        >>> limits = KeggResourceLimits(num_input_ids_max=1_000)
-        >>> limits.num_input_ids_max
-        1000
+        >>> from tempfile import TemporaryDirectory
+        >>> with TemporaryDirectory() as dir_tmp:
+        ...     file_brite = Path(dir_tmp) / "br08901.json"
+        ...     _ = file_brite.write_text("{}", encoding="utf-8")
+        ...     limits = KeggResourceLimits(file_brite_json_bytes_max=1)
+        ...     try:
+        ...         KeggDb.from_brite_json(file_brite, limits=limits)
+        ...     except ValueError as error:
+        ...         print("exceeds configured size limit" in str(error))
+        True
     """
 
     file_brite_json_bytes_max: int | None = None
@@ -155,11 +162,13 @@ class KeggDb:
             ValueError: If the file exceeds the configured byte limit.
 
         Examples:
-            Open a compact local BRITE hierarchy:
+            Open a compact BRITE hierarchy and read its first pathway entry:
 
             >>> db = KeggDb.from_brite_json("data/kegg/tcar00001.json")
-            >>> db.build_tidy().schema_version
-            'kegg-brite-tidy-v0.1'
+            >>> db.build_tidy().frames["pathway"].select(
+            ...     "pathway_level3_kegg_id", "entry_id"
+            ... ).head(1).collect().to_dicts()
+            [{'pathway_level3_kegg_id': 'tcar00010', 'entry_id': 'U0034_04525'}]
         """
         limits_resolved = KeggResourceLimits() if limits is None else limits
         file_brite_json = _validate_file(
@@ -212,7 +221,7 @@ class KeggDb:
                 configured byte limit.
 
         Examples:
-            Open one organism's compact mapping fixture:
+            Open one organism's mapping files and read a normalized gene mapping:
 
             >>> db = KeggDb.from_mapping_files(
             ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
@@ -220,8 +229,10 @@ class KeggDb:
             ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
             ...     organism_code="hsa",
             ... )
-            >>> db.extract_mapping().columns[:3]
-            ['OrganismCode', 'KeggGeneId', 'UniProtId']
+            >>> db.extract_mapping().select(
+            ...     "KeggGeneId", "UniProtId", "KoId"
+            ... ).row(0, named=True)
+            {'KeggGeneId': 'hsa:1', 'UniProtId': 'P12345', 'KoId': 'K00001'}
         """
         organism_code = str(organism_code).strip()
         if not organism_code:
@@ -282,7 +293,7 @@ class KeggDb:
                 do not match the configured organism code.
 
         Examples:
-            Inspect the compact organism mapping schema:
+            Preserve the two pathway memberships of one KEGG gene:
 
             >>> db = KeggDb.from_mapping_files(
             ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
@@ -290,8 +301,10 @@ class KeggDb:
             ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
             ...     organism_code="hsa",
             ... )
-            >>> db.extract_mapping().columns[:3]
-            ['OrganismCode', 'KeggGeneId', 'UniProtId']
+            >>> db.extract_mapping().filter(
+            ...     pl.col("KeggGeneId") == "hsa:1"
+            ... ).select("UniProtId", "KeggPathwayId").to_dicts()
+            [{'UniProtId': 'P12345', 'KeggPathwayId': 'hsa00010'}, {'UniProtId': 'P12345', 'KeggPathwayId': 'hsa01100'}]
         """
         self._require_mapping_snapshot("extract KEGG mapping")
         if self._df_mapping is None:
@@ -336,7 +349,7 @@ class KeggDb:
                 or the normalized input count exceeds its configured limit.
 
         Examples:
-            Create an ungrouped UniProt selection:
+            Normalize a pipe-style UniProt ID before matching it:
 
             >>> db = KeggDb.from_mapping_files(
             ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
@@ -344,8 +357,13 @@ class KeggDb:
             ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
             ...     organism_code="hsa",
             ... )
-            >>> db.select_ids(["P12345"], kind_input_id="uniprot").is_grouped
-            False
+            >>> selection = db.select_ids(
+            ...     ["sp|P12345|GENE1_HUMAN"], kind_input_id="uniprot"
+            ... )
+            >>> selection.extract_mapping().select(
+            ...     "InputId", "KeggGeneId"
+            ... ).unique().to_dicts()
+            [{'InputId': 'P12345', 'KeggGeneId': 'hsa:1'}]
         """
         self._require_mapping_snapshot("select KEGG IDs")
         validate_kind_input_id(kind_input_id)
@@ -384,7 +402,7 @@ class KeggDb:
                 name is invalid, or a configured group/input limit is exceeded.
 
         Examples:
-            Create a grouped UniProt selection:
+            Retain the group name on matched mapping rows:
 
             >>> db = KeggDb.from_mapping_files(
             ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
@@ -392,10 +410,13 @@ class KeggDb:
             ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
             ...     organism_code="hsa",
             ... )
-            >>> db.select_groups(
+            >>> selection = db.select_groups(
             ...     {"up": ["P12345"]}, kind_input_id="uniprot"
-            ... ).is_grouped
-            True
+            ... )
+            >>> selection.extract_mapping().select(
+            ...     "GroupId", "InputId"
+            ... ).unique().to_dicts()
+            [{'GroupId': 'up', 'InputId': 'P12345'}]
         """
         self._require_mapping_snapshot("select grouped KEGG IDs")
         validate_kind_input_id(kind_input_id)
@@ -559,7 +580,7 @@ class KeggSelection:
     ``GroupId``.
 
     Examples:
-        Create a selection through its dataset handle:
+        Materialize matched rows and report IDs that did not map:
 
         >>> db = KeggDb.from_mapping_files(
         ...     file_conv_uniprot="data/kegg/conv_uniprot.tsv",
@@ -567,9 +588,13 @@ class KeggSelection:
         ...     file_gene_pathway="data/kegg/gene_pathway.tsv",
         ...     organism_code="hsa",
         ... )
-        >>> selection = db.select_ids(["P12345"], kind_input_id="uniprot")
-        >>> isinstance(selection, KeggSelection)
-        True
+        >>> selection = db.select_ids(
+        ...     ["P12345", "MISSING"], kind_input_id="uniprot"
+        ... )
+        >>> selection.extract_mapping()["KeggGeneId"].unique().to_list()
+        ['hsa:1']
+        >>> selection.extract_unmapped_input_ids().to_dicts()
+        [{'InputId': 'MISSING'}]
     """
 
     dataset: KeggDb

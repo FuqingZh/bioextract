@@ -60,11 +60,18 @@ class EggnogResourceLimits:
             `None` disables the limit.
 
     Examples:
-        Limit one selection to 500 normalized protein IDs:
+        Reject an oversized eggNOG snapshot before opening SQLite:
 
-        >>> limits = EggnogResourceLimits(num_input_ids_max=500)
-        >>> limits.num_input_ids_max
-        500
+        >>> from tempfile import TemporaryDirectory
+        >>> with TemporaryDirectory() as dir_tmp:
+        ...     file_db = Path(dir_tmp) / "eggnog.db"
+        ...     _ = file_db.write_bytes(b"not sqlite")
+        ...     limits = EggnogResourceLimits(file_eggnog_db_bytes_max=1)
+        ...     try:
+        ...         EggnogDb.from_files(file_eggnog_db=file_db, limits=limits)
+        ...     except ValueError as error:
+        ...         print("exceeds configured size limit" in str(error))
+        True
     """
 
     file_eggnog_db_bytes_max: int | None = None
@@ -93,14 +100,16 @@ class EggnogDb:
     mapping and lookup frames are cached on the handle.
 
     Examples:
-        Open a local fixture snapshot and inspect its configured source:
+        Read one enriched protein-to-COG annotation:
 
         >>> db = EggnogDb.from_files(
         ...     file_eggnog_db="fixtures/eggnog/eggnog.db",
         ...     file_cog_fun="fixtures/eggnog/cog-24.fun.tab",
         ... )
-        >>> db.snapshot.file_eggnog_db.name
-        'eggnog.db'
+        >>> db.extract_mapping().select(
+        ...     "EggnogProteinId", "CogCategory", "CogName"
+        ... ).head(1).rows()
+        [('9606.ENSP1', 'E', 'Amino acid transport and metabolism')]
     """
 
     snapshot: _EggnogSnapshot
@@ -138,14 +147,16 @@ class EggnogDb:
             ValueError: If a supplied file exceeds its configured size limit.
 
         Examples:
-            Create a handle over an SQLite database and its COG lookup:
+            Enrich COG categories with names from the optional lookup:
 
             >>> db = EggnogDb.from_files(
             ...     file_eggnog_db="fixtures/eggnog/eggnog.db",
             ...     file_cog_fun="fixtures/eggnog/cog-24.fun.tab",
             ... )
-            >>> (db.snapshot.file_eggnog_db.name, db.snapshot.file_cog_fun.name)
-            ('eggnog.db', 'cog-24.fun.tab')
+            >>> db.extract_mapping().select(
+            ...     "CogCategory", "CogName"
+            ... ).head(1).rows()
+            [('E', 'Amino acid transport and metabolism')]
         """
         limits_resolved = EggnogResourceLimits() if limits is None else limits
         file_eggnog_db = _validate_file(
@@ -181,13 +192,16 @@ class EggnogDb:
             null.
 
         Examples:
-            Inspect the canonical column contract of a local fixture:
+            Preserve one row for each protein, OG, and COG-category match:
 
             >>> db = EggnogDb.from_files(
-            ...     file_eggnog_db="fixtures/eggnog/eggnog.db"
+            ...     file_eggnog_db="fixtures/eggnog/eggnog.db",
+            ...     file_cog_fun="fixtures/eggnog/cog-24.fun.tab",
             ... )
-            >>> db.extract_mapping().columns
-            ['EggnogProteinId', 'EggnogOgId', 'EggnogLevel', 'CogCategory', 'CogClass', 'CogName', 'OgDescription']
+            >>> db.extract_mapping().select(
+            ...     "EggnogProteinId", "EggnogOgId", "CogCategory"
+            ... ).rows()
+            [('9606.ENSP1', 'OG0001', 'E'), ('9606.ENSP1', 'OG0001', 'G'), ('9606.ENSP1', 'OG0002', 'S')]
         """
         if self._df_mapping is None:
             self._df_mapping = build_mapping_frame(
@@ -220,7 +234,7 @@ class EggnogDb:
                 count exceeds the configured limit.
 
         Examples:
-            Create an ungrouped protein-ID selection:
+            Return annotations only for the selected protein ID:
 
             >>> db = EggnogDb.from_files(
             ...     file_eggnog_db="fixtures/eggnog/eggnog.db"
@@ -228,8 +242,10 @@ class EggnogDb:
             >>> selection = db.select_ids(
             ...     ["9606.ENSP1"], kind_input_id="eggnog_protein"
             ... )
-            >>> selection.is_grouped
-            False
+            >>> selection.extract_mapping().select(
+            ...     "InputId", "EggnogOgId", "CogCategory"
+            ... ).rows()
+            [('9606.ENSP1', 'OG0001', 'E'), ('9606.ENSP1', 'OG0001', 'G'), ('9606.ENSP1', 'OG0002', 'S')]
         """
         validate_kind_input_id(kind_input_id)
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
@@ -268,17 +284,19 @@ class EggnogDb:
                 or input-count limit is exceeded.
 
         Examples:
-            Preserve comparison labels in a grouped selection:
+            Preserve a comparison label on every selected annotation row:
 
             >>> db = EggnogDb.from_files(
             ...     file_eggnog_db="fixtures/eggnog/eggnog.db"
             ... )
             >>> selection = db.select_groups(
-            ...     {"up": ["9606.ENSP1"], "down": ["9606.ENSP2"]},
+            ...     {"up": ["9606.ENSP1"], "down": ["9606.MISSING"]},
             ...     kind_input_id="eggnog_protein",
             ... )
-            >>> selection.is_grouped
-            True
+            >>> selection.extract_mapping().select(
+            ...     "GroupId", "CogCategory"
+            ... ).rows()
+            [('up', 'E'), ('up', 'G'), ('up', 'S')]
         """
         validate_kind_input_id(kind_input_id)
         grp_in_frames = create_group_input_frames(
@@ -402,14 +420,16 @@ class EggnogDb:
             the frame is empty but retains the expected lookup schema.
 
         Examples:
-            Read the configured lookup and inspect its stable columns:
+            Resolve a COG category to its display name:
 
             >>> db = EggnogDb.from_files(
             ...     file_eggnog_db="fixtures/eggnog/eggnog.db",
             ...     file_cog_fun="fixtures/eggnog/cog-24.fun.tab",
             ... )
-            >>> db.read_cog_fun().columns
-            ['CogCategory', 'CogClass', 'CogName']
+            >>> db.read_cog_fun().select(
+            ...     "CogCategory", "CogName"
+            ... ).head(1).rows()
+            [('E', 'Amino acid transport and metabolism')]
         """
         if self._df_cog_fun is None:
             self._df_cog_fun = read_cog_fun_frame(self.snapshot.file_cog_fun)
@@ -440,7 +460,7 @@ class EggnogSelection:
     independently after first extraction.
 
     Examples:
-        Create a selection through its dataset handle:
+        Inspect the COG categories retained by a selection:
 
         >>> db = EggnogDb.from_files(
         ...     file_eggnog_db="fixtures/eggnog/eggnog.db"
@@ -448,8 +468,8 @@ class EggnogSelection:
         >>> selection = db.select_ids(
         ...     ["9606.ENSP1"], kind_input_id="eggnog_protein"
         ... )
-        >>> isinstance(selection, EggnogSelection)
-        True
+        >>> selection.extract_mapping().get_column("CogCategory").to_list()
+        ['E', 'G', 'S']
     """
 
     dataset: EggnogDb
@@ -487,7 +507,7 @@ class EggnogSelection:
             expanded.
 
         Examples:
-            Extract a selection and inspect its provenance prefix:
+            Extract the normalized input alongside its COG categories:
 
             >>> db = EggnogDb.from_files(
             ...     file_eggnog_db="fixtures/eggnog/eggnog.db"
@@ -495,8 +515,10 @@ class EggnogSelection:
             >>> selection = db.select_ids(
             ...     ["9606.ENSP1"], kind_input_id="eggnog_protein"
             ... )
-            >>> selection.extract_mapping().columns[:3]
-            ['InputId', 'KindInputId', 'EggnogProteinId']
+            >>> selection.extract_mapping().select(
+            ...     "InputId", "CogCategory"
+            ... ).rows()
+            [('9606.ENSP1', 'E'), ('9606.ENSP1', 'G'), ('9606.ENSP1', 'S')]
         """
         if self._df_mapping is None:
             self._df_mapping = select_mapping_frame(

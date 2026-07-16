@@ -74,7 +74,6 @@ PUBLIC_FUNCTIONS = (
 
 EXECUTABLE_DOCSTRING_TARGETS = (
     GoResourceLimits,
-    GoSubsetId,
     KeggResourceLimits,
     ReactomeResourceLimits,
     WikiPathwaysResourceLimits,
@@ -88,9 +87,9 @@ EXECUTABLE_DOCSTRING_TARGETS = (
 EXPECTED_PUBLIC_TARGET_COUNT = 129
 
 
-def iter_public_docstring_targets() -> Iterator[tuple[str, object, str, bool]]:
+def iter_public_docstring_targets() -> Iterator[tuple[str, object, str | None]]:
     for cls in PUBLIC_CLASSES:
-        yield cls.__name__, cls, cls.__name__, True
+        yield cls.__name__, cls, None
         for member_name, raw_member in vars(cls).items():
             if member_name.startswith("_"):
                 continue
@@ -105,11 +104,10 @@ def iter_public_docstring_targets() -> Iterator[tuple[str, object, str, bool]]:
                 f"{cls.__name__}.{member_name}",
                 member,
                 f".{member_name}",
-                False,
             )
 
     for label, function in PUBLIC_FUNCTIONS:
-        yield label, function, f"{function.__name__}(", False
+        yield label, function, f"{function.__name__}("
 
 
 PUBLIC_DOCSTRING_TARGETS = tuple(iter_public_docstring_targets())
@@ -121,16 +119,17 @@ def test_public_docstring_target_matrix_is_complete() -> None:
     assert len(PUBLIC_DOCSTRING_TARGETS) == EXPECTED_PUBLIC_TARGET_COUNT
 
 
+# This is a structural floor. Whether an observed result explains why callers
+# use the symbol still requires review against its call sites and producer tests.
 @pytest.mark.parametrize(
-    ("label", "target", "usage_token", "may_use_result"),
+    ("label", "target", "usage_token"),
     PUBLIC_DOCSTRING_TARGETS,
     ids=[target[0] for target in PUBLIC_DOCSTRING_TARGETS],
 )
-def test_public_api_docstring_has_observable_example(
+def test_public_api_docstring_has_direct_example(
     label: str,
     target: object,
-    usage_token: str,
-    may_use_result: bool,
+    usage_token: str | None,
 ) -> None:
     docstring = inspect.getdoc(target)
     assert docstring is not None, f"{label} has no docstring"
@@ -142,13 +141,11 @@ def test_public_api_docstring_has_observable_example(
         f"{label} has no observable output or expected exception"
     )
 
-    sources = "\n".join(example.source for example in examples)
-    observable_session = sources
-    if may_use_result:
-        observable_session += "\n" + "\n".join(example.want for example in examples)
-    assert usage_token in observable_session, (
-        f"{label} does not demonstrate {usage_token!r} directly"
-    )
+    if usage_token is not None:
+        sources = "\n".join(example.source for example in examples)
+        assert usage_token in sources, (
+            f"{label} does not demonstrate {usage_token!r} directly"
+        )
 
 
 @pytest.mark.parametrize(

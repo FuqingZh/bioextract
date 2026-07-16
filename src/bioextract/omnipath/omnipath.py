@@ -51,8 +51,13 @@ class OmniPathDb:
         >>> db = OmniPathDb.from_files(
         ...     file_enzsub="fixtures/omnipath/enzsub.tsv"
         ... )
-        >>> db.select_ids(["P31749"]).extract_enzsub().columns
-        ['SourceId', 'TargetId', 'TargetSite', 'Modification']
+        >>> (
+        ...     db.select_ids(["P31749"])
+        ...     .extract_enzsub()
+        ...     .select("TargetId", "TargetSite")
+        ...     .to_dicts()
+        ... )
+        [{'TargetId': 'BAD', 'TargetSite': 'S136'}, {'TargetId': 'FOXO3', 'TargetSite': 'T32'}]
     """
 
     snapshot: _OmniPathSnapshot
@@ -230,13 +235,13 @@ class OmniPathDb:
             ValueError: If the normalized ID count exceeds the configured limit.
 
         Examples:
-            Create a single-query selection with all available resources:
+            Select the substrates linked to one kinase:
 
             >>> db = OmniPathDb.from_files(
             ...     file_enzsub="fixtures/omnipath/enzsub.tsv"
             ... )
-            >>> db.select_ids(["P31749"]).is_grouped
-            False
+            >>> db.select_ids(["P31749"]).extract_enzsub()["TargetId"].to_list()
+            ['BAD', 'FOXO3']
         """
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
         validate_count_limit(
@@ -273,8 +278,15 @@ class OmniPathDb:
             >>> db = OmniPathDb.from_files(
             ...     file_enzsub="fixtures/omnipath/enzsub.tsv"
             ... )
-            >>> db.select_groups({"up": ["P31749"], "down": ["MAPK1"]}).is_grouped
-            True
+            >>> (
+            ...     db.select_groups({"up": ["P31749"], "down": ["MAPK1"]})
+            ...     .extract_enzsub()
+            ...     .select("GroupId", "SourceId")
+            ...     .unique()
+            ...     .sort("GroupId")
+            ...     .to_dicts()
+            ... )
+            [{'GroupId': 'down', 'SourceId': 'MAPK1'}, {'GroupId': 'up', 'SourceId': 'P31749'}]
         """
         grp_in_frames = create_group_input_frames(
             group_to_ids,
@@ -304,14 +316,14 @@ class OmniPathSelection:
     """Selection handle for both single and grouped OmniPath queries.
 
     Examples:
-        Create a selection through its dataset handle:
+        Use a returned selection to materialize substrate relations:
 
         >>> db = OmniPathDb.from_files(
         ...     file_enzsub="fixtures/omnipath/enzsub.tsv"
         ... )
         >>> selection = db.select_ids(["P31749"])
-        >>> isinstance(selection, OmniPathSelection)
-        True
+        >>> selection.extract_enzsub()["TargetId"].to_list()
+        ['BAD', 'FOXO3']
     """
 
     dataset: OmniPathDb
@@ -360,15 +372,19 @@ class OmniPathSelection:
             ValueError: If the iterable is empty or contains another name.
 
         Examples:
-            Keep only enzyme-substrate relations:
+            Restrict unmapped-ID reporting to enzyme-substrate relations:
 
             >>> db = OmniPathDb.from_files(
             ...     file_enzsub="fixtures/omnipath/enzsub.tsv",
             ...     file_interactions="fixtures/omnipath/interactions.tsv",
             ... )
             >>> selection = db.select_ids(["P31749", "ERBB2"])
-            >>> sorted(selection.with_resources(["enzsub"]).resources_selected)
-            ['enzsub']
+            >>> (
+            ...     selection.with_resources(["enzsub"])
+            ...     .extract_unmapped_input_ids()
+            ...     .to_dicts()
+            ... )
+            [{'InputId': 'ERBB2'}]
         """
         resources_selected = frozenset(resources)
         resources_invalid = resources_selected.difference({"enzsub", "interactions"})
@@ -398,8 +414,13 @@ class OmniPathSelection:
             ...     file_enzsub="fixtures/omnipath/enzsub.tsv",
             ...     file_interactions="fixtures/omnipath/interactions.tsv",
             ... )
-            >>> sorted(db.select_ids(["P31749"]).with_enzsub().resources_selected)
-            ['enzsub']
+            >>> (
+            ...     db.select_ids(["P31749"])
+            ...     .with_enzsub()
+            ...     .extract_enzsub()["TargetId"]
+            ...     .to_list()
+            ... )
+            ['BAD', 'FOXO3']
         """
         return self.with_resources(["enzsub"])
 
@@ -411,10 +432,14 @@ class OmniPathSelection:
             ...     file_enzsub="fixtures/omnipath/enzsub.tsv",
             ...     file_interactions="fixtures/omnipath/interactions.tsv",
             ... )
-            >>> sorted(
-            ...     db.select_ids(["ERBB2"]).with_interactions().resources_selected
+            >>> (
+            ...     db.select_ids(["ERBB2"])
+            ...     .with_interactions()
+            ...     .extract_interactions()
+            ...     .select("SourceId", "TargetId")
+            ...     .to_dicts()
             ... )
-            ['interactions']
+            [{'SourceId': 'EGFR', 'TargetId': 'ERBB2'}]
         """
         return self.with_resources(["interactions"])
 
@@ -434,13 +459,13 @@ class OmniPathSelection:
                 columns.
 
         Examples:
-            Inspect the stable enzyme-substrate output schema:
+            Extract a substrate site and modification:
 
             >>> db = OmniPathDb.from_files(
             ...     file_enzsub="fixtures/omnipath/enzsub.tsv"
             ... )
-            >>> db.select_ids(["P31749"]).extract_enzsub().columns
-            ['SourceId', 'TargetId', 'TargetSite', 'Modification']
+            >>> db.select_ids(["P31749"]).extract_enzsub().head(1).to_dicts()
+            [{'SourceId': 'P31749', 'TargetId': 'BAD', 'TargetSite': 'S136', 'Modification': 'phosphorylation'}]
         """
         if "enzsub" not in self.resources_selected:
             raise ValueError(
@@ -473,13 +498,13 @@ class OmniPathSelection:
                 required columns.
 
         Examples:
-            Inspect the stable interaction output schema:
+            Extract one interaction and its direction flags:
 
             >>> db = OmniPathDb.from_files(
             ...     file_interactions="fixtures/omnipath/interactions.tsv"
             ... )
-            >>> db.select_ids(["ERBB2"]).extract_interactions().columns
-            ['SourceId', 'TargetId', 'IsDirected', 'IsStimulation', 'IsInhibition']
+            >>> db.select_ids(["ERBB2"]).extract_interactions().to_dicts()
+            [{'SourceId': 'EGFR', 'TargetId': 'ERBB2', 'IsDirected': False, 'IsStimulation': True, 'IsInhibition': False}]
         """
         if "interactions" not in self.resources_selected:
             raise ValueError(

@@ -71,11 +71,20 @@ class InterProResourceLimits:
             `None` disables the limit.
 
     Examples:
-        Limit one InterPro query to 1,000 normalized accessions:
+        Reject an oversized mapping snapshot before parsing it:
 
-        >>> limits = InterProResourceLimits(num_input_ids_max=1_000)
-        >>> limits.num_input_ids_max
-        1000
+        >>> from tempfile import TemporaryDirectory
+        >>> with TemporaryDirectory() as dir_tmp:
+        ...     file_mapping = Path(dir_tmp) / "protein2ipr.dat"
+        ...     _ = file_mapping.write_text("P12345\\tIPR000001\\n")
+        ...     limits = InterProResourceLimits(file_protein2ipr_bytes_max=1)
+        ...     try:
+        ...         InterProDb.from_mapping_files(
+        ...             file_protein2ipr=file_mapping, limits=limits
+        ...         )
+        ...     except ValueError as error:
+        ...         print("exceeds configured size limit" in str(error))
+        True
     """
 
     file_protein2ipr_bytes_max: int | None = None
@@ -103,14 +112,16 @@ class InterProDb:
     same-version XML and validates exact `InterProId + PfamId` relationships.
 
     Examples:
-        Open one versioned fixture snapshot and inspect its source names:
+        Read the first domain annotation from a versioned snapshot:
 
         >>> db = InterProDb.from_mapping_files(
         ...     file_protein2ipr="fixtures/interpro/108.0/raw/protein2ipr.dat.gz",
         ...     file_interpro_xml="fixtures/interpro/108.0/raw/interpro.xml.gz",
         ... )
-        >>> db.snapshot.file_protein2ipr.name
-        'protein2ipr.dat.gz'
+        >>> db.extract_mapping().select(
+        ...     "UniProtId", "InterProId", "MemberDb"
+        ... ).head(1).rows()
+        [('P12345', 'IPR000001', 'PFAM')]
     """
 
     snapshot: _InterProSnapshot
@@ -146,14 +157,16 @@ class InterProDb:
             ValueError: If a supplied file exceeds its configured size limit.
 
         Examples:
-            Create a handle over the raw mapping and same-version XML:
+            Use same-version XML to recover entry and member-database metadata:
 
             >>> db = InterProDb.from_mapping_files(
             ...     file_protein2ipr="fixtures/interpro/108.0/raw/protein2ipr.dat.gz",
             ...     file_interpro_xml="fixtures/interpro/108.0/raw/interpro.xml.gz",
             ... )
-            >>> db.snapshot.file_interpro_xml.name
-            'interpro.xml.gz'
+            >>> db.extract_mapping().select(
+            ...     "InterProId", "InterProType", "MemberDb"
+            ... ).head(1).rows()
+            [('IPR000001', 'Domain', 'PFAM')]
         """
         limits_resolved = InterProResourceLimits() if limits is None else limits
         file_protein2ipr = _validate_file(
@@ -197,14 +210,18 @@ class InterProDb:
                 count exceeds the configured limit.
 
         Examples:
-            Create an ungrouped UniProt selection:
+            Normalize a UniProt entry label before selecting its mapping rows:
 
             >>> db = InterProDb.from_mapping_files(
             ...     file_protein2ipr="fixtures/interpro/108.0/raw/protein2ipr.dat.gz"
             ... )
-            >>> selection = db.select_ids(["P12345"], kind_input_id="uniprot")
-            >>> selection.is_grouped
-            False
+            >>> selection = db.select_ids(
+            ...     ["sp|P12345|TEST_HUMAN"], kind_input_id="uniprot"
+            ... )
+            >>> selection.extract_mapping().select(
+            ...     "InputId", "InterProId", "MemberDbId"
+            ... ).rows()
+            [('P12345', 'IPR000001', 'PF00051'), ('P12345', 'IPR000001', 'SM00130')]
         """
         validate_kind_input_id(kind_input_id)
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
@@ -242,7 +259,7 @@ class InterProDb:
                 or input-count limit is exceeded.
 
         Examples:
-            Preserve comparison labels in a grouped selection:
+            Preserve comparison labels on every selected mapping row:
 
             >>> db = InterProDb.from_mapping_files(
             ...     file_protein2ipr="fixtures/interpro/108.0/raw/protein2ipr.dat.gz"
@@ -251,8 +268,10 @@ class InterProDb:
             ...     {"up": ["P12345"], "down": ["Q9Y243"]},
             ...     kind_input_id="uniprot",
             ... )
-            >>> selection.is_grouped
-            True
+            >>> selection.extract_mapping().select(
+            ...     "GroupId", "UniProtId"
+            ... ).unique().sort("GroupId").rows()
+            [('down', 'Q9Y243'), ('up', 'P12345')]
         """
         validate_kind_input_id(kind_input_id)
         grp_in_frames = create_group_input_frames(
@@ -286,13 +305,15 @@ class InterProDb:
             source was configured.
 
         Examples:
-            Inspect the canonical mapping columns:
+            Retain each member-database match and its coordinates:
 
             >>> db = InterProDb.from_mapping_files(
             ...     file_protein2ipr="fixtures/interpro/108.0/raw/protein2ipr.dat.gz"
             ... )
-            >>> db.extract_mapping().columns
-            ['UniProtId', 'InterProId', 'InterProName', 'InterProType', 'MemberDb', 'MemberDbId', 'Start', 'End']
+            >>> db.extract_mapping().select(
+            ...     "UniProtId", "MemberDbId", "Start", "End"
+            ... ).head(2).rows()
+            [('P12345', 'PF00051', 10, 80), ('P12345', 'SM00130', 12, 76)]
         """
         if self._df_mapping is None:
             self._df_mapping = read_mapping_frame(
@@ -518,8 +539,8 @@ class InterProDb:
             ...     file_protein2ipr="fixtures/interpro/108.0/raw/protein2ipr.dat.gz",
             ...     file_interpro_xml="fixtures/interpro/108.0/raw/interpro.xml.gz",
             ... )
-            >>> db.xml_frame("entry").columns
-            ['InterProId', 'InterProType']
+            >>> db.xml_frame("entry").rows()
+            [('IPR000001', 'Domain'), ('IPR000002', 'Homologous_superfamily')]
         """
         if self._frames_xml is None:
             self._frames_xml = read_interpro_xml_frames(self.snapshot.file_interpro_xml)
@@ -573,14 +594,14 @@ class InterProSelection:
     independently after first extraction.
 
     Examples:
-        Create a selection through its dataset handle:
+        Inspect the InterPro IDs retained by a selection:
 
         >>> db = InterProDb.from_mapping_files(
         ...     file_protein2ipr="fixtures/interpro/108.0/raw/protein2ipr.dat.gz"
         ... )
         >>> selection = db.select_ids(["P12345"], kind_input_id="uniprot")
-        >>> isinstance(selection, InterProSelection)
-        True
+        >>> selection.extract_mapping().get_column("InterProId").unique().to_list()
+        ['IPR000001']
     """
 
     dataset: InterProDb
@@ -618,14 +639,16 @@ class InterProSelection:
             expanded.
 
         Examples:
-            Extract a selection and inspect its provenance prefix:
+            Extract the normalized input alongside its member-database rows:
 
             >>> db = InterProDb.from_mapping_files(
             ...     file_protein2ipr="fixtures/interpro/108.0/raw/protein2ipr.dat.gz"
             ... )
             >>> selection = db.select_ids(["P12345"], kind_input_id="uniprot")
-            >>> selection.extract_mapping().columns[:3]
-            ['InputId', 'KindInputId', 'UniProtId']
+            >>> selection.extract_mapping().select(
+            ...     "InputId", "MemberDbId"
+            ... ).rows()
+            [('P12345', 'PF00051'), ('P12345', 'SM00130')]
         """
         if self._df_mapping is None:
             self._df_mapping = select_mapping_frame(

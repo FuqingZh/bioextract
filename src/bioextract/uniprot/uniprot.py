@@ -86,11 +86,20 @@ class UniprotResourceLimits:
             source, in bytes. `None` disables the limit.
 
     Examples:
-        Cap a local flat-file snapshot at two gigabytes:
+        Reject an oversized flat-file snapshot before parsing it:
 
-        >>> limits = UniprotResourceLimits(file_dat_bytes_max=2 * 1024**3)
-        >>> limits.file_dat_bytes_max
-        2147483648
+        >>> from tempfile import TemporaryDirectory
+        >>> with TemporaryDirectory() as dir_tmp:
+        ...     file_dat = Path(dir_tmp) / "uniprot_sprot.dat"
+        ...     _ = file_dat.write_text("ID   P53_HUMAN\\n", encoding="utf-8")
+        ...     limits = UniprotResourceLimits(file_dat_bytes_max=1)
+        ...     try:
+        ...         UniprotDb.from_dat(
+        ...             file_dat=file_dat, source_db="sprot", limits=limits
+        ...         )
+        ...     except ValueError as error:
+        ...         print("exceeds configured size limit" in str(error))
+        True
     """
 
     file_idmapping_selected_bytes_max: int | None = None
@@ -120,22 +129,26 @@ class UniprotDb:
     are validated, but mapping data and schemas are not scanned until requested.
 
     Examples:
-        Scope an idmapping resource before extraction:
+        Extract the human accessions from an idmapping resource:
 
         >>> db = UniprotDb.from_files(
         ...     file_idmapping_selected="fixtures/uniprot/idmapping_selected.tab.gz"
         ... )
-        >>> db.snapshot.file_idmapping_selected.name
-        'idmapping_selected.tab.gz'
+        >>> db.with_taxids("9606").extract_mapping().select(
+        ...     "UniProtId", "GeneId"
+        ... ).rows()
+        [('P04637', '7157'), ('Q9Y243', '10000')]
 
-        Read curated annotations from a UniProtKB flat file:
+        Resolve a secondary accession to its eggNOG cross-references:
 
         >>> kb = UniprotDb.from_dat(
         ...     file_dat="fixtures/uniprot/uniprot_sprot.dat.gz",
-        ...     source_db="Swiss-Prot",
+        ...     source_db="sprot",
         ... )
-        >>> kb.snapshot.source_db
-        'Swiss-Prot'
+        >>> kb.select_eggnog_xref_ids(["Q11111"]).select(
+        ...     "PrimaryUniProtId", "EggnogOgId"
+        ... ).rows()
+        [('P12345', 'ENOG502ABC'), ('P12345', 'KOG0001')]
     """
 
     snapshot: _UniprotSnapshot
@@ -167,13 +180,15 @@ class UniprotDb:
                 no parquet files, or a configured file-size limit is exceeded.
 
         Examples:
-            Open a compressed idmapping fixture:
+            Read mouse records from a compressed idmapping source:
 
             >>> db = UniprotDb.from_files(
             ...     file_idmapping_selected="fixtures/uniprot/idmapping_selected.tab.gz"
             ... )
-            >>> db.snapshot.file_idmapping_selected.name
-            'idmapping_selected.tab.gz'
+            >>> db.with_taxids("10090").extract_mapping().select(
+            ...     "UniProtId", "TaxId"
+            ... ).rows()
+            [('P31750', '10090')]
         """
         path = Path(file_idmapping_selected)
         if not path.exists():
@@ -224,14 +239,16 @@ class UniprotDb:
             `write_tidy()`; use `from_files()` for those operations.
 
         Examples:
-            Open a curated UniProtKB fixture with an explicit provenance label:
+            Extract eggNOG identifiers from a UniProtKB flat file:
 
             >>> db = UniprotDb.from_dat(
             ...     file_dat="fixtures/uniprot/uniprot_sprot.dat.gz",
-            ...     source_db="Swiss-Prot",
+            ...     source_db="sprot",
             ... )
-            >>> db.snapshot.source_db
-            'Swiss-Prot'
+            >>> db.extract_eggnog_xref().select(
+            ...     "EggnogOgId", "EggnogLevel"
+            ... ).head(2).rows()
+            [('ENOG502ABC', 'Metazoa'), ('KOG0001', 'Eukaryota')]
         """
         source_db = str(source_db).strip()
         if not source_db:
@@ -268,13 +285,15 @@ class UniprotDb:
                 empty value, or normalized taxids are duplicated.
 
         Examples:
-            Scope a mapping snapshot to human and mouse records:
+            Limit extraction to human records:
 
             >>> db = UniprotDb.from_files(
             ...     file_idmapping_selected="fixtures/uniprot/idmapping_selected.tab.gz"
             ... )
-            >>> db.with_taxids("9606", 10090).snapshot.taxids
-            ('9606', '10090')
+            >>> db.with_taxids("9606").extract_mapping().select(
+            ...     "UniProtId", "TaxId"
+            ... ).rows()
+            [('P04637', '9606'), ('Q9Y243', '9606')]
         """
         self._require_idmapping_snapshot("scope UniProt idmapping by taxid")
         return UniprotDb(
@@ -297,6 +316,7 @@ class UniprotDb:
             Normalize a compact raw fixture, then validate the resulting
             parquet without collecting it:
 
+            >>> from pathlib import Path
             >>> from tempfile import TemporaryDirectory
             >>> raw_db = UniprotDb.from_files(
             ...     file_idmapping_selected="fixtures/uniprot/idmapping_selected.tab.gz"
@@ -324,13 +344,15 @@ class UniprotDb:
                 incomplete.
 
         Examples:
-            Extract human rows and inspect the canonical column prefix:
+            Extract the identifiers retained by a human taxid scope:
 
             >>> db = UniprotDb.from_files(
             ...     file_idmapping_selected="fixtures/uniprot/idmapping_selected.tab.gz"
             ... )
-            >>> db.with_taxids("9606").extract_mapping().columns[:3]
-            ['UniProtId', 'UniProtEntryName', 'GeneId']
+            >>> db.with_taxids("9606").extract_mapping().select(
+            ...     "UniProtId", "GeneId", "TaxId"
+            ... ).rows()
+            [('P04637', '7157', '9606'), ('Q9Y243', '10000', '9606')]
         """
         self._require_idmapping_snapshot("extract UniProt idmapping")
         lf_mapping = self._scan_mapping()
@@ -352,14 +374,16 @@ class UniprotDb:
             ValueError: If this is an idmapping handle.
 
         Examples:
-            Extract the canonical eggNOG cross-reference columns:
+            Retain each eggNOG identifier and its taxonomic level:
 
             >>> db = UniprotDb.from_dat(
             ...     file_dat="fixtures/uniprot/uniprot_sprot.dat.gz",
-            ...     source_db="Swiss-Prot",
+            ...     source_db="sprot",
             ... )
-            >>> db.extract_eggnog_xref().columns
-            ['UniProtId', 'PrimaryUniProtId', 'IsPrimaryAccession', 'EggnogOgId', 'EggnogLevel', 'SourceDb']
+            >>> db.extract_eggnog_xref().select(
+            ...     "UniProtId", "EggnogOgId", "EggnogLevel"
+            ... ).head(2).rows()
+            [('P12345', 'ENOG502ABC', 'Metazoa'), ('P12345', 'KOG0001', 'Eukaryota')]
         """
         self._require_dat_snapshot("extract UniProt eggNOG xrefs")
         return read_eggnog_xref_frame(
@@ -385,10 +409,12 @@ class UniprotDb:
 
             >>> db = UniprotDb.from_dat(
             ...     file_dat="fixtures/uniprot/uniprot_sprot.dat.gz",
-            ...     source_db="Swiss-Prot",
+            ...     source_db="sprot",
             ... )
-            >>> db.select_eggnog_xref_ids(["Q11111"]).get_column("UniProtId").unique().to_list()
-            ['Q11111']
+            >>> db.select_eggnog_xref_ids(["Q11111"]).select(
+            ...     "UniProtId", "PrimaryUniProtId", "EggnogOgId"
+            ... ).rows()
+            [('Q11111', 'P12345', 'ENOG502ABC'), ('Q11111', 'P12345', 'KOG0001')]
         """
         self._require_dat_snapshot("select UniProt eggNOG xrefs")
         input_ids = {str(input_id).strip() for input_id in ids if str(input_id).strip()}
@@ -410,14 +436,16 @@ class UniprotDb:
             ValueError: If this is an idmapping handle.
 
         Examples:
-            Inspect the stable identity prefix of curated location rows:
+            Read curated locations together with their ECO evidence:
 
             >>> db = UniprotDb.from_dat(
-            ...     file_dat="fixtures/uniprot/uniprot_sprot.dat.gz",
-            ...     source_db="Swiss-Prot",
+            ...     file_dat="fixtures/uniprot/uniprot_sprot_subcellular.dat.gz",
+            ...     source_db="sprot",
             ... )
-            >>> db.extract_subcellular_location().columns[:3]
-            ['UniProtId', 'PrimaryUniProtId', 'UniProtEntryName']
+            >>> db.extract_subcellular_location().select(
+            ...     "UniProtId", "SubcellularLocation", "EvidenceCode"
+            ... ).head(2).rows()
+            [('P12345', 'Cytoplasm', 'ECO:0000269'), ('P12345', 'Nucleus', 'ECO:0000305')]
         """
         self._require_dat_snapshot("extract UniProt subcellular locations")
         return read_subcellular_location_frame(

@@ -26,11 +26,13 @@ def build_tidy_frames(file_in: Path) -> dict[str, pl.DataFrame]:
             malformed.
 
     Examples:
-        Build the pathway frame from a compact local hierarchy:
+        Parse the pathway, entry, and KO identifiers from a compact hierarchy:
 
         >>> frames = build_tidy_frames(Path("data/kegg/tcar00001.json"))
-        >>> (sorted(frames), frames["pathway"].height)
-        (['pathway'], 2)
+        >>> frames["pathway"].select(
+        ...     "pathway_level3_kegg_id", "entry_id", "ko_id"
+        ... ).row(0, named=True)
+        {'pathway_level3_kegg_id': 'tcar00010', 'entry_id': 'U0034_04525', 'ko_id': 'K00845'}
     """
     brite_buffer = read_brite(file_in)
     df_pathway = build_deduped_frame(

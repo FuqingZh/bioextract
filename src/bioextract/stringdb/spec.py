@@ -15,11 +15,22 @@ class StringResourceLimits:
     check.
 
     Examples:
-        Limit one STRING query to 500 normalized identifiers:
+        Reject an oversized alias snapshot before parsing it:
 
-        >>> limits = StringResourceLimits(num_input_ids_max=500)
-        >>> limits.num_input_ids_max
-        500
+        >>> from pathlib import Path
+        >>> from tempfile import TemporaryDirectory
+        >>> from bioextract.stringdb import StringDb
+        >>> with TemporaryDirectory() as dir_tmp:
+        ...     file_aliases = Path(dir_tmp) / "9606.protein.aliases.v12.0.txt"
+        ...     _ = file_aliases.write_text(
+        ...         "string_protein_id\\talias\\tsource\\n"
+        ...     )
+        ...     limits = StringResourceLimits(file_aliases_bytes_max=1)
+        ...     try:
+        ...         StringDb.from_files(file_aliases=file_aliases, limits=limits)
+        ...     except ValueError as error:
+        ...         print("exceeds configured size limit" in str(error))
+        True
     """
 
     file_aliases_bytes_max: int | None = 512 * 1024 * 1024
