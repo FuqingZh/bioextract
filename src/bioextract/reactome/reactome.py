@@ -51,11 +51,25 @@ class ReactomeResourceLimits:
     ``None`` disables the corresponding limit.
 
     Examples:
-        Limit grouped selections to 20 groups:
+        Reject an oversized mapping snapshot before parsing it:
 
-        >>> limits = ReactomeResourceLimits(num_groups_max=20)
-        >>> limits.num_groups_max
-        20
+        >>> from tempfile import TemporaryDirectory
+        >>> with TemporaryDirectory() as dir_tmp:
+        ...     file_mapping = Path(dir_tmp) / "UniProt2Reactome.txt"
+        ...     _ = file_mapping.write_text(
+        ...         "P04637\\tR-HSA-1\\n", encoding="utf-8"
+        ...     )
+        ...     limits = ReactomeResourceLimits(
+        ...         file_uniprot2reactome_bytes_max=1
+        ...     )
+        ...     try:
+        ...         ReactomeDb.from_files(
+        ...             file_uniprot2reactome=file_mapping,
+        ...             limits=limits,
+        ...         )
+        ...     except ValueError as error:
+        ...         print("exceeds configured size limit" in str(error))
+        True
     """
 
     file_uniprot2reactome_bytes_max: int | None = None
@@ -97,10 +111,13 @@ class ReactomeDb:
         ...     file_uniprot2reactome="data/reactome/UniProt2Reactome.txt",
         ...     file_pathways="data/reactome/ReactomePathways.txt",
         ... )
-        >>> db.with_species("Homo sapiens").select_ids(
-        ...     ["P04637"]
-        ... ).extract_mapping().height
-        2
+        >>> (
+        ...     db.with_species("Homo sapiens")
+        ...     .select_ids(["P04637"])
+        ...     .extract_mapping()["ReactomePathwayId"]
+        ...     .to_list()
+        ... )
+        ['R-HSA-6798695', 'R-HSA-69563']
     """
 
     snapshot: _ReactomeSnapshot
@@ -201,13 +218,20 @@ class ReactomeDb:
             ValueError: If the normalized species string is empty.
 
         Examples:
-            Create a human-only view without mutating the original handle:
+            Exclude pathways from other species:
 
             >>> db = ReactomeDb.from_files(
-            ...     file_pathways="data/reactome/ReactomePathways.txt"
+            ...     file_uniprot2reactome="data/reactome/UniProt2Reactome.txt"
             ... )
-            >>> db.with_species("Homo sapiens").species
-            'Homo sapiens'
+            >>> (
+            ...     db.with_species("Homo sapiens")
+            ...     .build_tidy()
+            ...     .frames["mapping"]
+            ...     .collect()["Species"]
+            ...     .unique()
+            ...     .to_list()
+            ... )
+            ['Homo sapiens']
         """
         species_normalized = str(species).strip()
         if not species_normalized:
@@ -233,13 +257,18 @@ class ReactomeDb:
                 limit.
 
         Examples:
-            Create an ungrouped UniProt selection:
+            Normalize a UniProt pipe ID and retain an unmapped accession:
 
             >>> db = ReactomeDb.from_files(
             ...     file_uniprot2reactome="data/reactome/UniProt2Reactome.txt"
             ... )
-            >>> db.select_ids(["P04637"]).is_grouped
-            False
+            >>> selection = db.select_ids(
+            ...     ["sp|P04637|P53_HUMAN", "MISSING"]
+            ... )
+            >>> selection.extract_mapping()["InputId"].unique().to_list()
+            ['P04637']
+            >>> selection.extract_unmapped_input_ids().to_dicts()
+            [{'InputId': 'MISSING'}]
         """
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
         validate_count_limit(
@@ -270,13 +299,23 @@ class ReactomeDb:
                 IDs are invalid after normalization.
 
         Examples:
-            Create a grouped UniProt selection:
+            Keep mapped and unmapped accessions in their original groups:
 
             >>> db = ReactomeDb.from_files(
             ...     file_uniprot2reactome="data/reactome/UniProt2Reactome.txt"
             ... )
-            >>> db.select_groups({"tumor": ["P04637"]}).is_grouped
-            True
+            >>> selection = db.select_groups(
+            ...     {"tumor": ["P04637"], "control": ["MISSING"]}
+            ... )
+            >>> (
+            ...     selection.extract_mapping()
+            ...     .select("GroupId", "InputId")
+            ...     .unique()
+            ...     .to_dicts()
+            ... )
+            [{'GroupId': 'tumor', 'InputId': 'P04637'}]
+            >>> selection.extract_unmapped_input_ids().to_dicts()
+            [{'GroupId': 'control', 'InputId': 'MISSING'}]
         """
         grp_in_frames = create_group_input_frames(
             group_to_ids,
@@ -314,11 +353,11 @@ class ReactomeDb:
             >>> db = ReactomeDb.from_files(
             ...     file_uniprot2reactome="data/reactome/UniProt2Reactome.txt"
             ... ).with_species("Homo sapiens")
-            >>> db.extract_term2gene().shape
-            (3, 2)
+            >>> db.extract_term2gene().head(2).to_dicts()
+            [{'ReactomePathwayId': 'R-HSA-6798695', 'UniProtId': 'P04637'}, {'ReactomePathwayId': 'R-HSA-6798695', 'UniProtId': 'Q9Y243'}]
         """
         if self._df_term2gene is None:
-            self._df_term2gene = extract_term2gene_frame(self.mapping_frame())
+            self._df_term2gene = extract_term2gene_frame(self._mapping_frame())
         return self._df_term2gene
 
     def extract_term2name(self) -> pl.DataFrame:
@@ -336,8 +375,13 @@ class ReactomeDb:
             >>> db = ReactomeDb.from_files(
             ...     file_pathways="data/reactome/ReactomePathways.txt"
             ... ).with_species("Homo sapiens")
-            >>> db.extract_term2name().shape
-            (3, 3)
+            >>> (
+            ...     db.extract_term2name()
+            ...     .select("ReactomePathwayId", "PathwayName")
+            ...     .head(1)
+            ...     .to_dicts()
+            ... )
+            [{'ReactomePathwayId': 'R-HSA-1640170', 'PathwayName': 'Cell Cycle'}]
         """
         if self._df_term2name is None:
             self._df_term2name = extract_term2name_frame(self._pathway_frame())
@@ -360,8 +404,8 @@ class ReactomeDb:
             ...     file_pathways="data/reactome/ReactomePathways.txt",
             ...     file_relations="data/reactome/ReactomePathwaysRelation.txt",
             ... ).with_species("Homo sapiens")
-            >>> db.extract_pathway_relations().height
-            2
+            >>> db.extract_pathway_relations().head(1).to_dicts()
+            [{'ParentReactomePathwayId': 'R-HSA-1640170', 'ChildReactomePathwayId': 'R-HSA-6798695'}]
         """
         if self.snapshot.file_relations is None:
             raise ValueError("Cannot extract Reactome relations without relations file")
@@ -468,20 +512,16 @@ class ReactomeDb:
             should_hash_assets=should_hash_assets,
         )
 
-    def mapping_frame(self) -> pl.DataFrame:
-        """Extract the raw UniProt-to-Reactome mapping in the current scope.
+    def _mapping_frame(self) -> pl.DataFrame:
+        """Return and cache the normalized mapping in the current scope.
 
         Raises:
             ValueError: If the UniProt-to-Reactome mapping file was not supplied.
 
-        Examples:
-            Materialize the species-scoped raw mapping table:
-
-            >>> db = ReactomeDb.from_files(
-            ...     file_uniprot2reactome="data/reactome/UniProt2Reactome.txt"
-            ... ).with_species("Homo sapiens")
-            >>> db.mapping_frame().shape
-            (3, 6)
+        Notes:
+            Public extractors own the stable output contracts. Keep this raw
+            normalized frame private so parser columns cannot become an
+            accidental API.
         """
         if self.snapshot.file_uniprot2reactome is None:
             raise ValueError(
@@ -532,7 +572,7 @@ class ReactomeDb:
     def _build_tidy_frame(self, frame_name: str) -> pl.DataFrame:
         match frame_name:
             case "mapping":
-                return self.mapping_frame()
+                return self._mapping_frame()
             case "pathway":
                 return self._pathway_frame()
             case "relation":
@@ -573,14 +613,19 @@ class ReactomeSelection:
     `InputId`; grouped selections prepend `GroupId`.
 
     Examples:
-        Create a selection through a local dataset handle:
+        Use a returned selection to materialize matched pathways:
 
         >>> db = ReactomeDb.from_files(
         ...     file_uniprot2reactome="data/reactome/UniProt2Reactome.txt"
         ... )
         >>> selection = db.select_ids(["P04637"])
-        >>> isinstance(selection, ReactomeSelection)
-        True
+        >>> (
+        ...     selection.extract_mapping()
+        ...     .select("InputId", "ReactomePathwayId")
+        ...     .head(1)
+        ...     .to_dicts()
+        ... )
+        [{'InputId': 'P04637', 'ReactomePathwayId': 'R-HSA-6798695'}]
     """
 
     dataset: ReactomeDb
@@ -625,7 +670,7 @@ class ReactomeSelection:
         """
         if self._df_mapping is None:
             self._df_mapping = extract_mapping_frame(
-                self.dataset.mapping_frame(),
+                self.dataset._mapping_frame(),
                 self._df_input_ids,
                 cols_group_id=self._col_group_id,
             )

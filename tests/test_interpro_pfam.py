@@ -146,9 +146,11 @@ def test_build_pfam_tidy_omits_source_hashes_by_default(tmp_path: Path) -> None:
         file_interpro_xml=file_xml,
     )
     dataset = db.build_tidy(config="pfam")
-    manifest = dataset.build_manifest([])
+    report = dataset.write(tmp_path / "out", should_write_manifest=True)
 
     assert dataset.schema_version == "interpro-pfam-v0.1"
+    assert report.manifest is not None
+    manifest = report.manifest
     assert all("sha256" not in source for source in manifest["sources"])
     assert all(isinstance(frame, pl.LazyFrame) for frame in dataset.frames.values())
     assert dataset.frames["protein_term"].collect_schema() == pl.Schema(

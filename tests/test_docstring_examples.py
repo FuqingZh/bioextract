@@ -7,13 +7,11 @@ from collections.abc import Iterator
 
 import pytest
 
+import bioextract.go.ontology as go_ontology
 from bioextract._tidy import TidyDataset
 from bioextract.eggnog import EggnogDb, EggnogResourceLimits, EggnogSelection
 from bioextract.go import GoDb, GoResourceLimits, GoSubsetId
-from bioextract.go.ontology import (
-    build_tidy_frames as build_go_tidy_frames,
-    run_tidy_go_ontology,
-)
+from bioextract.go.ontology import run_tidy_go_ontology
 from bioextract.interpro import (
     InterProDb,
     InterProResourceLimits,
@@ -66,7 +64,6 @@ PUBLIC_CLASSES = (
 )
 
 PUBLIC_FUNCTIONS = (
-    ("go.ontology.build_tidy_frames", build_go_tidy_frames),
     ("go.ontology.run_tidy_go_ontology", run_tidy_go_ontology),
     ("kegg.brite.build_tidy_frames", build_kegg_tidy_frames),
     ("kegg.brite.run_tidy_kegg_brite", run_tidy_kegg_brite),
@@ -84,7 +81,7 @@ EXECUTABLE_DOCSTRING_TARGETS = (
     OmniPathResourceLimits,
 )
 
-EXPECTED_PUBLIC_TARGET_COUNT = 129
+EXPECTED_PUBLIC_TARGET_COUNT = 124
 
 
 def iter_public_docstring_targets() -> Iterator[tuple[str, object, str | None]]:
@@ -115,8 +112,16 @@ PUBLIC_DOCSTRING_TARGETS = tuple(iter_public_docstring_targets())
 
 def test_public_docstring_target_matrix_is_complete() -> None:
     assert len(PUBLIC_CLASSES) == 27
-    assert len(PUBLIC_FUNCTIONS) == 4
+    assert len(PUBLIC_FUNCTIONS) == 3
     assert len(PUBLIC_DOCSTRING_TARGETS) == EXPECTED_PUBLIC_TARGET_COUNT
+
+
+def test_maintenance_helpers_are_not_public_api() -> None:
+    assert not hasattr(TidyDataset, "build_manifest")
+    assert not hasattr(ReactomeDb, "mapping_frame")
+    assert not hasattr(WikiPathwaysDb, "lazy_frame")
+    assert not hasattr(StringDb, "alias_schema")
+    assert not hasattr(go_ontology, "build_tidy_frames")
 
 
 # This is a structural floor. Whether an observed result explains why callers

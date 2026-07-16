@@ -112,7 +112,7 @@ def generate_xref_data_by_cols(go_id: str, xrefs: list[str]) -> XrefColumnBuffer
 # #endregion
 ################################################################################
 # #region FrameBuilders
-def build_tidy_frames(
+def _build_tidy_frames(
     records: Iterable[TermRecord],
     *,
     subset_definitions: Iterable[SubsetDefinitionRecord] = (),
@@ -134,21 +134,9 @@ def build_tidy_frames(
             edges contain a cycle, which prevents ancestor and depth
             derivation.
 
-    Examples:
-        Build all frames from one root term record:
-
-        >>> from bioextract.go.ontology.model import TermRecord
-        >>> root = TermRecord(
-        ...     go_id="GO:0000001",
-        ...     term_name="root process",
-        ...     namespace="biological_process",
-        ...     definition=None,
-        ...     is_obsolete=False,
-        ...     comment=None,
-        ... )
-        >>> frames = build_tidy_frames([root])
-        >>> (len(frames), frames["term"].height)
-        (9, 1)
+    Notes:
+        This builder consumes parser-owned record types. Callers should use
+        `GoDb.build_tidy()` rather than depend on those internal models.
     """
     term_data = TermColumnBuffer()
     edge_data = EdgeColumnBuffer()
@@ -302,7 +290,7 @@ def run_tidy_go_ontology(file_in: Path, dir_out: Path) -> None:
         True
     """
     records = scan_obo_term_records(file_in)
-    frames = build_tidy_frames(
+    frames = _build_tidy_frames(
         records,
         subset_definitions=read_obo_subset_definitions(file_in),
     )

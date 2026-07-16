@@ -112,8 +112,8 @@ class TidyDataset:
         ...     build_id_prefix="example",
         ...     assets=(TidyAsset("term.parquet", "canonical", "term"),),
         ... )
-        >>> sorted(dataset.frames)
-        ['term']
+        >>> dataset.frames["term"].collect().to_dicts()
+        [{'id': 'T1'}]
     """
 
     frames: Mapping[str, pl.LazyFrame]
@@ -189,7 +189,7 @@ class TidyDataset:
             )
 
         manifest = (
-            self.build_manifest(entries_manifest) if should_write_manifest else None
+            self._build_manifest(entries_manifest) if should_write_manifest else None
         )
         if manifest is not None:
             (dir_out / "manifest.json").write_text(
@@ -202,7 +202,7 @@ class TidyDataset:
             manifest=manifest,
         )
 
-    def build_manifest(
+    def _build_manifest(
         self,
         assets: list[TidyManifestAsset],
     ) -> TidyManifest:
@@ -215,28 +215,10 @@ class TidyDataset:
         Returns:
             JSON-compatible manifest content with a UTC build timestamp.
 
-        Examples:
-            Build manifest metadata from a local source file:
-
-            >>> from tempfile import TemporaryDirectory
-            >>> with TemporaryDirectory() as dir_source:
-            ...     source_path = Path(dir_source) / "source.tsv"
-            ...     _ = source_path.write_text("id\\nT1\\n", encoding="utf-8")
-            ...     dataset = TidyDataset(
-            ...         frames={},
-            ...         source=TidySource(source_path, "text/tab-separated-values"),
-            ...         schema_version="example-v1",
-            ...         build_id_prefix="example",
-            ...         assets=(),
-            ...     )
-            ...     manifest = dataset.build_manifest([])
-            ...     manifest["schema_version"]
-            'example-v1'
-
         Notes:
-            This method does not read assets to calculate hashes. Callers must
-            supply any source or asset digest that should appear in the
-            manifest.
+            Manifest construction stays behind `write()` so callers cannot
+            bypass asset persistence or request hashes that were never
+            calculated. This method does not read assets to calculate hashes.
         """
         timestamp = datetime.now(UTC)
         return {

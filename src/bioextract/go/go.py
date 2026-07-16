@@ -23,7 +23,7 @@ from .ontology.parse import (
     scan_obo_term_records,
     validate_go_id,
 )
-from .ontology.tidy import build_tidy_frames, extract_subcell_frame
+from .ontology.tidy import _build_tidy_frames, extract_subcell_frame
 
 __all__ = [
     "GoDb",
@@ -54,10 +54,13 @@ class GoSubsetId(StrEnum):
     subsets added outside this convenience enum.
 
     Examples:
-        Use the built-in generic GO slim identifier:
+        Select the generic GO slim terms without spelling its raw subset ID:
 
-        >>> GoSubsetId.GOSLIM_GENERIC.value
-        'goslim_generic'
+        >>> db = GoDb.from_obo("data/go-basic.obo")
+        >>> db.select_terms(
+        ...     subset_id=GoSubsetId.GOSLIM_GENERIC
+        ... )["go_id"].to_list()
+        ['GO:0000001', 'GO:0000002', 'GO:0005575', 'GO:0005737']
     """
 
     GOSLIM_GENERIC = GO_SUBSET_GOSLIM_GENERIC
@@ -72,11 +75,18 @@ class GoResourceLimits:
             to disable the size check.
 
     Examples:
-        Limit the accepted OBO snapshot to one mebibyte:
+        Reject a snapshot before parsing when it exceeds the configured limit:
 
-        >>> limits = GoResourceLimits(file_obo_bytes_max=1_048_576)
-        >>> limits.file_obo_bytes_max
-        1048576
+        >>> from tempfile import TemporaryDirectory
+        >>> with TemporaryDirectory() as dir_tmp:
+        ...     file_obo = Path(dir_tmp) / "go-basic.obo"
+        ...     _ = file_obo.write_text("format-version: 1.2\\n", encoding="utf-8")
+        ...     limits = GoResourceLimits(file_obo_bytes_max=1)
+        ...     try:
+        ...         GoDb.from_obo(file_obo, limits=limits)
+        ...     except ValueError as error:
+        ...         print("exceeds configured size limit" in str(error))
+        True
     """
 
     file_obo_bytes_max: int | None = None
@@ -104,11 +114,15 @@ class GoDb:
     view over cellular component terms for subcellular-location workflows.
 
     Examples:
-        Open a compact local snapshot:
+        Read a hierarchical edge from a compact local snapshot:
 
         >>> db = GoDb.from_obo("data/go-basic.obo")
-        >>> len(db.build_tidy().frames)
-        9
+        >>> db.build_tidy().frames["edge"].filter(
+        ...     pl.col("relation_type") == "is_a"
+        ... ).select(
+        ...     "child_go_id", "parent_go_id", "relation_type"
+        ... ).head(1).collect().to_dicts()
+        [{'child_go_id': 'GO:0000002', 'parent_go_id': 'GO:0000001', 'relation_type': 'is_a'}]
     """
 
     snapshot: _GoSnapshot
@@ -140,11 +154,11 @@ class GoDb:
             ValueError: If the configured file-size limit is exceeded.
 
         Examples:
-            Open a local GO fixture without imposing a size limit:
+            Open a local GO fixture and read one parsed term:
 
             >>> db = GoDb.from_obo("data/go-basic.obo")
-            >>> db.limits.file_obo_bytes_max is None
-            True
+            >>> db.select_terms(term_ids=["GO:0000002"])["term_name"].item()
+            'child process'
         """
         file_obo = Path(file_obo)
         if not file_obo.exists():
@@ -180,7 +194,7 @@ class GoDb:
         subset_definitions = read_obo_subset_definitions(self.snapshot.file_obo)
         frames = {
             frame_name: frame.lazy()
-            for frame_name, frame in build_tidy_frames(
+            for frame_name, frame in _build_tidy_frames(
                 records,
                 subset_definitions=subset_definitions,
             ).items()
@@ -290,11 +304,11 @@ class GoDb:
             zero count.
 
         Examples:
-            Inspect the subset table shape from a compact fixture:
+            Discover a subset's display name and term count:
 
             >>> db = GoDb.from_obo("data/go-basic.obo")
-            >>> db.list_subsets().columns
-            ['subset_id', 'subset_name', 'num_terms']
+            >>> db.list_subsets().row(0, named=True)
+            {'subset_id': 'goslim_generic', 'subset_name': 'Generic GO slim', 'num_terms': 5}
         """
         frames = {
             frame_name: frame.collect()
@@ -393,11 +407,17 @@ class GoDb:
             The output path that was written.
 
         Examples:
-            Write the subcell projection to a relative output path:
+            Write the subcell projection and read back its public columns:
 
+            >>> from tempfile import TemporaryDirectory
             >>> db = GoDb.from_obo("data/go-basic.obo")
-            >>> db.write_subcell("build/subcell.parquet").as_posix()
-            'build/subcell.parquet'
+            >>> with TemporaryDirectory() as dir_out:
+            ...     file_out = Path(dir_out) / "subcell.parquet"
+            ...     _ = db.write_subcell(file_out)
+            ...     pl.read_parquet(file_out).select(
+            ...         "go_id", "subcell_name"
+            ...     ).to_dicts()
+            [{'go_id': 'GO:0005575', 'subcell_name': 'cellular_component'}, {'go_id': 'GO:0005737', 'subcell_name': 'cytoplasm'}]
         """
         file_out = Path(file_out)
         file_out.parent.mkdir(parents=True, exist_ok=True)

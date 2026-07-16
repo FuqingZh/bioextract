@@ -87,9 +87,9 @@ class StringDb:
         ...     db.select_ids(["TP53", "EGFR"])
         ...     .with_score_min(400)
         ...     .extract_edges()
-        ...     .columns
+        ...     .to_dicts()
         ... )
-        ['StringIdA', 'StringIdB', 'Score']
+        [{'StringIdA': '9606.ENSP0001', 'StringIdB': '9606.ENSP0002', 'Score': 700}]
     """
 
     snapshot: _StringSnapshot
@@ -142,8 +142,13 @@ class StringDb:
             ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
             ...     file_links="fixtures/string/9606.protein.links.v12.0.txt.gz",
             ... )
-            >>> db.snapshot.version
-            'v12.0'
+            >>> (
+            ...     db.select_ids(["TP53"])
+            ...     .extract_string_mapping()
+            ...     .select("InputId", "StringId")
+            ...     .to_dicts()
+            ... )
+            [{'InputId': 'TP53', 'StringId': '9606.ENSP0001'}]
         """
         if version not in SCHEMA_ALIASES or version not in SCHEMA_LINKS:
             raise ValueError(f"Unsupported STRING version: {version}")
@@ -206,13 +211,16 @@ class StringDb:
                 dataset limits.
 
         Examples:
-            Create a single-query selection:
+            Normalize an input ID and retain an unmapped alias:
 
             >>> db = StringDb.from_files(
             ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
             ... )
-            >>> db.select_ids(["TP53", "EGFR"]).is_grouped
-            False
+            >>> selection = db.select_ids([" TP53 ", "MISSING"])
+            >>> selection.extract_string_mapping()["InputId"].to_list()
+            ['TP53']
+            >>> selection.extract_unmapped_input_ids().to_dicts()
+            [{'InputId': 'MISSING'}]
         """
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
         validate_count_limit(
@@ -254,13 +262,18 @@ class StringDb:
                 input-ID count exceeds the configured limit.
 
         Examples:
-            Create a grouped selection with isolated comparison labels:
+            Keep each mapping in its original comparison:
 
             >>> db = StringDb.from_files(
             ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
             ... )
-            >>> db.select_groups({"up": ["TP53"], "down": ["EGFR"]}).is_grouped
-            True
+            >>> (
+            ...     db.select_groups({"up": ["TP53"], "down": ["EGFR"]})
+            ...     .extract_string_mapping()
+            ...     .select("GroupId", "InputId")
+            ...     .to_dicts()
+            ... )
+            [{'GroupId': 'down', 'InputId': 'EGFR'}, {'GroupId': 'up', 'InputId': 'TP53'}]
         """
         grp_in_frames = create_group_input_frames(
             group_to_ids,
@@ -285,8 +298,8 @@ class StringDb:
         )
 
     @property
-    def alias_schema(self) -> _StringAliasInfo | None:
-        """Inspect and cache the aliases-file identity columns.
+    def _alias_schema(self) -> _StringAliasInfo | None:
+        """Return and cache aliases-file parsing metadata.
 
         Returns:
             Schema information required by mapping extraction, or ``None``
@@ -296,14 +309,10 @@ class StringDb:
             ValueError: If an aliases file is present but its required columns
                 do not match the declared STRING version.
 
-        Examples:
-            Inspect the identity column inferred from a v12 aliases fixture:
-
-            >>> db = StringDb.from_files(
-            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
-            ... )
-            >>> db.alias_schema.col_string_id
-            '#string_protein_id'
+        Notes:
+            Mapping extraction owns the public output schema. Keep this
+            version-specific parser metadata private because its return type
+            and source-column names are implementation details.
         """
         if self._alias_schema_cached is not None:
             return self._alias_schema_cached
@@ -333,8 +342,8 @@ class StringDb:
 class StringSelection:
     """Selection handle for both single and grouped STRING queries.
 
-    `StringSelection` is the only public selection type exposed by
-    `bioextract.stringdb`. Its output schemas depend on mode:
+    `StringSelection` is returned by :meth:`StringDb.select_ids` and
+    :meth:`StringDb.select_groups`. Its output schemas depend on mode:
 
     - selections created by :meth:`StringDb.select_ids` return single-query
       tables without `GroupId`
@@ -342,14 +351,18 @@ class StringSelection:
       tables with leading `GroupId`
 
     Examples:
-        Create a selection through its dataset handle:
+        Use a returned selection to resolve an input alias:
 
         >>> db = StringDb.from_files(
         ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
         ... )
         >>> selection = db.select_ids(["TP53"])
-        >>> isinstance(selection, StringSelection)
-        True
+        >>> (
+        ...     selection.extract_string_mapping()
+        ...     .select("InputId", "StringId")
+        ...     .to_dicts()
+        ... )
+        [{'InputId': 'TP53', 'StringId': '9606.ENSP0001'}]
     """
 
     dataset: StringDb
@@ -413,14 +426,22 @@ class StringSelection:
             selection.
 
         Examples:
-            Raise the minimum combined score to 700:
+            Remove an edge whose combined score is below 700:
 
             >>> db = StringDb.from_files(
             ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
             ...     file_links="fixtures/string/9606.protein.links.v12.0.txt.gz",
             ... )
-            >>> db.select_ids(["TP53", "EGFR"]).with_score_min(700).thr_score_min
-            700
+            >>> selection = db.select_ids(["TP53", "EGFR", "CDK2"])
+            >>> (
+            ...     selection.with_score_min(400)
+            ...     .extract_edges()["Score"]
+            ...     .sort()
+            ...     .to_list()
+            ... )
+            [450, 700]
+            >>> selection.with_score_min(700).extract_edges()["Score"].to_list()
+            [700]
         """
         return StringSelection(
             dataset=self.dataset,
@@ -446,15 +467,15 @@ class StringSelection:
                 configured STRING version.
 
         Examples:
-            Inspect the stable single-query mapping schema:
+            Resolve a gene name and report the chosen alias source:
 
             >>> db = StringDb.from_files(
             ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
             ... )
-            >>> db.select_ids(["TP53"]).extract_string_mapping().columns
-            ['InputId', 'StringId', 'MapSource']
+            >>> db.select_ids(["TP53"]).extract_string_mapping().to_dicts()
+            [{'InputId': 'TP53', 'StringId': '9606.ENSP0001', 'MapSource': 'UniProt_GN_Name'}]
         """
-        if self.dataset.alias_schema is None:
+        if self.dataset._alias_schema is None:
             raise ValueError("Cannot extract STRING mapping without aliases file")
 
         if self._df_protein_map is not None:
@@ -465,7 +486,8 @@ class StringSelection:
             return self._df_protein_map
 
         lf_aliases = scan_aliases(
-            self.dataset.alias_schema.file_alias, version=self.dataset.snapshot.version
+            self.dataset._alias_schema.file_alias,
+            version=self.dataset.snapshot.version,
         )
         lf_input_ids = self._df_input_ids.lazy()
         col_group_id = list(self._col_group_id)
@@ -474,8 +496,8 @@ class StringSelection:
                 lf_aliases=lf_aliases,
                 lf_input_ids=lf_input_ids,
                 source_rank_map=self.dataset.source_rank_map,
-                col_string_id_aliases=self.dataset.alias_schema.col_string_id,
-                has_source_aliases=self.dataset.alias_schema.has_source,
+                col_string_id_aliases=self.dataset._alias_schema.col_string_id,
+                has_source_aliases=self.dataset._alias_schema.has_source,
                 cols_partition=col_group_id + ["InputId", "StringId"],
                 cols_sort_prefix=col_group_id + ["InputId", "StringId"],
                 cols_select_out=col_group_id + ["InputId", "StringId", "MapSource"],
@@ -536,14 +558,14 @@ class StringSelection:
                 configured STRING version.
 
         Examples:
-            Extract the induced network and inspect its stable schema:
+            Extract the induced edge and its combined score:
 
             >>> db = StringDb.from_files(
             ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
             ...     file_links="fixtures/string/9606.protein.links.v12.0.txt.gz",
             ... )
-            >>> db.select_ids(["TP53", "EGFR"]).extract_edges().columns
-            ['StringIdA', 'StringIdB', 'Score']
+            >>> db.select_ids(["TP53", "EGFR"]).extract_edges().to_dicts()
+            [{'StringIdA': '9606.ENSP0001', 'StringIdB': '9606.ENSP0002', 'Score': 700}]
         """
         if self.dataset.snapshot.file_links is None:
             raise ValueError("Cannot extract STRING edges without links file")
