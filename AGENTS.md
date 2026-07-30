@@ -10,9 +10,11 @@
   under `src/bioextract/`.
 - Real snapshot builds and external storage writes require explicit task scope;
   tests should use temporary local fixtures.
-- Before delivery, run the non-mutating code gate used by CI:
+- In a clean worktree, install the development environment before running the
+  non-mutating code gate used by CI:
 
   ```console
+  pdm sync -G dev --no-self
   pdm run check
   ```
 

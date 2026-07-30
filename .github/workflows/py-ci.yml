@@ -2,6 +2,8 @@ name: py-ci
 
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 permissions:
