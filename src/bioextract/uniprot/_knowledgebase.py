@@ -35,6 +35,20 @@ _ISO_ID = re.compile(r"IsoId=([^;]+);")
 _ISO_SEQUENCE = re.compile(r"Sequence=([^;]+);")
 _VSP_ID = re.compile(r"\b(VSP_[0-9]+)\b")
 _ISOFORM_SCOPE = re.compile(r"^(.*?)\s+\[([A-Z0-9-]+)\]$")
+_CRC64_POLYNOMIAL = 0xD800000000000000
+
+
+def _crc64_table() -> tuple[int, ...]:
+    values: list[int] = []
+    for byte in range(256):
+        value = byte
+        for _ in range(8):
+            value = (value >> 1) ^ _CRC64_POLYNOMIAL if value & 1 else value >> 1
+        values.append(value)
+    return tuple(values)
+
+
+_CRC64_TABLE = _crc64_table()
 
 
 @dataclass(slots=True)
@@ -436,7 +450,8 @@ def _iter_records(path: Path) -> Iterator[_Record]:
                 comment_parts.append(line[9:].strip())
             elif line.startswith("SQ   "):
                 match = re.search(
-                    r"SEQUENCE\s+([0-9]+) AA;\s+([0-9]+) MW;\s+([A-Z0-9]+) CRC64;",
+                    r"SEQUENCE\s+([0-9]+) AA;\s+([0-9]+) MW;\s+"
+                    r"([0-9A-F]{16}) CRC64;",
                     line,
                 )
                 if match is None:
@@ -527,9 +542,19 @@ def _validate_record(record: _Record) -> None:
         )
     if len(set(record.accessions)) != len(record.accessions):
         raise ValueError(f"Duplicate accession in UniProtKB record {record.number}")
+    if re.fullmatch(r"[A-Z]+", sequence) is None:
+        raise ValueError(
+            f"Invalid UniProt sequence characters in record {record.number}"
+        )
     if len(sequence) != record.sequence_length:
         raise ValueError(
             f"Sequence length mismatch in UniProtKB record {record.number}"
+        )
+    actual_crc64 = _calculate_crc64(sequence)
+    if record.crc64 != actual_crc64:
+        raise ValueError(
+            f"UniProt CRC64 mismatch in record {record.number}: "
+            f"expected={record.crc64}, actual={actual_crc64}"
         )
 
 
@@ -956,7 +981,15 @@ def _iter_fasta(path: Path, *, role: str) -> Iterator[tuple[str, str]]:
                     raise ValueError(
                         "Declared FASTA input does not begin with a header"
                     )
-                parts.append(line.strip())
+                sequence_line = line.rstrip("\r\n")
+                if not sequence_line or any(
+                    character.isspace() for character in sequence_line
+                ):
+                    raise ValueError(
+                        f"UniProt {role} FASTA record has invalid sequence "
+                        f"characters: {identifier}"
+                    )
+                parts.append(sequence_line)
         if identifier is not None:
             yield (
                 identifier,
@@ -979,6 +1012,13 @@ def _validated_fasta_sequence(
             f"UniProt {role} FASTA record has invalid sequence characters: {identifier}"
         )
     return sequence
+
+
+def _calculate_crc64(sequence: str) -> str:
+    checksum = 0
+    for residue in sequence:
+        checksum = _CRC64_TABLE[(checksum ^ ord(residue)) & 0xFF] ^ (checksum >> 8)
+    return f"{checksum:016X}"
 
 
 def _write_isoform_relations(

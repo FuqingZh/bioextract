@@ -89,6 +89,47 @@ def scan_protein2ipr_frame(file_protein2ipr: Path) -> pl.LazyFrame:
     )
 
 
+def validate_mapping_xml_relationships(
+    file_protein2ipr: Path,
+    *,
+    df_interpro_entry: pl.DataFrame,
+    df_interpro_member: pl.DataFrame,
+) -> None:
+    """Require every mapping entry/member relationship to exist in the XML."""
+    mapping = scan_protein2ipr_frame(file_protein2ipr)
+    missing_entry = (
+        mapping.select("InterProId")
+        .unique()
+        .join(
+            df_interpro_entry.lazy().select("InterProId"), on="InterProId", how="anti"
+        )
+        .limit(1)
+        .collect(engine="streaming")
+    )
+    if missing_entry.height:
+        raise ValueError(
+            "InterPro mapping relationship is absent from XML entry metadata: "
+            f"{missing_entry.item(0, 'InterProId')}"
+        )
+    missing_member = (
+        mapping.select("InterProId", "MemberDbId")
+        .unique()
+        .join(
+            df_interpro_member.lazy().select("InterProId", "MemberDbId"),
+            on=["InterProId", "MemberDbId"],
+            how="anti",
+        )
+        .limit(1)
+        .collect(engine="streaming")
+    )
+    if missing_member.height:
+        row = missing_member.row(0, named=True)
+        raise ValueError(
+            "InterPro mapping relationship is absent from XML member metadata: "
+            f"{row['InterProId']}/{row['MemberDbId']}"
+        )
+
+
 def select_mapping_frame(
     file_protein2ipr: Path,
     df_input_ids: pl.DataFrame,

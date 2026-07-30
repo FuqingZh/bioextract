@@ -36,6 +36,7 @@ from .util import (
     read_mapping_frame,
     scan_mapping_frame,
     select_mapping_frame,
+    validate_mapping_xml_relationships,
 )
 
 __all__ = [
@@ -289,6 +290,12 @@ class InterProDatabase:
             if self.snapshot.file_interpro_xml is not None
             else None
         )
+        if self.snapshot.file_interpro_xml is not None:
+            validate_mapping_xml_relationships(
+                self.snapshot.file_protein2ipr,
+                df_interpro_entry=self.xml_frame("entry"),
+                df_interpro_member=self.xml_frame("member"),
+            )
         return InterProTidyDataset(
             frames={
                 "mapping": scan_mapping_frame(

@@ -46,7 +46,7 @@ FT                   /id="VSP_000001"
 FT                   /evidence="ECO:0000269|PubMed:1"
 FT   CONFLICT        8
 FT                   /note="I -> V (in another source)"
-SQ   SEQUENCE   10 AA;  1000 MW;  ABCDEF CRC64;
+SQ   SEQUENCE   10 AA;  1000 MW;  81FC3551E879CB1A CRC64;
      ACDEFGHIKL
 //
 """
@@ -282,7 +282,7 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
     assert database.select_ids(["P12345"], namespace="uniprot").extract_sequences(
         sequence_type="all"
     ).select("SequenceType", "CRC64").to_dicts() == [
-        {"SequenceType": "canonical", "CRC64": "ABCDEF"},
+        {"SequenceType": "canonical", "CRC64": "81FC3551E879CB1A"},
         {"SequenceType": "isoform", "CRC64": None},
     ]
     selection = database.select_ids(["P12345"], namespace="uniprot")
@@ -425,7 +425,7 @@ def test_missing_required_source_field_always_fails(tmp_path: Path) -> None:
     path.write_text(
         """ID   TEST_HUMAN Reviewed; 3 AA.
 AC   P12345;
-SQ   SEQUENCE   3 AA;  300 MW;  ABC123 CRC64;
+SQ   SEQUENCE   3 AA;  300 MW;  6AAEBDB000000000 CRC64;
      ACD
 //
 """,
@@ -454,13 +454,13 @@ def test_accessions_must_be_unique_across_records(tmp_path: Path) -> None:
         """ID   FIRST_HUMAN Reviewed; 3 AA.
 AC   P11111; Q99999;
 OX   NCBI_TaxID=9606;
-SQ   SEQUENCE   3 AA;  300 MW;  ABC123 CRC64;
+SQ   SEQUENCE   3 AA;  300 MW;  6AAEBDB000000000 CRC64;
      ACD
 //
 ID   SECOND_HUMAN Reviewed; 3 AA.
 AC   P22222; Q99999;
 OX   NCBI_TaxID=9606;
-SQ   SEQUENCE   3 AA;  300 MW;  DEF456 CRC64;
+SQ   SEQUENCE   3 AA;  300 MW;  69CB1DB000000000 CRC64;
      AEF
 //
 """,
@@ -537,10 +537,17 @@ def test_selection_and_fasta_inputs_reject_empty_values(tmp_path: Path) -> None:
 
     empty_fasta = tmp_path / "empty-sequence.fasta"
     empty_fasta.write_text(">sp|P12345|TEST_HUMAN\n   \n\t\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="empty sequence"):
+    with pytest.raises(ValueError, match="invalid sequence characters"):
         UniProtDatabase.from_knowledgebase(
             entries=entries, canonical_sequences=empty_fasta
         ).write_duckdb(tmp_path / "invalid-fasta.duckdb")
+
+    embedded_blank = tmp_path / "embedded-blank.fasta"
+    embedded_blank.write_text(">sp|P12345-2|TEST_HUMAN\nACD\n\nEF\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid sequence characters"):
+        UniProtDatabase.from_knowledgebase(
+            entries=entries, isoform_sequences=embedded_blank
+        ).write_duckdb(tmp_path / "embedded-blank.duckdb")
 
     invalid_fasta = tmp_path / "invalid-sequence.fasta"
     invalid_fasta.write_text(">sp|P12345-2|TEST_HUMAN\nAC D1!\n", encoding="utf-8")
@@ -548,6 +555,25 @@ def test_selection_and_fasta_inputs_reject_empty_values(tmp_path: Path) -> None:
         UniProtDatabase.from_knowledgebase(
             entries=entries, isoform_sequences=invalid_fasta
         ).write_duckdb(tmp_path / "invalid-characters.duckdb")
+
+
+def test_dat_crc64_must_match_sequence(tmp_path: Path) -> None:
+    entries = tmp_path / "bad-checksum.dat"
+    entries.write_text(
+        """ID   TEST_HUMAN Reviewed; 3 AA.
+AC   P12345;
+OX   NCBI_TaxID=9606;
+SQ   SEQUENCE   3 AA;  300 MW;  0000000000000000 CRC64;
+     ACD
+//
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="CRC64 mismatch"):
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+            tmp_path / "bad-checksum.duckdb"
+        )
 
 
 def test_cross_entry_external_isoform_contexts_and_owner_materialization(
@@ -566,7 +592,7 @@ CC       Name=A; IsoId=P16376-1; Sequence=External;
 FT   VAR_SEQ         2
 FT                   /note="C -> G (in isoform C)"
 FT                   /id="VSP_013348"
-SQ   SEQUENCE   3 AA;  300 MW;  ABC123 CRC64;
+SQ   SEQUENCE   3 AA;  300 MW;  6AAEBDB000000000 CRC64;
      ACD
 //
 ID   7UP2_DROME Reviewed; 3 AA.
@@ -577,7 +603,7 @@ CC       Event=Alternative splicing; Named isoforms=3;
 CC       Name=A; IsoId=P16376-1; Sequence=Displayed;
 CC       Name=B; IsoId=P16375-1; Sequence=External;
 CC       Name=C; IsoId=P16375-2, P22966-1; Sequence=External;
-SQ   SEQUENCE   3 AA;  300 MW;  DEF456 CRC64;
+SQ   SEQUENCE   3 AA;  300 MW;  69CB1DB000000000 CRC64;
      AEF
 //
 """,

@@ -4,6 +4,7 @@ import gzip
 from pathlib import Path
 
 import polars as pl
+import pytest
 
 from bioextract.interpro import InterProDatabase
 
@@ -27,6 +28,9 @@ def write_interpro_fixture(tmp_path: Path) -> dict[str, Path]:
         handle.write(
             """<?xml version="1.0" encoding="UTF-8"?>
 <interprodb>
+<release>
+  <dbinfo dbname="INTERPRO" version="108.0"/>
+</release>
 <interpro id="IPR000001" type="Domain">
   <name>Kringle</name>
   <member_list>
@@ -177,3 +181,33 @@ def test_write_parquet_writes_mapping_without_sidecar(tmp_path: Path) -> None:
     assert result.path == path
     assert not (tmp_path / "manifest.json").exists()
     assert pl.read_parquet(path).height == 3
+
+
+@pytest.mark.parametrize(
+    ("mapping_row", "message"),
+    [
+        (
+            "P12345\tIPR999999\tUnknown\tPF00051\t10\t80\n",
+            "absent from XML entry metadata",
+        ),
+        (
+            "P12345\tIPR000001\tKringle\tPF99999\t10\t80\n",
+            "absent from XML member metadata",
+        ),
+    ],
+)
+def test_tidy_publication_rejects_mapping_relationships_absent_from_xml(
+    tmp_path: Path,
+    mapping_row: str,
+    message: str,
+) -> None:
+    files = write_interpro_fixture(tmp_path)
+    with gzip.open(files["protein2ipr"], "wt", encoding="utf-8") as handle:
+        handle.write(mapping_row)
+    database = InterProDatabase.from_mapping_files(
+        protein_to_interpro=files["protein2ipr"],
+        interpro_xml=files["xml"],
+    )
+
+    with pytest.raises(ValueError, match=message):
+        database.build_tidy()
