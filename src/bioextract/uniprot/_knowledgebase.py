@@ -25,7 +25,7 @@ from bioextract._publication import (
     write_duckdb_publication,
 )
 
-from .util import parse_subcellular_location_comment
+from .util import join_wrapped_comment_lines, parse_subcellular_location_comment
 
 RESOURCE_SCHEMA_VERSION = "uniprot-knowledgebase-duckdb-v1"
 SOURCE_SCHEMA_PROFILE = "uniprotkb-flat-file-v1"
@@ -33,9 +33,43 @@ SOURCE_SCHEMA_PROFILE = "uniprotkb-flat-file-v1"
 _EVIDENCE = re.compile(r"\{([^{}]+)\}")
 _ISO_ID = re.compile(r"IsoId=([^;]+);")
 _ISO_SEQUENCE = re.compile(r"Sequence=([^;]+);")
-_VSP_ID = re.compile(r"\b(VSP_[0-9]+)\b")
+_VSP_IDENTIFIER = re.compile(r"VSP_[0-9]{6,10}")
+_VSP_ID = re.compile(r"\b(VSP_[0-9]{6,10})\b")
+_VSP_SEQUENCE = re.compile(r"VSP_[0-9]{6,10}(?:,\s*VSP_[0-9]{6,10})*")
 _ISOFORM_SCOPE = re.compile(r"^(.*?)\s+\[([A-Z0-9-]+)\]$")
 _CRC64_POLYNOMIAL = 0xD800000000000000
+_MOLECULAR_WEIGHT_WATER = 180153
+_RESIDUE_MOLECULAR_WEIGHT = {
+    "A": 710788,
+    "B": 1146532,
+    "C": 1031388,
+    "D": 1150886,
+    "E": 1291155,
+    "F": 1471766,
+    "G": 570519,
+    "H": 1371411,
+    "I": 1131594,
+    "K": 1281741,
+    "L": 1131594,
+    "M": 1311926,
+    "N": 1141038,
+    "O": 2373000,
+    "P": 971167,
+    "Q": 1281307,
+    "R": 1561875,
+    "S": 870782,
+    "T": 1011051,
+    "U": 1500400,
+    "V": 991326,
+    "W": 1862132,
+    "X": 1113306,
+    "Y": 1631760,
+    "Z": 1287473,
+}
+_LEGACY_EXPASY_MOLECULAR_WEIGHT = {
+    "O": 2373018,
+    "U": 1500388,
+}
 
 
 def _crc64_table() -> tuple[int, ...]:
@@ -81,6 +115,7 @@ class _Record:
     variations: list[tuple[str, int | None, int | None, str]] = field(
         default_factory=list[tuple[str, int | None, int | None, str]]
     )
+    molecular_weight_profile: str = "shared"
 
 
 TABLE_SCHEMAS: Mapping[str, SchemaDict] = {
@@ -209,8 +244,19 @@ def write_knowledgebase(
         writers, handles = _open_spools(spool_dir)
         database_index = sqlite3.connect(spool_dir / "validation.sqlite")
         _create_validation_index(database_index)
+        molecular_weight_profile: str | None = None
         try:
             for record in _iter_records(entries):
+                if record.molecular_weight_profile != "shared":
+                    if (
+                        molecular_weight_profile is not None
+                        and molecular_weight_profile != record.molecular_weight_profile
+                    ):
+                        raise ValueError(
+                            "UniProtKB records require conflicting molecular-weight "
+                            "models: current-core and legacy-expasy"
+                        )
+                    molecular_weight_profile = record.molecular_weight_profile
                 _write_record(
                     record,
                     writers,
@@ -275,6 +321,9 @@ def write_knowledgebase(
             release_version_source="caller" if release_version is not None else None,
             extra_metadata={
                 "bioextract.source_schema_validation": "passed",
+                "bioextract.molecular_weight_validation_model": (
+                    molecular_weight_profile or "compatible-current-and-legacy"
+                ),
                 "bioextract.source_profile.knowledgebase_entries": (
                     "uniprotkb-swiss-prot-dat-v1"
                 ),
@@ -487,8 +536,18 @@ def _iter_records(path: Path) -> Iterator[_Record]:
                 )
                 variation_qualifier = None if raw_note.endswith('"') else "note"
             elif line.startswith("FT") and "/id=" in line and variation is not None:
+                variation_id = line.split("=", 1)[1].strip().strip('"')
+                if variation[0]:
+                    raise ValueError(
+                        f"Duplicate UniProt VAR_SEQ /id in record {record.number}"
+                    )
+                if _VSP_IDENTIFIER.fullmatch(variation_id) is None:
+                    raise ValueError(
+                        "Invalid UniProt VAR_SEQ /id in record "
+                        f"{record.number}: {variation_id}"
+                    )
                 variation = (
-                    line.split("=", 1)[1].strip().strip('"'),
+                    variation_id,
                     variation[1],
                     variation[2],
                     variation[3],
@@ -542,7 +601,7 @@ def _validate_record(record: _Record) -> None:
         )
     if len(set(record.accessions)) != len(record.accessions):
         raise ValueError(f"Duplicate accession in UniProtKB record {record.number}")
-    if re.fullmatch(r"[A-Z]+", sequence) is None:
+    if any(residue not in _RESIDUE_MOLECULAR_WEIGHT for residue in sequence):
         raise ValueError(
             f"Invalid UniProt sequence characters in record {record.number}"
         )
@@ -555,6 +614,24 @@ def _validate_record(record: _Record) -> None:
         raise ValueError(
             f"UniProt CRC64 mismatch in record {record.number}: "
             f"expected={record.crc64}, actual={actual_crc64}"
+        )
+    current_weight = _calculate_molecular_weight(sequence)
+    legacy_weight = _calculate_molecular_weight(sequence, legacy_expasy=True)
+    matches_current = record.molecular_weight == current_weight
+    matches_legacy = record.molecular_weight == legacy_weight
+    if not matches_current and not matches_legacy:
+        raise ValueError(
+            f"UniProt molecular weight mismatch in record {record.number}: "
+            f"expected={record.molecular_weight}, "
+            f"current={current_weight}, legacy_expasy={legacy_weight}"
+        )
+    if matches_current != matches_legacy:
+        record.molecular_weight_profile = (
+            "current-core" if matches_current else "legacy-expasy"
+        )
+    if any(not variation_id for variation_id, _start, _end, _note in record.variations):
+        raise ValueError(
+            f"UniProt VAR_SEQ feature is missing /id in record {record.number}"
         )
 
 
@@ -796,8 +873,6 @@ def _write_record(
                 (primary, isoform_id, variation_id, variation_order),
             )
     for variation_id, start, end, note in record.variations:
-        if not variation_id:
-            continue
         try:
             database_index.execute("INSERT INTO variation VALUES (?)", (variation_id,))
         except sqlite3.IntegrityError as error:
@@ -858,7 +933,9 @@ def _flush_comment(
     record: _Record, comment_type: str | None, comment_parts: list[str]
 ) -> None:
     if comment_type is not None:
-        record.comments.append((comment_type, " ".join(comment_parts).strip()))
+        record.comments.append(
+            (comment_type, join_wrapped_comment_lines(comment_parts))
+        )
 
 
 def _parse_isoforms(record: _Record, text: str) -> None:
@@ -866,16 +943,28 @@ def _parse_isoforms(record: _Record, text: str) -> None:
         name, _, rest = block.partition(";")
         iso_ids = _ISO_ID.search(rest)
         sequence = _ISO_SEQUENCE.search(rest)
+        if iso_ids is None or sequence is None:
+            missing = "IsoId" if iso_ids is None else "Sequence"
+            raise ValueError(
+                "UniProt alternative-products Name block is missing "
+                f"{missing} in record {record.number}"
+            )
         if iso_ids and sequence:
+            sequence_value = sequence.group(1).strip()
+            if sequence_value not in {"Displayed", "External", "Not described"} and (
+                _VSP_SEQUENCE.fullmatch(sequence_value) is None
+            ):
+                raise ValueError(
+                    "Invalid UniProt alternative-products Sequence value in "
+                    f"record {record.number}: {sequence_value}"
+                )
             identifiers = [
                 isoform_id.strip()
                 for isoform_id in iso_ids.group(1).split(",")
                 if isoform_id.strip()
             ]
             if identifiers:
-                record.isoforms.append(
-                    (identifiers, name.strip(), sequence.group(1).strip())
-                )
+                record.isoforms.append((identifiers, name.strip(), sequence_value))
 
 
 def _validate_canonical_fasta(path: Path, index: sqlite3.Connection) -> None:
@@ -1007,7 +1096,7 @@ def _validated_fasta_sequence(
         raise ValueError(
             f"UniProt {role} FASTA record has an empty sequence: {identifier}"
         )
-    if re.fullmatch(r"[A-Z]+", sequence) is None:
+    if any(residue not in _RESIDUE_MOLECULAR_WEIGHT for residue in sequence):
         raise ValueError(
             f"UniProt {role} FASTA record has invalid sequence characters: {identifier}"
         )
@@ -1019,6 +1108,16 @@ def _calculate_crc64(sequence: str) -> str:
     for residue in sequence:
         checksum = _CRC64_TABLE[(checksum ^ ord(residue)) & 0xFF] ^ (checksum >> 8)
     return f"{checksum:016X}"
+
+
+def _calculate_molecular_weight(sequence: str, *, legacy_expasy: bool = False) -> int:
+    weight = _MOLECULAR_WEIGHT_WATER
+    for residue in sequence:
+        if legacy_expasy and residue in _LEGACY_EXPASY_MOLECULAR_WEIGHT:
+            weight += _LEGACY_EXPASY_MOLECULAR_WEIGHT[residue]
+        else:
+            weight += _RESIDUE_MOLECULAR_WEIGHT[residue]
+    return (weight + 5000) // 10000
 
 
 def _write_isoform_relations(

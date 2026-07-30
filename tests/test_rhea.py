@@ -642,6 +642,18 @@ def test_metadata_versions_physical_curie_contract_and_native_connection(
     with pytest.raises(ValueError, match="validation_issue"):
         RheaDatabase.from_duckdb(missing_v3_table)
 
+    for index, profile in enumerate(("", "unknown-profile")):
+        unsupported_profile = tmp_path / f"unsupported-profile-{index}.duckdb"
+        unsupported_profile.write_bytes(current.read_bytes())
+        with duckdb.connect(str(unsupported_profile)) as connection:
+            connection.execute(
+                "UPDATE _bioextract.metadata SET value=? "
+                "WHERE key='bioextract.source_schema_profile'",
+                [profile],
+            )
+        with pytest.raises(ValueError, match="source schema profile"):
+            RheaDatabase.from_duckdb(unsupported_profile)
+
     numeric = tmp_path / "numeric.duckdb"
     numeric.write_bytes(current.read_bytes())
     with duckdb.connect(str(numeric)) as connection:

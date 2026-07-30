@@ -396,3 +396,15 @@ def test_chebi_metadata_v1_compatibility_and_unknown_version_rejection(
         connection.execute("DROP TABLE _bioextract.validation_issue")
     with pytest.raises(ValueError, match="validation_issue"):
         ChEBIDatabase.from_duckdb(missing_v3_table)
+
+    for index, profile in enumerate(("", "unknown-profile")):
+        unsupported_profile = tmp_path / f"unsupported-profile-{index}.duckdb"
+        unsupported_profile.write_bytes(current.read_bytes())
+        with duckdb.connect(str(unsupported_profile)) as connection:
+            connection.execute(
+                "UPDATE _bioextract.metadata SET value=? "
+                "WHERE key='bioextract.source_schema_profile'",
+                [profile],
+            )
+        with pytest.raises(ValueError, match="source schema profile"):
+            ChEBIDatabase.from_duckdb(unsupported_profile)

@@ -556,6 +556,21 @@ def test_metadata_v3_requires_validation_issue_table(tmp_path: Path) -> None:
         KEGGDatabase.from_duckdb(path)
 
 
+@pytest.mark.parametrize("profile", ["", "unknown-profile"])
+def test_metadata_v3_requires_supported_source_schema_profile(
+    tmp_path: Path, profile: str
+) -> None:
+    _, path = publish(tmp_path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value=? "
+            "WHERE key='bioextract.source_schema_profile'",
+            [profile],
+        )
+    with pytest.raises(ValueError, match="source schema profile"):
+        KEGGDatabase.from_duckdb(path)
+
+
 def test_relation_only_inputs_preserve_rows_and_enable_namespace(
     tmp_path: Path,
 ) -> None:

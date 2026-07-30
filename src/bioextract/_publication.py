@@ -105,6 +105,7 @@ def validate_duckdb_metadata_v3(
             raise ValueError(
                 "Metadata v3 release_version_source must be caller or official_metadata"
             )
+    validate_duckdb_validation_state(connection, metadata)
     source_rows = connection.execute(
         "SELECT logical_name, display_path, bytes, media_type, sha256 "
         "FROM _bioextract.source_file ORDER BY logical_name"
@@ -122,6 +123,50 @@ def validate_duckdb_metadata_v3(
     ]
     if sorted(embedded_sources, key=lambda item: item["logical_name"]) != table_sources:
         raise ValueError("Embedded source inventory does not match source_file")
+
+
+def validate_duckdb_validation_state(
+    connection: duckdb.DuckDBPyConnection,
+    metadata: Mapping[str, str],
+) -> None:
+    """Validate the metadata v2/v3 issue table, count, and status invariant."""
+    validation_status = metadata.get("bioextract.validation_status")
+    if validation_status not in {"passed", "passed_with_warnings"}:
+        raise ValueError(
+            "Publication validation_status must be passed or passed_with_warnings"
+        )
+    try:
+        declared_issue_count = int(
+            metadata.get("bioextract.validation_issue_count", "")
+        )
+    except ValueError as error:
+        raise ValueError(
+            "Publication validation_issue_count must be a non-negative integer"
+        ) from error
+    if declared_issue_count < 0:
+        raise ValueError(
+            "Publication validation_issue_count must be a non-negative integer"
+        )
+    issue_table = connection.execute(
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema='_bioextract' "
+        "AND table_name='validation_issue' "
+        "AND table_type='BASE TABLE'"
+    ).fetchone()
+    if issue_table is None:
+        raise ValueError("Publication requires _bioextract.validation_issue")
+    issue_row = connection.execute(
+        "SELECT count(*) FROM _bioextract.validation_issue"
+    ).fetchone()
+    if issue_row is None or int(issue_row[0]) != declared_issue_count:
+        raise ValueError(
+            "Publication validation_issue_count does not match validation_issue"
+        )
+    expected_status = "passed_with_warnings" if declared_issue_count else "passed"
+    if validation_status != expected_status:
+        raise ValueError(
+            "Publication validation_status does not match validation_issue_count"
+        )
 
 
 def write_parquet_publication(

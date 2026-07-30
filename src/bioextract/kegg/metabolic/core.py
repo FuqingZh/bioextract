@@ -13,9 +13,14 @@ from typing import Any, Literal
 import duckdb
 import polars as pl
 
-from bioextract._publication import DuckDBWriteResult, validate_duckdb_metadata_v3
+from bioextract._publication import (
+    DuckDBWriteResult,
+    validate_duckdb_metadata_v3,
+    validate_duckdb_validation_state,
+)
 
 SCHEMA_VERSION = "kegg-metabolic-v0.1"
+SOURCE_SCHEMA_PROFILE = "kegg-metabolic-flat-files-v1"
 METADATA_VERSION = "2"
 NAMESPACES = (
     "kegg_compound",
@@ -531,21 +536,13 @@ def open_publication(path: Path) -> MetabolicPublication:
             missing_v3 = sorted(required_v3 - set(metadata))
             if missing_v3:
                 raise ValueError(f"KEGG metadata v3 is missing keys: {missing_v3}")
-        if (
-            metadata.get("bioextract.metadata_schema_version") in {"2", "3"}
-            and "validation_issue" not in meta_tables
-        ):
-            raise ValueError(
-                "DuckDB file is missing bioextract metadata tables: validation_issue"
-            )
-        if metadata.get("bioextract.metadata_schema_version") in {"2", "3"}:
-            issue_count = con.execute(
-                "SELECT count(*) FROM _bioextract.validation_issue"
-            ).fetchone()
-            if issue_count is None or int(
-                metadata.get("bioextract.validation_issue_count", "-1")
-            ) != int(issue_count[0]):
-                raise ValueError("KEGG validation issue count mismatch")
+            if (
+                metadata.get("bioextract.source_schema_profile")
+                != SOURCE_SCHEMA_PROFILE
+            ):
+                raise ValueError("Unsupported KEGG source schema profile")
+        if metadata.get("bioextract.metadata_schema_version") == "2":
+            validate_duckdb_validation_state(con, metadata)
         if (
             metadata.get("bioextract.resource_name") != "kegg"
             or metadata.get("bioextract.scope") != "metabolic"

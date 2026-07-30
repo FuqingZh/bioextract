@@ -28,7 +28,8 @@ GN   OrderedLocusNames=LOC1; ORFNames=ORF1;
 GN   and Name=TEST2; Synonyms=ALT2;
 OX   NCBI_TaxID=9606;
 PE   1: Evidence at protein level;
-CC   -!- FUNCTION: Demonstrates a compact fixture.
+CC   -!- FUNCTION: Demonstrates a mem-
+CC       brane fixture.
 CC   -!- SUBCELLULAR LOCATION: Nucleus. Note=Fixture location.
 CC   -!- ALTERNATIVE PRODUCTS:
 CC       Name=Isoform 1; IsoId=P12345-1; Sequence=Displayed;
@@ -46,7 +47,7 @@ FT                   /id="VSP_000001"
 FT                   /evidence="ECO:0000269|PubMed:1"
 FT   CONFLICT        8
 FT                   /note="I -> V (in another source)"
-SQ   SEQUENCE   10 AA;  1000 MW;  81FC3551E879CB1A CRC64;
+SQ   SEQUENCE   10 AA;  1132 MW;  81FC3551E879CB1A CRC64;
      ACDEFGHIKL
 //
 """
@@ -175,7 +176,7 @@ def test_idmapping_parquet_and_hive_inputs(tmp_path: Path) -> None:
 
     hive = tmp_path / "hive" / "TaxId=9606"
     hive.mkdir(parents=True)
-    frame.write_parquet(hive / "part.parquet")
+    frame.drop("TaxId").write_parquet(hive / "part.parquet")
     (tmp_path / "hive" / "README.txt").write_text("ignored", encoding="utf-8")
     assert (
         UniProtDatabase.from_idmapping(tmp_path / "hive")
@@ -188,7 +189,7 @@ def test_idmapping_parquet_and_hive_inputs(tmp_path: Path) -> None:
 def test_idmapping_schema_and_path_validation(tmp_path: Path) -> None:
     bad = tmp_path / "bad.parquet"
     pl.DataFrame({"UniProtId": ["P12345"]}).write_parquet(bad)
-    with pytest.raises(ValueError, match="missing required columns"):
+    with pytest.raises(ValueError, match="schema mismatch"):
         UniProtDatabase.from_idmapping(bad).scan_mapping()
     with pytest.raises(FileNotFoundError):
         UniProtDatabase.from_idmapping(tmp_path / "missing.tab.gz")
@@ -200,6 +201,30 @@ def test_idmapping_schema_and_path_validation(tmp_path: Path) -> None:
     empty.mkdir()
     with pytest.raises(ValueError, match="no parquet"):
         UniProtDatabase.from_idmapping(empty)
+
+
+@pytest.mark.parametrize("container", ["parquet", "hive"])
+def test_idmapping_parquet_schema_requires_all_string_columns(
+    tmp_path: Path, container: str
+) -> None:
+    raw = _write_idmapping(tmp_path / "mapping.tab.gz")
+    frame = (
+        UniProtDatabase.from_idmapping(raw)
+        .scan_mapping()
+        .collect()
+        .with_columns(pl.col("GeneId").cast(pl.Int64))
+    )
+    if container == "parquet":
+        source = tmp_path / "wrong-type.parquet"
+        frame.write_parquet(source)
+    else:
+        source = tmp_path / "wrong-type-hive"
+        partition = source / "TaxId=9606"
+        partition.mkdir(parents=True)
+        frame.drop("TaxId").write_parquet(partition / "part.parquet")
+
+    with pytest.raises(ValueError, match="schema mismatch"):
+        UniProtDatabase.from_idmapping(source).scan_mapping()
 
 
 def test_idmapping_publication_is_atomic(tmp_path: Path) -> None:
@@ -246,6 +271,7 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
     assert matches.extract_proteins()["ProteinExistence"].to_list() == [
         "1: Evidence at protein level"
     ]
+    assert matches.extract_proteins().schema["GroupId"] == pl.String
     assert matches.extract_unmatched_ids()["InputId"].to_list() == [
         "TEST",
         "missing",
@@ -279,9 +305,11 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
             "IsoformId": None,
         }
     ]
-    assert database.select_ids(["P12345"], namespace="uniprot").extract_sequences(
+    sequences = database.select_ids(["P12345"], namespace="uniprot").extract_sequences(
         sequence_type="all"
-    ).select("SequenceType", "CRC64").to_dicts() == [
+    )
+    assert sequences.schema["CRC64"] == pl.String
+    assert sequences.select("SequenceType", "CRC64").to_dicts() == [
         {"SequenceType": "canonical", "CRC64": "81FC3551E879CB1A"},
         {"SequenceType": "isoform", "CRC64": None},
     ]
@@ -289,8 +317,13 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
     assert selection.extract_ec_numbers()["ECNumber"].to_list() == ["1.2.3.4"]
     assert selection.extract_go_annotations()["GOId"].to_list() == ["GO:0003677"]
     assert selection.extract_comments(comment_types=["FUNCTION"])[
-        "CommentType"
-    ].to_list() == ["FUNCTION"]
+        ["CommentType", "CommentText"]
+    ].to_dicts() == [
+        {
+            "CommentType": "FUNCTION",
+            "CommentText": "Demonstrates a mem-brane fixture.",
+        }
+    ]
     assert selection.extract_subcellular_locations()[
         "SubcellularLocation"
     ].to_list() == ["Nucleus"]
@@ -395,6 +428,10 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
             == "uniprot-knowledgebase-duckdb-v1"
         )
         assert metadata["bioextract.source_schema_profile"] == "uniprotkb-flat-file-v1"
+        assert (
+            metadata["bioextract.molecular_weight_validation_model"]
+            == "compatible-current-and-legacy"
+        )
         with pytest.raises(duckdb.Error):
             connection.execute("CREATE TABLE forbidden(value INTEGER)")
 
@@ -425,7 +462,7 @@ def test_missing_required_source_field_always_fails(tmp_path: Path) -> None:
     path.write_text(
         """ID   TEST_HUMAN Reviewed; 3 AA.
 AC   P12345;
-SQ   SEQUENCE   3 AA;  300 MW;  6AAEBDB000000000 CRC64;
+SQ   SEQUENCE   3 AA;  307 MW;  6AAEBDB000000000 CRC64;
      ACD
 //
 """,
@@ -454,13 +491,13 @@ def test_accessions_must_be_unique_across_records(tmp_path: Path) -> None:
         """ID   FIRST_HUMAN Reviewed; 3 AA.
 AC   P11111; Q99999;
 OX   NCBI_TaxID=9606;
-SQ   SEQUENCE   3 AA;  300 MW;  6AAEBDB000000000 CRC64;
+SQ   SEQUENCE   3 AA;  307 MW;  6AAEBDB000000000 CRC64;
      ACD
 //
 ID   SECOND_HUMAN Reviewed; 3 AA.
 AC   P22222; Q99999;
 OX   NCBI_TaxID=9606;
-SQ   SEQUENCE   3 AA;  300 MW;  69CB1DB000000000 CRC64;
+SQ   SEQUENCE   3 AA;  365 MW;  69CB1DB000000000 CRC64;
      AEF
 //
 """,
@@ -592,6 +629,185 @@ SQ   SEQUENCE   3 AA;  300 MW;  0000000000000000 CRC64;
         )
 
 
+def test_uniprot_molecular_weight_matches_real_q6gzx4_vector() -> None:
+    sequence = (
+        "MAFSAEDVLKEYDRRRRMEALLLSLYYPNDRKLLDYKEWSPPRVQVECPKAPVEWNNPPS"
+        "EKGLIVGHFSGIKYKGEKAQASEVDVNKMCCWVSKFKDAMRRYQGIQTCKIPGKVLSDLD"
+        "AKIKAYNLTVEGVEGFVRYSRVTKQHVAAFLKELRHSKQYENVNLIHYILTDKRVDIQHL"
+        "EKDLVKDFKALVESAHRMRQGHMINVKYILYQLLKKHGHGPDGPDILTVKTGSKGVLYDD"
+        "SFRKIYTDLGWKFTPL"
+    )
+    assert len(sequence) == 256
+    assert (
+        knowledgebase._calculate_molecular_weight(  # pyright: ignore[reportPrivateUsage]
+            sequence
+        )
+        == 29735
+    )
+
+
+def test_uniprot_molecular_weight_accepts_real_q6t412_rounding_vector(
+    tmp_path: Path,
+) -> None:
+    sequence = (
+        "MTEVQPPPAQSTVATADTPSLAPDTTLETSTSTELAPITTEQTIITTNAEGKKVKKIIRR"
+        "KRRPARPQVDPATFKTDT PAPT GTSFNIWYNKWSGGDREDKYLSQTAAQGRCNVARDSGY"
+        "TKADKTPGSYFCLFFARGICPKGVDCEYLHRLPTVTDIFPSNIDCFGRDKHSDYRDDMGG"
+        "VGSFQRQNRTLYIGRIHVTDDIEEIVARHFQEWGQIERTRVLTARGVAFVTYMNEANSQF"
+        "AKEAMAHQSLDHNEILNVRWATVDPNPQAAKREAHRIEEQAAEAIRKALPAAYVAELEGR"
+        "DPEAKKRRKIEGSFGLQGYEAPDDVWYAKEKAEWEAAKEIEAAGGAAXPRQMIESGEDAH"
+        "AHEADCAAMQVAPSGQHSQGNGIFSTSTLAALRGYTAAPAKPKVAPVAGPLVGYGSDDDSD"
+    ).replace(" ", "")
+    assert len(sequence) == 421
+    calculated = knowledgebase._calculate_molecular_weight(  # pyright: ignore[reportPrivateUsage]
+        sequence
+    )
+    assert calculated == 46189
+
+    entries = tmp_path / "q6t412.dat"
+    entries.write_text(
+        "ID   Q6T412_FIXTURE Reviewed; 421 AA.\n"
+        "AC   Q6T412;\n"
+        "OX   NCBI_TaxID=9606;\n"
+        "SQ   SEQUENCE   421 AA;  46189 MW;  EE7D1FA88E010B94 CRC64;\n"
+        f"     {sequence}\n"
+        "//\n",
+        encoding="utf-8",
+    )
+    UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+        tmp_path / "q6t412.duckdb"
+    )
+
+
+def test_dat_molecular_weight_must_match_sequence(tmp_path: Path) -> None:
+    entries = tmp_path / "bad-molecular-weight.dat"
+    entries.write_text(
+        """ID   TEST_HUMAN Reviewed; 3 AA.
+AC   P12345;
+OX   NCBI_TaxID=9606;
+SQ   SEQUENCE   3 AA;  308 MW;  6AAEBDB000000000 CRC64;
+     ACD
+//
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="molecular weight mismatch"):
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+            tmp_path / "bad-molecular-weight.duckdb"
+        )
+
+
+@pytest.mark.parametrize("molecular_weight", [5719, 5720])
+def test_knowledgebase_accepts_one_consistent_sec_weight_model(
+    tmp_path: Path, molecular_weight: int
+) -> None:
+    entries = tmp_path / f"sec-{molecular_weight}.dat"
+    entries.write_text(
+        "ID   SEC_FIXTURE Reviewed; 38 AA.\n"
+        f"AC   P{molecular_weight};\n"
+        "OX   NCBI_TaxID=9606;\n"
+        f"SQ   SEQUENCE   38 AA;  {molecular_weight} MW;  "
+        "3100000000007707 CRC64;\n"
+        f"     {'U' * 38}\n"
+        "//\n",
+        encoding="utf-8",
+    )
+    UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+        tmp_path / f"sec-{molecular_weight}.duckdb"
+    )
+
+
+def test_knowledgebase_rejects_conflicting_sec_weight_models(tmp_path: Path) -> None:
+    sequence = "U" * 38
+    entries = tmp_path / "conflicting-sec.dat"
+    entries.write_text(
+        "ID   CURRENT_SEC Reviewed; 38 AA.\n"
+        "AC   P5720;\n"
+        "OX   NCBI_TaxID=9606;\n"
+        "SQ   SEQUENCE   38 AA;  5720 MW;  3100000000007707 CRC64;\n"
+        f"     {sequence}\n"
+        "//\n"
+        "ID   LEGACY_SEC Reviewed; 38 AA.\n"
+        "AC   P5719;\n"
+        "OX   NCBI_TaxID=9606;\n"
+        "SQ   SEQUENCE   38 AA;  5719 MW;  3100000000007707 CRC64;\n"
+        f"     {sequence}\n"
+        "//\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="conflicting molecular-weight models"):
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+            tmp_path / "conflicting-sec.duckdb"
+        )
+
+
+@pytest.mark.parametrize(
+    ("alternative_products", "feature", "message"),
+    [
+        (
+            "CC       Name=Bad; IsoId=P12345-2; Sequence=Bogus;\n",
+            "",
+            "alternative-products Sequence",
+        ),
+        (
+            "CC       Name=Bad; IsoId=P12345-2; Sequence=VSP_000001;\n",
+            'FT   VAR_SEQ         2\nFT                   /note="C -> G"\n',
+            "VAR_SEQ feature is missing /id",
+        ),
+        (
+            "CC       Name=Bad; Sequence=Displayed;\n",
+            "",
+            "Name block is missing IsoId",
+        ),
+        (
+            "CC       Name=Bad; IsoId=P12345-2;\n",
+            "",
+            "Name block is missing Sequence",
+        ),
+        (
+            "CC       Name=Bad; IsoId=P12345-2; Sequence=VSP_000001;\n",
+            'FT   VAR_SEQ         2\nFT                   /id="VSP_1"\n',
+            "Invalid UniProt VAR_SEQ /id",
+        ),
+        (
+            "CC       Name=Bad; IsoId=P12345-2; Sequence=VSP_000001;\n",
+            (
+                'FT   VAR_SEQ         2\nFT                   /id="VSP_000001"\n'
+                'FT                   /id="VSP_000001"\n'
+            ),
+            "Duplicate UniProt VAR_SEQ /id",
+        ),
+    ],
+)
+def test_knowledgebase_rejects_invalid_isoform_sequence_semantics(
+    tmp_path: Path,
+    alternative_products: str,
+    feature: str,
+    message: str,
+) -> None:
+    entries = tmp_path / "invalid-isoform.dat"
+    entries.write_text(
+        (
+            "ID   TEST_HUMAN Reviewed; 3 AA.\n"
+            "AC   P12345;\n"
+            "OX   NCBI_TaxID=9606;\n"
+            "CC   -!- ALTERNATIVE PRODUCTS:\n"
+            f"{alternative_products}"
+            f"{feature}"
+            "SQ   SEQUENCE   3 AA;  307 MW;  6AAEBDB000000000 CRC64;\n"
+            "     ACD\n"
+            "//\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+            tmp_path / "invalid-isoform.duckdb"
+        )
+
+
 @pytest.mark.parametrize(
     "sq_line",
     [
@@ -642,7 +858,7 @@ CC       Name=A; IsoId=P16376-1; Sequence=External;
 FT   VAR_SEQ         2
 FT                   /note="C -> G (in isoform C)"
 FT                   /id="VSP_013348"
-SQ   SEQUENCE   3 AA;  300 MW;  6AAEBDB000000000 CRC64;
+SQ   SEQUENCE   3 AA;  307 MW;  6AAEBDB000000000 CRC64;
      ACD
 //
 ID   7UP2_DROME Reviewed; 3 AA.
@@ -653,7 +869,7 @@ CC       Event=Alternative splicing; Named isoforms=3;
 CC       Name=A; IsoId=P16376-1; Sequence=Displayed;
 CC       Name=B; IsoId=P16375-1; Sequence=External;
 CC       Name=C; IsoId=P16375-2, P22966-1; Sequence=External;
-SQ   SEQUENCE   3 AA;  300 MW;  69CB1DB000000000 CRC64;
+SQ   SEQUENCE   3 AA;  365 MW;  69CB1DB000000000 CRC64;
      AEF
 //
 """,

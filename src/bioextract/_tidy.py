@@ -208,15 +208,26 @@ class TidyDataset:
 
     @property
     def _source_records(self) -> tuple[SourceFileRecord, ...]:
-        return tuple(
-            SourceFileRecord(
-                logical_name=source.logical_name,
-                path=source.path,
-                media_type=source.media_type,
-                sha256=source.sha256,
+        records: list[SourceFileRecord] = []
+        logical_names: set[str] = set()
+        for source in self._sources:
+            logical_name = source.logical_name.strip()
+            if not logical_name:
+                raise ValueError("TidySource.logical_name must be non-empty")
+            if logical_name in logical_names:
+                raise ValueError(
+                    "TidySource.logical_name values must be unique after normalization"
+                )
+            logical_names.add(logical_name)
+            records.append(
+                SourceFileRecord(
+                    logical_name=logical_name,
+                    path=source.path,
+                    media_type=source.media_type,
+                    sha256=source.sha256,
+                )
             )
-            for source in self._sources
-        )
+        return tuple(records)
 
 
 def calculate_file_sha256(file_path: Path) -> str:

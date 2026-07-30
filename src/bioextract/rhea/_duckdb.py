@@ -12,7 +12,7 @@ from typing import Literal
 import duckdb
 import polars as pl
 
-from .constant import SCHEMA_VERSION
+from .constant import SCHEMA_VERSION, SOURCE_SCHEMA_PROFILE
 from .rhea import RheaWriteResult
 from .util import (
     calculate_sha256,
@@ -751,7 +751,7 @@ def _record_metadata(
         "bioextract.metadata_schema_version": "3",
         "bioextract.resource_name": "rhea",
         "bioextract.resource_schema_version": SCHEMA_VERSION,
-        "bioextract.source_schema_profile": "rhea-release-bundle-v1",
+        "bioextract.source_schema_profile": SOURCE_SCHEMA_PROFILE,
         "bioextract.scope": scope,
         "bioextract.generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "bioextract.package_version": bioextract_version,

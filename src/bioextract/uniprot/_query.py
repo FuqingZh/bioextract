@@ -487,15 +487,12 @@ def _duckdb_type(dtype: object) -> str:
 
 
 def _cursor_frame(cursor: duckdb.DuckDBPyConnection) -> pl.DataFrame:
-    columns = [description[0] for description in cursor.description]
-    rows = cursor.fetchall()
-    if rows:
-        return pl.DataFrame(rows, schema=columns, orient="row")
     schema = {
         description[0]: _polars_type(str(description[1]))
         for description in cursor.description
     }
-    return pl.DataFrame(schema=schema)
+    rows = cursor.fetchall()
+    return pl.DataFrame(rows, schema=schema, orient="row")
 
 
 def _polars_type(type_name: str) -> type[pl.DataType]:

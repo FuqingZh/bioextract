@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 SCHEMA_VERSION = "rhea-duckdb-v1"
+SOURCE_SCHEMA_PROFILE = "rhea-release-bundle-v1"
 
 RheaNamespace = Literal[
     "rhea",
