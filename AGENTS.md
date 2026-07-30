@@ -29,8 +29,22 @@ pull-request boundary, verify AO health and start a task-specific worker before
 creating the implementation branch or pull request. If a pull request already
 exists, mark it ready for review if it is a draft, then restore its owning
 worker or claim it with `--no-takeover`. Ready-for-review is only an AO claim
-prerequisite; leave merge and risk decisions to the user. If AO is unavailable,
-use an isolated worktree and report that fallback.
+prerequisite.
+
+Conversation authorization for a low-risk implementation also authorizes the
+worker to request GitHub native auto-merge without a second merge
+authorization, but only after required CI passes on the exact current head,
+current-head review is clean, and no actionable review threads remain. Read
+those gates back immediately before the request. A repository-local stricter
+policy, an explicit user stop, or a high-risk, irreversible, permission,
+security, secret, release, or compatibility decision withholds auto-merge and
+requires escalation.
+
+This authority applies only to GitHub's native per-pull-request auto-merge. It
+does not authorize always-on AO project configuration such as `autoMerge`,
+whose cancellation and state-change behavior is unproven and must remain
+disabled. If AO is unavailable, use an isolated worktree and report that
+fallback.
 
 Classify AO observations by state owner before diagnosing them:
 
