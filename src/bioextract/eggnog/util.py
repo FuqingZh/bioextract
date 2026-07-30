@@ -74,12 +74,14 @@ def write_mapping_tsv(
         row["CogCategory"]: (row["CogClass"], row["CogName"])
         for row in df_cog_fun.iter_rows(named=True)
     }
-    with open_sqlite_path(file_eggnog_db, dir_tmp=dir_tmp) as file_sqlite:
-        with sqlite3.connect(file_sqlite) as conn:
-            with file_out.open("w", encoding="utf-8", newline="") as handle:
-                writer = create_tsv_writer(handle)
-                writer.writerow(COLS_MAPPING)
-                write_mapping_rows(writer, conn=conn, map_cog_fun=map_cog_fun)
+    with (
+        open_sqlite_path(file_eggnog_db, dir_tmp=dir_tmp) as file_sqlite,
+        sqlite3.connect(file_sqlite) as conn,
+        file_out.open("w", encoding="utf-8", newline="") as handle,
+    ):
+        writer = create_tsv_writer(handle)
+        writer.writerow(COLS_MAPPING)
+        write_mapping_rows(writer, conn=conn, map_cog_fun=map_cog_fun)
 
 
 def write_mapping_rows(
@@ -395,9 +397,11 @@ def open_sqlite_path(
 
     with tempfile.TemporaryDirectory(dir=dir_tmp) as dir_work:
         file_sqlite = Path(dir_work) / file_eggnog_db.with_suffix("").name
-        with gzip.open(file_eggnog_db, "rb") as handle_in:
-            with file_sqlite.open("wb") as handle_out:
-                shutil.copyfileobj(handle_in, handle_out, length=1024 * 1024 * 16)
+        with (
+            gzip.open(file_eggnog_db, "rb") as handle_in,
+            file_sqlite.open("wb") as handle_out,
+        ):
+            shutil.copyfileobj(handle_in, handle_out, length=1024 * 1024 * 16)
         yield file_sqlite
 
 

@@ -182,9 +182,11 @@ def test_build_tidy_writes_mapping_parquet_and_manifest(tmp_path: Path) -> None:
 def test_gzip_sqlite_is_decompressed_to_tmp_dir(tmp_path: Path) -> None:
     files = write_eggnog_fixture(tmp_path)
     file_gz = tmp_path / "eggnog.db.gz"
-    with files["db"].open("rb") as handle_in:
-        with gzip.open(file_gz, "wb") as handle_out:
-            shutil.copyfileobj(handle_in, handle_out)
+    with (
+        files["db"].open("rb") as handle_in,
+        gzip.open(file_gz, "wb") as handle_out,
+    ):
+        shutil.copyfileobj(handle_in, handle_out)
 
     db = EggnogDb.from_files(
         file_eggnog_db=file_gz,

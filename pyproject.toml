@@ -27,6 +27,9 @@ dev = [
 target-version = "py313"
 line-length = 88
 
+[tool.ruff.lint]
+extend-select = ["SIM117"]
+
 [tool.pyright]
 include = ["src", "tests", "scripts"]
 exclude = [".venv"]
