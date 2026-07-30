@@ -18,6 +18,7 @@ import bioextract.rhea as rhea
 import bioextract.stringdb as stringdb
 import bioextract.uniprot as uniprot
 import bioextract.wikipathways as wikipathways
+from bioextract._publication import validate_duckdb_metadata_v3
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
 from bioextract.stringdb.stringdb import StringSelection
 
@@ -89,6 +90,57 @@ def test_publication_rejects_invalid_release_provenance(
     dataset.release_version_source = release_version_source
     with pytest.raises(ValueError, match=message):
         dataset.write_parquet(tmp_path / "invalid-release.parquet")
+
+
+@pytest.mark.parametrize(
+    ("corruption", "message"),
+    [
+        (
+            "DELETE FROM _bioextract.metadata "
+            "WHERE key='bioextract.release_version_source'",
+            "must occur together",
+        ),
+        (
+            "UPDATE _bioextract.metadata SET value='filename' "
+            "WHERE key='bioextract.release_version_source'",
+            "caller or official_metadata",
+        ),
+        (
+            "UPDATE _bioextract.metadata SET value=' ' "
+            "WHERE key='bioextract.release_version'",
+            "release_version must be non-empty",
+        ),
+    ],
+)
+def test_v3_reader_rejects_invalid_release_provenance(
+    tmp_path: Path, corruption: str, message: str
+) -> None:
+    path = tmp_path / "release.duckdb"
+    _dataset(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(corruption)
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+        with pytest.raises(ValueError, match=message):
+            validate_duckdb_metadata_v3(connection, metadata)
+
+
+def test_v3_reader_rejects_release_source_without_release(tmp_path: Path) -> None:
+    path = tmp_path / "source-only.duckdb"
+    dataset = _dataset(tmp_path)
+    dataset.release_version = None
+    dataset.write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "INSERT INTO _bioextract.metadata VALUES "
+            "('bioextract.release_version_source', 'caller')"
+        )
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+        with pytest.raises(ValueError, match="must occur together"):
+            validate_duckdb_metadata_v3(connection, metadata)
 
 
 def test_duckdb_publication_has_internal_provenance_schema(

@@ -92,6 +92,19 @@ def validate_duckdb_metadata_v3(
     missing = sorted(required - set(metadata))
     if missing:
         raise ValueError(f"Metadata v3 is missing required keys: {missing}")
+    release_version = metadata.get("bioextract.release_version")
+    release_version_source = metadata.get("bioextract.release_version_source")
+    if (release_version is None) != (release_version_source is None):
+        raise ValueError(
+            "Metadata v3 release_version and release_version_source must occur together"
+        )
+    if release_version is not None:
+        if not release_version.strip():
+            raise ValueError("Metadata v3 release_version must be non-empty")
+        if release_version_source not in {"caller", "official_metadata"}:
+            raise ValueError(
+                "Metadata v3 release_version_source must be caller or official_metadata"
+            )
     source_rows = connection.execute(
         "SELECT logical_name, display_path, bytes, media_type, sha256 "
         "FROM _bioextract.source_file ORDER BY logical_name"
@@ -673,6 +686,15 @@ def _prepare_destination(
     *,
     if_exists: str,
 ) -> Path:
+    return preflight_publication_destination(path, if_exists=if_exists)
+
+
+def preflight_publication_destination(
+    path: os.PathLike[str] | str,
+    *,
+    if_exists: str,
+) -> Path:
+    """Validate a publication destination before expensive source processing."""
     if if_exists not in {"fail", "replace"}:
         raise ValueError("if_exists must be 'fail' or 'replace'")
     destination = Path(path)

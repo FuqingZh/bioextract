@@ -437,6 +437,42 @@ SQ   SEQUENCE   3 AA;  300 MW;  ABC123 CRC64;
         )
 
 
+def test_existing_destination_fails_before_entries_are_parsed(tmp_path: Path) -> None:
+    entries = tmp_path / "invalid.dat"
+    entries.write_text("not a UniProt record\n", encoding="utf-8")
+    destination = tmp_path / "existing.duckdb"
+    destination.write_bytes(b"existing")
+
+    with pytest.raises(FileExistsError):
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(destination)
+    assert destination.read_bytes() == b"existing"
+
+
+def test_accessions_must_be_unique_across_records(tmp_path: Path) -> None:
+    entries = tmp_path / "duplicate-accession.dat"
+    entries.write_text(
+        """ID   FIRST_HUMAN Reviewed; 3 AA.
+AC   P11111; Q99999;
+OX   NCBI_TaxID=9606;
+SQ   SEQUENCE   3 AA;  300 MW;  ABC123 CRC64;
+     ACD
+//
+ID   SECOND_HUMAN Reviewed; 3 AA.
+AC   P22222; Q99999;
+OX   NCBI_TaxID=9606;
+SQ   SEQUENCE   3 AA;  300 MW;  DEF456 CRC64;
+     AEF
+//
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="reused across records: Q99999"):
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+            tmp_path / "duplicate.duckdb"
+        )
+
+
 def test_metadata_v3_requires_validation_issue_table(tmp_path: Path) -> None:
     path = tmp_path / "uniprot.duckdb"
     UniProtDatabase.from_knowledgebase(
@@ -505,6 +541,13 @@ def test_selection_and_fasta_inputs_reject_empty_values(tmp_path: Path) -> None:
         UniProtDatabase.from_knowledgebase(
             entries=entries, canonical_sequences=empty_fasta
         ).write_duckdb(tmp_path / "invalid-fasta.duckdb")
+
+    invalid_fasta = tmp_path / "invalid-sequence.fasta"
+    invalid_fasta.write_text(">sp|P12345-2|TEST_HUMAN\nAC D1!\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid sequence characters"):
+        UniProtDatabase.from_knowledgebase(
+            entries=entries, isoform_sequences=invalid_fasta
+        ).write_duckdb(tmp_path / "invalid-characters.duckdb")
 
 
 def test_cross_entry_external_isoform_contexts_and_owner_materialization(

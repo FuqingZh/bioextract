@@ -21,6 +21,7 @@ from bioextract._publication import (
     DuckDBWriteResult,
     RelationSpec,
     SourceFileRecord,
+    preflight_publication_destination,
     write_duckdb_publication,
 )
 
@@ -188,6 +189,7 @@ def write_knowledgebase(
     path: Path,
     if_exists: str,
 ) -> DuckDBWriteResult:
+    preflight_publication_destination(path, if_exists=if_exists)
     with tempfile.TemporaryDirectory(prefix="bioextract-uniprot-kb-") as temp_dir:
         spool_dir = Path(temp_dir)
         writers, handles = _open_spools(spool_dir)
@@ -289,6 +291,10 @@ def _create_validation_index(connection: sqlite3.Connection) -> None:
     connection.executescript(
         """
             CREATE TABLE canonical(accession TEXT PRIMARY KEY, sequence TEXT NOT NULL);
+            CREATE TABLE accession(
+                accession TEXT PRIMARY KEY,
+                primary_accession TEXT NOT NULL
+            );
             CREATE TABLE isoform(
                 isoform_id TEXT NOT NULL,
                 primary_accession TEXT NOT NULL,
@@ -567,6 +573,14 @@ def _write_record(
         }
     )
     for index, accession in enumerate(record.accessions):
+        try:
+            database_index.execute(
+                "INSERT INTO accession VALUES (?, ?)", (accession, primary)
+            )
+        except sqlite3.IntegrityError as error:
+            raise ValueError(
+                f"UniProt accession is reused across records: {accession}"
+            ) from error
         writers["protein_accession"].writerow(
             {
                 "primary_accession": primary,
@@ -959,6 +973,10 @@ def _validated_fasta_sequence(
     if not sequence:
         raise ValueError(
             f"UniProt {role} FASTA record has an empty sequence: {identifier}"
+        )
+    if re.fullmatch(r"[A-Z]+", sequence) is None:
+        raise ValueError(
+            f"UniProt {role} FASTA record has invalid sequence characters: {identifier}"
         )
     return sequence
 
