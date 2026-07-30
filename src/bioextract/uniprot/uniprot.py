@@ -5,8 +5,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import Iterable
-from dataclasses import asdict
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -34,9 +33,9 @@ from .constant import (
     MEDIA_TYPE_PARQUET_DATASET,
     MEDIA_TYPE_TSV,
     MEDIA_TYPE_TSV_GZIP,
+    SCHEMA_VERSION,
     SCHEMA_VERSION_EGGNOG_XREF,
     SCHEMA_VERSION_SUBCELLULAR_LOCATION,
-    SCHEMA_VERSION,
 )
 from .util import (
     filter_taxids,

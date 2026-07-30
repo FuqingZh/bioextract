@@ -38,7 +38,7 @@ COLS_IDMAPPING_SELECTED = [
     "AdditionalPubMed",
 ]
 
-SCHEMA_MAPPING: SchemaDict = {col: pl.String for col in COLS_IDMAPPING_SELECTED}
+SCHEMA_MAPPING: SchemaDict = dict.fromkeys(COLS_IDMAPPING_SELECTED, pl.String)
 
 REQUIRED_COLS_MAPPING = tuple(COLS_IDMAPPING_SELECTED)
 

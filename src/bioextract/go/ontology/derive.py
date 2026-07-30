@@ -110,14 +110,11 @@ def derive_graph_tables(
     term_data: TermColumnBuffer,
     edge_data: EdgeColumnBuffer,
 ) -> tuple[AncestorColumnBuffer, DepthColumnBuffer]:
-    map_namespace = {
-        go_id: namespace
-        for go_id, namespace in zip(term_data.go_id, term_data.namespace, strict=True)
-    }
+    map_namespace = dict(zip(term_data.go_id, term_data.namespace, strict=True))
     set_nodes = set(map_namespace)
     map_parents: dict[str, list[str]] = defaultdict(list)
     map_children: dict[str, list[str]] = defaultdict(list)
-    map_indegree: dict[str, int] = {node: 0 for node in set_nodes}
+    map_indegree: dict[str, int] = dict.fromkeys(set_nodes, 0)
 
     for child_node, parent_node, relation_type in zip(
         edge_data.child_go_id,

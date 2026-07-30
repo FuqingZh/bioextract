@@ -20,6 +20,8 @@ from bioextract.interpro import (
 from bioextract.kegg import KeggDb, KeggResourceLimits
 from bioextract.kegg.brite import (
     build_tidy_frames as build_kegg_tidy_frames,
+)
+from bioextract.kegg.brite import (
     run_tidy_kegg_brite,
 )
 from bioextract.kegg.kegg import KeggSelection

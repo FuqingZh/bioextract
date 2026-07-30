@@ -1,6 +1,7 @@
-import polars as pl
 import re
 from typing import Literal
+
+import polars as pl
 
 DEFAULT_SOURCE_RANK_MAP: dict[str, int] = {
     "UniProt_AC": 1,

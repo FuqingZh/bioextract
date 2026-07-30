@@ -134,7 +134,7 @@ def select_mapping_frame(
     validate_kind_input_id(kind_input_id)
     if df_input_ids.height == 0:
         cols_out = list(cols_group_id) + ["InputId", "KindInputId"] + COLS_MAPPING
-        return pl.DataFrame(schema={col: pl.String for col in cols_out})
+        return pl.DataFrame(schema=dict.fromkeys(cols_out, pl.String))
 
     input_ids = df_input_ids.get_column("InputId").unique().sort().to_list()
     with open_sqlite_path(file_eggnog_db, dir_tmp=dir_tmp) as file_sqlite:
@@ -390,7 +390,7 @@ def open_sqlite_path(
     file_eggnog_db: Path,
     *,
     dir_tmp: Path | None,
-) -> Generator[Path, None, None]:
+) -> Generator[Path]:
     if file_eggnog_db.suffix != ".gz":
         yield file_eggnog_db
         return

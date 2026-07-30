@@ -3,8 +3,7 @@ import re
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
-from typing import TextIO
+from typing import Protocol, TextIO
 
 import polars as pl
 from polars._typing import SchemaDict
