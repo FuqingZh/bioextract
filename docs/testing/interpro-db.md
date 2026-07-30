@@ -38,7 +38,7 @@ It does not cover:
 - non-PFAM signatures are excluded.
 - Pfam names remain distinct from InterPro entry names.
 - missing or conflicting Pfam names, incomplete xrefs, malformed Pfam IDs, and
-  cross-version raw inputs raise targeted `ValueError`.
+  mapping relationships absent from the XML raise targeted `ValueError`.
 - a raw Pfam ID paired with the wrong InterPro ID fails even when both IDs exist
   independently in XML.
 - formal manifests contain hashes for both raw sources and all three assets.
@@ -49,8 +49,9 @@ It does not cover:
 
 ## Real-Data Validation
 
-Canonical and compact publication are validated against same-version
-`protein2ipr.dat.gz` and `interpro.xml.gz` files. Canonical acceptance checks
+Canonical and compact publication validate the explicitly assigned
+`protein2ipr.dat.gz` and `interpro.xml.gz` roles by content. XML official
+metadata supplies release identity; paths do not. Canonical acceptance checks
 include exact schema, readable row count, and a deterministic sample after
 write. Compact acceptance checks include:
 

@@ -143,7 +143,12 @@ class KEGGDatabase:
     )
 
     @classmethod
-    def from_metabolic_release(cls, source: os.PathLike[str] | str) -> KEGGDatabase:
+    def from_metabolic_release(
+        cls,
+        source: os.PathLike[str] | str,
+        *,
+        release_version: str | None = None,
+    ) -> KEGGDatabase:
         """Discover a complete local KEGG metabolic release.
 
         ``source`` may be the release directory, its ``raw`` directory, or a
@@ -159,7 +164,9 @@ class KEGGDatabase:
         return cls(
             snapshot=_KeggSnapshot(
                 kind=_KeggSnapshotKind.METABOLIC_FILES,
-                metabolic=discover_metabolic_snapshot(source),
+                metabolic=discover_metabolic_snapshot(
+                    source, release_version=release_version
+                ),
             )
         )
 
@@ -623,8 +630,13 @@ class KEGGDatabase:
             }
             return KeggTidyDataset(
                 frames=frames,
-                source=TidySource(path=file_brite_json, media_type=MEDIA_TYPE_JSON),
-                schema_version=BRITE_SCHEMA_VERSION,
+                source=TidySource(
+                    logical_name="brite_json",
+                    path=file_brite_json,
+                    media_type=MEDIA_TYPE_JSON,
+                ),
+                resource_schema_version=BRITE_SCHEMA_VERSION,
+                source_schema_profile="kegg-brite-json-v1",
                 build_id_prefix=f"kegg-brite-{file_brite_json.stem}",
                 assets=tuple(
                     TidyAsset(path=path, kind=kind, frame_name=frame_name)
@@ -637,7 +649,8 @@ class KEGGDatabase:
         return KeggTidyDataset(
             frames={"mapping": self.extract_mapping().lazy()},
             source=self._mapping_tidy_sources(),
-            schema_version=MAPPING_SCHEMA_VERSION,
+            resource_schema_version=MAPPING_SCHEMA_VERSION,
+            source_schema_profile="kegg-organism-mapping-files-v1",
             build_id_prefix=f"kegg-mapping-{self.snapshot.organism_code}",
             assets=tuple(
                 TidyAsset(path=path, kind=kind, frame_name=frame_name)
@@ -728,25 +741,33 @@ class KEGGDatabase:
     def _mapping_tidy_sources(self) -> tuple[TidySource, ...]:
         sources = [
             TidySource(
+                logical_name="uniprot_conversion",
                 path=self._required_path(self.snapshot.file_conv_uniprot),
                 media_type=MEDIA_TYPE_TSV,
             ),
             TidySource(
+                logical_name="gene_ko",
                 path=self._required_path(self.snapshot.file_gene_ko),
                 media_type=MEDIA_TYPE_TSV,
             ),
             TidySource(
+                logical_name="gene_pathway",
                 path=self._required_path(self.snapshot.file_gene_pathway),
                 media_type=MEDIA_TYPE_TSV,
             ),
         ]
         if self.snapshot.file_gene_list is not None:
             sources.append(
-                TidySource(path=self.snapshot.file_gene_list, media_type=MEDIA_TYPE_TSV)
+                TidySource(
+                    logical_name="gene_list",
+                    path=self.snapshot.file_gene_list,
+                    media_type=MEDIA_TYPE_TSV,
+                )
             )
         if self.snapshot.file_conv_ncbi_geneid is not None:
             sources.append(
                 TidySource(
+                    logical_name="ncbi_gene_conversion",
                     path=self.snapshot.file_conv_ncbi_geneid,
                     media_type=MEDIA_TYPE_TSV,
                 )

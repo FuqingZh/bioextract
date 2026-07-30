@@ -384,8 +384,9 @@ def test_publication_metadata_and_direction_view_follow_shared_contract(
         ).fetchall()
 
     assert metadata["bioextract.resource_name"] == "rhea"
-    assert metadata["bioextract.schema_version"] == "rhea-duckdb-v1"
+    assert metadata["bioextract.resource_schema_version"] == "rhea-duckdb-v1"
     assert metadata["bioextract.release_version"] == "141"
+    assert metadata["bioextract.release_version_source"] == "official_metadata"
     assert "resource_name" not in metadata
     assert directions == [
         (10000, "L", None),
@@ -617,6 +618,10 @@ def test_metadata_versions_physical_curie_contract_and_native_connection(
             "UPDATE _bioextract.metadata SET value='1' "
             "WHERE key='bioextract.metadata_schema_version'"
         )
+        connection.execute(
+            "UPDATE _bioextract.metadata SET key='bioextract.schema_version' "
+            "WHERE key='bioextract.resource_schema_version'"
+        )
         connection.execute("DROP TABLE _bioextract.validation_issue")
     assert RheaDatabase.from_duckdb(legacy_metadata).connect().close() is None
 
@@ -629,6 +634,13 @@ def test_metadata_versions_physical_curie_contract_and_native_connection(
         )
     with pytest.raises(ValueError, match="metadata_schema_version"):
         RheaDatabase.from_duckdb(unknown)
+
+    missing_v3_table = tmp_path / "missing-v3-table.duckdb"
+    missing_v3_table.write_bytes(current.read_bytes())
+    with duckdb.connect(str(missing_v3_table)) as connection:
+        connection.execute("DROP TABLE _bioextract.validation_issue")
+    with pytest.raises(ValueError, match="validation_issue"):
+        RheaDatabase.from_duckdb(missing_v3_table)
 
     numeric = tmp_path / "numeric.duckdb"
     numeric.write_bytes(current.read_bytes())

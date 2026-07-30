@@ -13,7 +13,7 @@ from typing import Any, Literal
 import duckdb
 import polars as pl
 
-from bioextract._publication import DuckDBWriteResult
+from bioextract._publication import DuckDBWriteResult, validate_duckdb_metadata_v3
 
 SCHEMA_VERSION = "kegg-metabolic-v0.1"
 METADATA_VERSION = "2"
@@ -195,17 +195,20 @@ def from_metabolic_files(
     return MetabolicSnapshot(sources=sources, release_version=release_version)
 
 
-def from_metabolic_release(source: os.PathLike[str] | str) -> MetabolicSnapshot:
+def from_metabolic_release(
+    source: os.PathLike[str] | str,
+    *,
+    release_version: str | None = None,
+) -> MetabolicSnapshot:
     path = Path(source)
     if not path.exists():
         raise FileNotFoundError(path)
     if path.is_file():
         if not (zipfile.is_zipfile(path) or tarfile.is_tarfile(path)):
             raise ValueError(f"Unsupported KEGG metabolic release archive: {path}")
-        version_match = re.search(r"\d{4}-\d{2}", path.name)
         return MetabolicSnapshot(
             sources={},
-            release_version=version_match.group() if version_match else None,
+            release_version=release_version,
             complete_release=True,
             archive=path,
         )
@@ -218,9 +221,10 @@ def from_metabolic_release(source: os.PathLike[str] | str) -> MetabolicSnapshot:
     ]
     if missing:
         raise ValueError(f"Incomplete KEGG metabolic release; missing roles: {missing}")
-    version = path.name if re.fullmatch(r"\d{4}-\d{2}", path.name) else path.parent.name
     return MetabolicSnapshot(
-        sources=sources, release_version=version, complete_release=True
+        sources=sources,
+        release_version=release_version,
+        complete_release=True,
     )
 
 
@@ -510,15 +514,38 @@ def open_publication(path: Path) -> MetabolicPublication:
                 "SELECT key, value FROM _bioextract.metadata"
             ).fetchall()
         }
-        if metadata.get("bioextract.metadata_schema_version") not in {"1", "2"}:
+        if metadata.get("bioextract.metadata_schema_version") not in {"1", "2", "3"}:
             raise ValueError("Unsupported KEGG metadata schema version")
+        if metadata.get("bioextract.metadata_schema_version") == "3":
+            validate_duckdb_metadata_v3(con, metadata)
+            required_v3 = {
+                "bioextract.resource_name",
+                "bioextract.resource_schema_version",
+                "bioextract.source_schema_profile",
+                "bioextract.package_version",
+                "bioextract.generated_at",
+                "bioextract.validation_status",
+                "bioextract.validation_issue_count",
+                "bioextract.sources",
+            }
+            missing_v3 = sorted(required_v3 - set(metadata))
+            if missing_v3:
+                raise ValueError(f"KEGG metadata v3 is missing keys: {missing_v3}")
         if (
-            metadata.get("bioextract.metadata_schema_version") == "2"
+            metadata.get("bioextract.metadata_schema_version") in {"2", "3"}
             and "validation_issue" not in meta_tables
         ):
             raise ValueError(
                 "DuckDB file is missing bioextract metadata tables: validation_issue"
             )
+        if metadata.get("bioextract.metadata_schema_version") in {"2", "3"}:
+            issue_count = con.execute(
+                "SELECT count(*) FROM _bioextract.validation_issue"
+            ).fetchone()
+            if issue_count is None or int(
+                metadata.get("bioextract.validation_issue_count", "-1")
+            ) != int(issue_count[0]):
+                raise ValueError("KEGG validation issue count mismatch")
         if (
             metadata.get("bioextract.resource_name") != "kegg"
             or metadata.get("bioextract.scope") != "metabolic"
@@ -526,7 +553,13 @@ def open_publication(path: Path) -> MetabolicPublication:
             raise ValueError(
                 "DuckDB file is not a bioextract KEGG metabolic publication"
             )
-        if metadata.get("bioextract.schema_version") != SCHEMA_VERSION:
+        metadata_version = metadata.get("bioextract.metadata_schema_version")
+        resource_schema_key = (
+            "bioextract.resource_schema_version"
+            if metadata_version == "3"
+            else "bioextract.schema_version"
+        )
+        if metadata.get(resource_schema_key) != SCHEMA_VERSION:
             raise ValueError("Unsupported KEGG metabolic resource schema version")
         tables = {
             r[0]
@@ -550,7 +583,7 @@ def open_publication(path: Path) -> MetabolicPublication:
             for value in metadata.get("bioextract.capabilities", "").split(",")
             if value
         )
-        if metadata.get("bioextract.metadata_schema_version") == "2":
+        if metadata.get("bioextract.metadata_schema_version") in {"2", "3"}:
             if "bioextract.capabilities" not in metadata:
                 raise ValueError(
                     "KEGG metadata v2 publication is missing capability metadata"

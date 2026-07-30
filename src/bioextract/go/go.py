@@ -162,10 +162,12 @@ class GODatabase:
         self._tidy = GoTidyDataset(
             frames=frames,
             source=TidySource(
+                logical_name="go_obo",
                 path=self.snapshot.file_obo,
                 media_type=_obo_media_type(self.snapshot.file_obo),
             ),
-            schema_version=SCHEMA_VERSION,
+            resource_schema_version=SCHEMA_VERSION,
+            source_schema_profile="gene-ontology-obo-v1",
             build_id_prefix=f"go-ontology-{self.snapshot.file_obo.stem}",
             assets=tuple(
                 TidyAsset(path=path, kind=kind, frame_name=frame_name)

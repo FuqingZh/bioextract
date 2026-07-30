@@ -18,7 +18,7 @@ from bioextract._tidy import (
     TidySource,
 )
 
-from ._pfam import build_pfam_tidy_dataset
+from ._pfam import build_pfam_tidy_dataset, read_interpro_release_version
 from .constant import (
     ASSET_SPECS,
     MEDIA_TYPE_TSV_GZIP,
@@ -61,8 +61,8 @@ class InterProDatabase:
 
     `protein2ipr.dat.gz` supplies the canonical mapping. Optional InterPro XML
     enriches mapping rows with entry type and member-database metadata; without
-    XML those fields remain null. The compact Pfam tidy configuration requires
-    same-version XML and validates exact `InterProId + PfamId` relationships.
+    XML those fields remain null. The compact Pfam tidy configuration validates
+    exact `InterProId + PfamId` relationships against the supplied XML.
 
     Examples:
         Read the first domain annotation from a versioned snapshot:
@@ -104,7 +104,7 @@ class InterProDatabase:
             FileNotFoundError: If a supplied source file does not exist.
 
         Examples:
-            Use same-version XML to recover entry and member-database metadata:
+            Use XML to recover entry and member-database metadata:
 
             >>> db = InterProDatabase.from_mapping_files(
             ...     protein_to_interpro="fixtures/interpro/108.0/raw/protein2ipr.dat.gz",
@@ -252,14 +252,14 @@ class InterProDatabase:
 
         Notes:
             The mapping configuration accepts missing XML and leaves its
-            enrichment fields null. The Pfam configuration requires both raw
-            files under the same `<version>/raw/` directory and does not depend
-            on a previously written canonical mapping.
+            enrichment fields null. The Pfam configuration requires both
+            logical source roles and does not depend on a previously written
+            canonical mapping. Paths never supply release identity; official
+            XML metadata does.
 
         Examples:
-            The compact ``108.0`` snapshot below must include an INTERPRO
-            release record whose version is ``108.0``, matching its versioned
-            parent directory.
+            The XML below includes an INTERPRO release record whose official
+            version is published as the release identity.
 
             Build the default mapping plan:
 
@@ -284,6 +284,11 @@ class InterProDatabase:
                 ),
             )
 
+        release_version = (
+            read_interpro_release_version(self.snapshot.file_interpro_xml)
+            if self.snapshot.file_interpro_xml is not None
+            else None
+        )
         return InterProTidyDataset(
             frames={
                 "mapping": scan_mapping_frame(
@@ -293,13 +298,18 @@ class InterProDatabase:
                 )
             },
             source=self._tidy_sources(),
-            schema_version=SCHEMA_VERSION,
+            resource_schema_version=SCHEMA_VERSION,
+            source_schema_profile="interpro-protein2ipr-v1",
             build_id_prefix=f"interpro-mapping-{self.snapshot.file_protein2ipr.stem}",
             assets=tuple(
                 TidyAsset(path=path, kind=kind, frame_name=frame_name)
                 for path, kind, frame_name in ASSET_SPECS
             ),
             resource_name="interpro",
+            release_version=release_version,
+            release_version_source=(
+                "official_metadata" if release_version is not None else None
+            ),
         )
 
     def write_parquet(
@@ -384,6 +394,7 @@ class InterProDatabase:
     def _tidy_sources(self) -> tuple[TidySource, ...]:
         sources = [
             TidySource(
+                logical_name="protein_to_interpro",
                 path=self.snapshot.file_protein2ipr,
                 media_type=MEDIA_TYPE_TSV_GZIP,
             )
@@ -391,6 +402,7 @@ class InterProDatabase:
         if self.snapshot.file_interpro_xml is not None:
             sources.append(
                 TidySource(
+                    logical_name="interpro_xml",
                     path=self.snapshot.file_interpro_xml,
                     media_type=MEDIA_TYPE_XML_GZIP,
                 )

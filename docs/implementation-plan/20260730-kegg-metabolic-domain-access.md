@@ -459,7 +459,7 @@ native DuckDB relation returned by `connect().sql()`.
 6. Validate entity uniqueness, list-to-entry parity, relation endpoints,
    equation participants, module grammar, and duplicated link fields.
 7. Write a staging DuckDB adjacent to the destination.
-8. Create `_bioextract` metadata schema v2, close and reopen read-only, verify
+8. Create `_bioextract` metadata schema v3, close and reopen read-only, verify
    inventory and counts, then atomically replace the target.
 
 Tables are sorted by their primary lookup keys so DuckDB zone maps can prune
@@ -505,7 +505,7 @@ parser compatibility tests.
 
 - add `from_metabolic_release()` and `from_metabolic_files()`;
 - publish `kegg-metabolic-v0.1` to one DuckDB;
-- create metadata schema v2 and capability metadata;
+- create metadata schema v3 and capability metadata;
 - verify staging cleanup and old-target protection.
 
 ### Slice 3: publication-backed domain access
@@ -549,7 +549,7 @@ requests.
 
 Completed locally on 2026-07-30. The implementation uses exact and
 archive-safe release-layout discovery, streaming NDJSON relation spools, the
-shared metadata-v2 DuckDB publication lifecycle, capability-to-inventory
+shared metadata-v3 DuckDB publication lifecycle, capability-to-inventory
 validation, validated read-only reopening, reaction-centered PascalCase
 extractors, transferred/obsolete EC semantics, and recursive exact module
 block evaluation with cycle detection. Focused KEGG tests and `pdm run check`
@@ -559,7 +559,8 @@ The real 2026-07 CephFS layout resolved the expected four lists, four
 entry-batch collections, and seven global relations with batch counts
 1,962/1,246/835/58. The formal publication was atomically written to
 `kegg/metabolic/2026-07/tidy/kegg.duckdb`: 25 canonical tables, 444,929 rows,
-17,313,792 bytes, metadata schema v2, and two persisted
+17,313,792 bytes, legacy metadata schema v2 (an old artifact, not the current
+v3 writer contract), and two persisted
 `foreign_key_violation` warnings for absent compound participant `C23109`.
 Publication with 4,112 source SHA-256 values took 2:08.57 wall-clock time and
 peaked at 1,476,904 KiB RSS.

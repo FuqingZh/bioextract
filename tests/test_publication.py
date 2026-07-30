@@ -31,8 +31,9 @@ def _dataset(tmp_path: Path, *, relation_count: int = 1) -> TidyDataset:
     }
     return TidyDataset(
         frames=frames,
-        source=TidySource(source, "text/tab-separated-values"),
-        schema_version="example-v1",
+        source=TidySource("source", source, "text/tab-separated-values"),
+        resource_schema_version="example-v1",
+        source_schema_profile="example-source-v1",
         build_id_prefix="example",
         assets=tuple(
             TidyAsset(
@@ -65,8 +66,29 @@ def test_parquet_publication_embeds_provenance_without_sidecar(
         .fetchall()
     )
     assert metadata[b"bioextract.resource_name"] == b"example"
-    assert metadata[b"bioextract.schema_version"] == b"example-v1"
+    assert metadata[b"bioextract.resource_schema_version"] == b"example-v1"
     assert metadata[b"bioextract.release_version"] == b"2026-07-29"
+
+
+@pytest.mark.parametrize(
+    ("release_version", "release_version_source", "message"),
+    [
+        (" ", None, "release_version must be non-empty"),
+        ("2026_01", "filename", "caller or official_metadata"),
+        (None, "caller", "requires release_version"),
+    ],
+)
+def test_publication_rejects_invalid_release_provenance(
+    tmp_path: Path,
+    release_version: str | None,
+    release_version_source: str | None,
+    message: str,
+) -> None:
+    dataset = _dataset(tmp_path)
+    dataset.release_version = release_version
+    dataset.release_version_source = release_version_source
+    with pytest.raises(ValueError, match=message):
+        dataset.write_parquet(tmp_path / "invalid-release.parquet")
 
 
 def test_duckdb_publication_has_internal_provenance_schema(
@@ -94,7 +116,7 @@ def test_duckdb_publication_has_internal_provenance_schema(
         assert connection.execute(
             "SELECT value FROM _bioextract.metadata "
             "WHERE key = 'bioextract.metadata_schema_version'"
-        ).fetchone() == ("2",)
+        ).fetchone() == ("3",)
         assert connection.execute(
             "SELECT count(*) FROM _bioextract.validation_issue"
         ).fetchone() == (0,)
@@ -129,8 +151,9 @@ def test_canonical_publication_normalizes_derived_columns_and_records_mapping(
                 {"UniProtId": ["P12345"], "ReactomePathwayId": ["R-HSA-1"]}
             ).lazy()
         },
-        source=TidySource(source, "text/tab-separated-values"),
-        schema_version="example-v1",
+        source=TidySource("source", source, "text/tab-separated-values"),
+        resource_schema_version="example-v1",
+        source_schema_profile="example-source-v1",
         build_id_prefix="example",
         assets=(
             TidyAsset(
@@ -173,8 +196,9 @@ def test_official_headers_receive_only_required_duckdb_mapping(
     source.write_text("Name\tname\nA\tB\n", encoding="utf-8")
     dataset = TidyDataset(
         frames={"official": pl.DataFrame({"Name": ["A"], "name": ["B"]}).lazy()},
-        source=TidySource(source, "text/tab-separated-values"),
-        schema_version="official-v1",
+        source=TidySource("source", source, "text/tab-separated-values"),
+        resource_schema_version="official-v1",
+        source_schema_profile="official-source-v1",
         build_id_prefix="official",
         assets=(TidyAsset("official.parquet", "canonical", "official"),),
     )
@@ -235,8 +259,9 @@ def test_failed_replacement_preserves_existing_publication(
             .lazy()
             .select(pl.col("value").cast(pl.Int64))
         },
-        source=TidySource(source, "text/tab-separated-values"),
-        schema_version="bad-v1",
+        source=TidySource("source", source, "text/tab-separated-values"),
+        resource_schema_version="bad-v1",
+        source_schema_profile="bad-source-v1",
         build_id_prefix="bad",
         assets=(TidyAsset("relation.parquet", "canonical", "relation"),),
     )
@@ -285,7 +310,8 @@ def test_resource_factories_do_not_expose_limits() -> None:
         wikipathways.WikiPathwaysDatabase.from_gmt,
         eggnog.EggNOGDatabase.from_files,
         interpro.InterProDatabase.from_mapping_files,
-        uniprot.UniProtDatabase.from_files,
+        uniprot.UniProtDatabase.from_idmapping,
+        uniprot.UniProtDatabase.from_knowledgebase,
         stringdb.STRINGDatabase.from_files,
         omnipath.OmniPathDatabase.from_files,
         rhea.RheaDatabase.from_release,
@@ -335,13 +361,19 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "protein_to_interpro",
             "interpro_xml",
         ),
-        uniprot.UniProtDatabase.from_files: ("id_mapping",),
-        uniprot.UniProtDatabase.from_dat: ("path", "source_database"),
+        uniprot.UniProtDatabase.from_idmapping: ("path", "release_version"),
+        uniprot.UniProtDatabase.from_knowledgebase: (
+            "entries",
+            "canonical_sequences",
+            "isoform_sequences",
+            "release_version",
+        ),
+        uniprot.UniProtDatabase.from_duckdb: ("path",),
         stringdb.STRINGDatabase.from_files: (
             "aliases",
             "links",
             "rank_by_source",
-            "version",
+            "release_version",
         ),
         omnipath.OmniPathDatabase.from_files: ("enzsub", "interactions"),
         rhea.RheaDatabase.from_reaction_files: (

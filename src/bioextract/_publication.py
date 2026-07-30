@@ -13,7 +13,7 @@ from pathlib import Path
 import duckdb
 import polars as pl
 
-METADATA_SCHEMA_VERSION = "2"
+METADATA_SCHEMA_VERSION = "3"
 _SQL_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -33,7 +33,7 @@ class ParquetWriteResult:
 
     path: Path
     resource_name: str
-    schema_version: str
+    resource_schema_version: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +42,7 @@ class DuckDBWriteResult:
 
     path: Path
     resource_name: str
-    schema_version: str
+    resource_schema_version: str
     tables: tuple[str, ...]
     row_counts: Mapping[str, int]
     validation_issue_count: int = 0
@@ -74,15 +74,55 @@ class ValidationIssue:
     message: str = ""
 
 
+def validate_duckdb_metadata_v3(
+    connection: duckdb.DuckDBPyConnection,
+    metadata: Mapping[str, str],
+) -> None:
+    """Validate required v3 keys and embedded/source-table inventory parity."""
+    required = {
+        "bioextract.resource_name",
+        "bioextract.resource_schema_version",
+        "bioextract.source_schema_profile",
+        "bioextract.package_version",
+        "bioextract.generated_at",
+        "bioextract.validation_status",
+        "bioextract.validation_issue_count",
+        "bioextract.sources",
+    }
+    missing = sorted(required - set(metadata))
+    if missing:
+        raise ValueError(f"Metadata v3 is missing required keys: {missing}")
+    source_rows = connection.execute(
+        "SELECT logical_name, display_path, bytes, media_type, sha256 "
+        "FROM _bioextract.source_file ORDER BY logical_name"
+    ).fetchall()
+    embedded_sources = json.loads(metadata["bioextract.sources"])
+    table_sources = [
+        {
+            "logical_name": row[0],
+            "path": row[1],
+            "bytes": int(row[2]),
+            "media_type": row[3],
+            **({"sha256": row[4]} if row[4] is not None else {}),
+        }
+        for row in source_rows
+    ]
+    if sorted(embedded_sources, key=lambda item: item["logical_name"]) != table_sources:
+        raise ValueError("Embedded source inventory does not match source_file")
+
+
 def write_parquet_publication(
     frame: pl.LazyFrame,
     path: os.PathLike[str] | str,
     *,
     resource_name: str,
-    schema_version: str,
+    resource_schema_version: str,
+    source_schema_profile: str,
+    source_schema_version: str | None = None,
     sources: Sequence[SourceFileRecord],
     scope: str | None = None,
     release_version: str | None = None,
+    release_version_source: str | None = None,
     if_exists: str = "fail",
     normalize_columns: bool = True,
 ) -> ParquetWriteResult:
@@ -91,14 +131,17 @@ def write_parquet_publication(
     column_mappings: tuple[tuple[str, str, str, str], ...] = ()
     if normalize_columns:
         frame, column_mappings = _normalize_lazy_columns(frame, table_name="data")
-    metadata = _publication_metadata(
+    publication_metadata = _publication_metadata(
         resource_name=resource_name,
-        schema_version=schema_version,
+        resource_schema_version=resource_schema_version,
+        source_schema_profile=source_schema_profile,
+        source_schema_version=source_schema_version,
         sources=sources,
         scope=scope,
         release_version=release_version,
+        release_version_source=release_version_source,
     )
-    metadata["bioextract.column_mapping"] = json.dumps(
+    publication_metadata["bioextract.column_mapping"] = json.dumps(
         [
             {
                 "source_column": source_column,
@@ -112,15 +155,15 @@ def write_parquet_publication(
     )
     stage = _create_stage_path(destination, suffix=".parquet")
     try:
-        frame.sink_parquet(stage, metadata=metadata)
-        _validate_parquet_publication(stage, metadata)
+        frame.sink_parquet(stage, metadata=publication_metadata)
+        _validate_parquet_publication(stage, publication_metadata)
         os.replace(stage, destination)
     finally:
         stage.unlink(missing_ok=True)
     return ParquetWriteResult(
         path=destination,
         resource_name=resource_name,
-        schema_version=schema_version,
+        resource_schema_version=resource_schema_version,
     )
 
 
@@ -129,10 +172,13 @@ def write_duckdb_publication(
     path: os.PathLike[str] | str,
     *,
     resource_name: str,
-    schema_version: str,
+    resource_schema_version: str,
+    source_schema_profile: str,
+    source_schema_version: str | None = None,
     sources: Sequence[SourceFileRecord],
     scope: str | None = None,
     release_version: str | None = None,
+    release_version_source: str | None = None,
     if_exists: str = "fail",
     column_mappings: Sequence[tuple[str, str, str, str]] = (),
     validation_issues: Sequence[ValidationIssue] = (),
@@ -183,25 +229,28 @@ def write_duckdb_publication(
                             f"Cannot count published table: {relation.table_name}"
                         )
                     row_counts[relation.table_name] = int(count_row[0])
-                metadata = _publication_metadata(
+                publication_metadata = _publication_metadata(
                     resource_name=resource_name,
-                    schema_version=schema_version,
+                    resource_schema_version=resource_schema_version,
+                    source_schema_profile=source_schema_profile,
+                    source_schema_version=source_schema_version,
                     sources=sources,
                     scope=scope,
                     release_version=release_version,
+                    release_version_source=release_version_source,
                     validation_issue_count=len(validation_issues),
                 )
                 extra = {} if extra_metadata is None else dict(extra_metadata)
-                reserved = sorted(set(metadata) & set(extra))
+                reserved = sorted(set(publication_metadata) & set(extra))
                 if reserved:
                     raise ValueError(
                         "extra_metadata cannot replace canonical publication "
                         f"metadata keys: {reserved}"
                     )
-                metadata.update(extra)
+                publication_metadata.update(extra)
                 _write_duckdb_metadata(
                     connection,
-                    metadata=metadata,
+                    metadata=publication_metadata,
                     sources=sources,
                     relations=relations,
                     row_counts=row_counts,
@@ -223,7 +272,7 @@ def write_duckdb_publication(
     return DuckDBWriteResult(
         path=destination,
         resource_name=resource_name,
-        schema_version=schema_version,
+        resource_schema_version=resource_schema_version,
         tables=tuple(relation.table_name for relation in relations),
         row_counts=row_counts,
         validation_issue_count=len(validation_issues),
@@ -233,17 +282,25 @@ def write_duckdb_publication(
 def _publication_metadata(
     *,
     resource_name: str,
-    schema_version: str,
+    resource_schema_version: str,
+    source_schema_profile: str,
+    source_schema_version: str | None,
     sources: Sequence[SourceFileRecord],
     scope: str | None,
     release_version: str | None,
+    release_version_source: str | None,
     validation_issue_count: int = 0,
 ) -> dict[str, str]:
     generated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    if not resource_schema_version.strip():
+        raise ValueError("resource_schema_version must be non-empty")
+    if not source_schema_profile.strip():
+        raise ValueError("source_schema_profile must be non-empty")
     metadata = {
         "bioextract.metadata_schema_version": METADATA_SCHEMA_VERSION,
         "bioextract.resource_name": resource_name,
-        "bioextract.schema_version": schema_version,
+        "bioextract.resource_schema_version": resource_schema_version,
+        "bioextract.source_schema_profile": source_schema_profile,
         "bioextract.package_version": _package_version(),
         "bioextract.generated_at": generated_at,
         "bioextract.validation_status": (
@@ -258,8 +315,26 @@ def _publication_metadata(
     }
     if scope is not None:
         metadata["bioextract.scope"] = scope
+    if source_schema_version is not None:
+        if not source_schema_version.strip():
+            raise ValueError("source_schema_version must be non-empty when provided")
+        metadata["bioextract.source_schema_version"] = source_schema_version
     if release_version is not None:
+        if not release_version.strip():
+            raise ValueError("release_version must be non-empty when provided")
+        if release_version_source is not None and release_version_source not in {
+            "caller",
+            "official_metadata",
+        }:
+            raise ValueError(
+                "release_version_source must be caller or official_metadata"
+            )
         metadata["bioextract.release_version"] = release_version
+        metadata["bioextract.release_version_source"] = (
+            release_version_source or "caller"
+        )
+    elif release_version_source is not None:
+        raise ValueError("release_version_source requires release_version")
     return metadata
 
 
@@ -443,8 +518,50 @@ def _validate_duckdb_publication(
         if issue_row is None:
             raise RuntimeError("Cannot count DuckDB validation issues")
         issue_count = int(issue_row[0])
-        if metadata.get("bioextract.metadata_schema_version") != "2":
-            raise RuntimeError("DuckDB publication metadata schema is not v2")
+        if (
+            metadata.get("bioextract.metadata_schema_version")
+            != METADATA_SCHEMA_VERSION
+        ):
+            raise RuntimeError(
+                f"DuckDB publication metadata schema is not v{METADATA_SCHEMA_VERSION}"
+            )
+        required_metadata = {
+            "bioextract.resource_name",
+            "bioextract.resource_schema_version",
+            "bioextract.source_schema_profile",
+            "bioextract.package_version",
+            "bioextract.generated_at",
+            "bioextract.validation_status",
+            "bioextract.validation_issue_count",
+            "bioextract.sources",
+        }
+        missing_metadata = sorted(required_metadata - set(metadata))
+        if missing_metadata:
+            raise RuntimeError(
+                f"DuckDB publication is missing metadata keys: {missing_metadata}"
+            )
+        source_rows = connection.execute(
+            "SELECT logical_name, display_path, bytes, media_type, sha256 "
+            "FROM _bioextract.source_file ORDER BY logical_name"
+        ).fetchall()
+        embedded_sources = json.loads(metadata["bioextract.sources"])
+        table_sources = [
+            {
+                "logical_name": row[0],
+                "path": row[1],
+                "bytes": int(row[2]),
+                "media_type": row[3],
+                **({"sha256": row[4]} if row[4] is not None else {}),
+            }
+            for row in source_rows
+        ]
+        if (
+            sorted(embedded_sources, key=lambda item: item["logical_name"])
+            != table_sources
+        ):
+            raise RuntimeError(
+                "DuckDB embedded source inventory does not match source_file"
+            )
         if int(metadata.get("bioextract.validation_issue_count", "-1")) != issue_count:
             raise RuntimeError(
                 "DuckDB validation issue count does not match publication metadata"

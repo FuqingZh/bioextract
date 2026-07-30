@@ -59,9 +59,15 @@ Parquet footer key-value metadata carries:
 
 - `bioextract.metadata_schema_version`;
 - `bioextract.resource_name`;
-- `bioextract.schema_version`;
+- `bioextract.resource_schema_version`;
+- `bioextract.source_schema_profile`;
+- optional `bioextract.source_schema_version`;
+- optional `bioextract.release_version`;
+- optional `bioextract.release_version_source`;
 - `bioextract.package_version`;
 - `bioextract.generated_at`;
+- `bioextract.validation_status`;
+- `bioextract.validation_issue_count`;
 - `bioextract.sources`;
 - optional `bioextract.scope`;
 - `bioextract.column_mapping`.
@@ -82,6 +88,7 @@ _bioextract.metadata
 _bioextract.source_file
 _bioextract.table_info
 _bioextract.column_mapping
+_bioextract.validation_issue
 ```
 
 `metadata` stores resource identity, resource schema version, metadata schema
@@ -89,7 +96,8 @@ version, scope, package version, and generation time. `source_file` stores
 logical source name, display path, bytes, media type, and optional SHA-256.
 `table_info` stores table name, semantic role, and row count.
 `column_mapping` always exists and is empty when source headers required no
-mapping.
+mapping. `validation_issue` always exists in metadata v2/v3 and records
+non-fatal validation findings; its row count must match metadata.
 
 The namespace contains no biological facts. `information_schema` is not used
 because it is the SQL system catalog.
@@ -113,3 +121,11 @@ until a complete new staging file is ready.
 `TidyDataset` has no directory writer and resources expose no `write_tidy()`
 compatibility surface. Publications always use an explicit single-file
 `write_parquet(path)` or `write_duckdb(path)` destination.
+Metadata schema v3 makes both keys above required. It may include
+`bioextract.source_schema_version` only when the upstream source declares an
+authoritative schema label. `bioextract.release_version` remains optional.
+Writers never infer either value from paths, basenames, archives, timestamps,
+or modification times. Legacy metadata v1/v2 uses
+`bioextract.schema_version`; v3 never falls back to or dual-writes that name.
+An internal `build_id_prefix` may include a path stem for a human-readable
+execution label, but that label is never release or source-schema evidence.

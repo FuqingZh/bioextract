@@ -70,13 +70,12 @@ def build_pfam_tidy_dataset(
     file_interpro_xml: Path,
     include_source_hashes: bool = False,
 ) -> TidyDataset:
-    """Build compact Pfam assets from one validated InterPro snapshot.
+    """Build compact Pfam assets from explicitly assigned InterPro source roles.
 
     Args:
-        file_protein2ipr: Exact `<version>/raw/protein2ipr.dat.gz` mapping
-            source.
-        file_interpro_xml: Exact `<version>/raw/interpro.xml.gz` metadata source
-            from the same snapshot.
+        file_protein2ipr: Protein-to-InterPro mapping source.
+        file_interpro_xml: InterPro XML metadata source. Its official database
+            metadata supplies the release identity.
         include_source_hashes: Whether to calculate source SHA-256 values for a
             later manifest write.
 
@@ -85,11 +84,12 @@ def build_pfam_tidy_dataset(
         Only Pfam IDs used by the protein mapping are retained.
 
     Raises:
-        ValueError: If paths do not identify one same-version snapshot, Pfam
-            IDs or names are invalid, raw pairs do not match XML metadata, or a
-            published frame would violate its schema.
+        ValueError: If Pfam IDs or names are invalid, mapping relationships do
+            not exist in the XML metadata, or a published frame would violate
+            its schema.
 
     Notes:
+        Paths declare logical roles only and never carry release identity.
         This boundary intentionally builds directly from the two raw files.
         Keep exact `InterProId + PfamId` validation here; deriving from a prior
         canonical parquet would add a publication prerequisite and could hide
@@ -97,11 +97,6 @@ def build_pfam_tidy_dataset(
         while InterPro entry names are retained only in `term_xref`.
     """
     interpro_version, df_xml_mapping = _read_pfam_xml_mapping(file_interpro_xml)
-    _validate_snapshot_version(
-        file_protein2ipr=file_protein2ipr,
-        file_interpro_xml=file_interpro_xml,
-        interpro_version=interpro_version,
-    )
     _validate_xml_pfam_ids(df_xml_mapping)
 
     lf_raw_mapping = scan_protein2ipr_frame(file_protein2ipr)
@@ -176,17 +171,22 @@ def build_pfam_tidy_dataset(
         frames=frames,
         source=(
             TidySource(
+                logical_name="protein_to_interpro",
                 path=file_protein2ipr,
                 media_type=MEDIA_TYPE_TSV_GZIP,
                 sha256=source_hashes.get(file_protein2ipr),
             ),
             TidySource(
+                logical_name="interpro_xml",
                 path=file_interpro_xml,
                 media_type=MEDIA_TYPE_XML_GZIP,
                 sha256=source_hashes.get(file_interpro_xml),
             ),
         ),
-        schema_version=PFAM_SCHEMA_VERSION,
+        resource_schema_version=PFAM_SCHEMA_VERSION,
+        source_schema_profile="interpro-pfam-bundle-v1",
+        release_version=interpro_version,
+        release_version_source="official_metadata",
         build_id_prefix=f"interpro-pfam-{interpro_version}",
         assets=_ASSETS,
     )
@@ -245,41 +245,22 @@ def _read_pfam_xml_mapping(file_interpro_xml: Path) -> tuple[str, pl.DataFrame]:
     return interpro_versions.pop(), pl.DataFrame(rows, schema=_SCHEMA_XML_MAPPING)
 
 
-def _validate_snapshot_version(
-    *,
-    file_protein2ipr: Path,
-    file_interpro_xml: Path,
-    interpro_version: str,
-) -> None:
-    if (
-        file_protein2ipr.name != "protein2ipr.dat.gz"
-        or file_protein2ipr.parent.name != "raw"
-    ):
+def read_interpro_release_version(file_interpro_xml: Path) -> str | None:
+    versions: set[str] = set()
+    with gzip.open(file_interpro_xml, "rb") as handle:
+        for _, elem in ET.iterparse(handle, events=("end",)):
+            if elem.tag == "dbinfo" and elem.attrib.get("dbname") == "INTERPRO":
+                version = _clean_text(elem.attrib.get("version"))
+                if version is not None:
+                    versions.add(version)
+            elem.clear()
+    if not versions:
+        return None
+    if len(versions) != 1:
         raise ValueError(
-            "InterPro mapping must use <version>/raw/protein2ipr.dat.gz: "
-            f"{file_protein2ipr}"
+            "InterPro XML must declare exactly one INTERPRO release version"
         )
-    if (
-        file_interpro_xml.name != "interpro.xml.gz"
-        or file_interpro_xml.parent.name != "raw"
-    ):
-        raise ValueError(
-            f"InterPro XML must use <version>/raw/interpro.xml.gz: {file_interpro_xml}"
-        )
-
-    mapping_root = file_protein2ipr.parent.parent.resolve()
-    xml_root = file_interpro_xml.parent.parent.resolve()
-    if mapping_root != xml_root:
-        raise ValueError(
-            "InterPro raw files must belong to the same snapshot directory: "
-            f"mapping_root={mapping_root}, xml_root={xml_root}"
-        )
-    if mapping_root.name != interpro_version:
-        raise ValueError(
-            "InterPro snapshot directory does not match the XML release version: "
-            f"directory_version={mapping_root.name!r}, "
-            f"xml_version={interpro_version!r}"
-        )
+    return versions.pop()
 
 
 def _validate_xml_pfam_ids(df_xml_mapping: pl.DataFrame) -> None:

@@ -275,8 +275,13 @@ class WikiPathwaysDatabase:
                 "term2gene": self._lazy_frame("term2gene"),
                 "term2name": self._lazy_frame("term2name"),
             },
-            source=TidySource(path=self.snapshot.file_gmt, media_type=MEDIA_TYPE_GMT),
-            schema_version=SCHEMA_VERSION,
+            source=TidySource(
+                logical_name="pathway_gmt",
+                path=self.snapshot.file_gmt,
+                media_type=MEDIA_TYPE_GMT,
+            ),
+            resource_schema_version=SCHEMA_VERSION,
+            source_schema_profile="wikipathways-gmt-v1",
             build_id_prefix=f"wikipathways-gmt-{self.snapshot.file_gmt.stem}",
             assets=tuple(
                 TidyAsset(path=path, kind=kind, frame_name=frame_name)
@@ -309,7 +314,8 @@ class WikiPathwaysDatabase:
         canonical = WikiPathwaysTidyDataset(
             frames=dataset.frames,
             source=dataset.source,
-            schema_version=dataset.schema_version,
+            resource_schema_version=dataset.resource_schema_version,
+            source_schema_profile=dataset.source_schema_profile,
             build_id_prefix=dataset.build_id_prefix,
             assets=tuple(
                 asset for asset in dataset.assets if asset.frame_name != "term2name"

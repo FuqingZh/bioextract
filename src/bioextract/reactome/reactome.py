@@ -398,7 +398,8 @@ class ReactomeDatabase:
         return ReactomeTidyDataset(
             frames={frame_name: frame.lazy() for frame_name, frame in frames.items()},
             source=self._tidy_sources(),
-            schema_version=SCHEMA_VERSION,
+            resource_schema_version=SCHEMA_VERSION,
+            source_schema_profile="reactome-mapping-files-v1",
             build_id_prefix="reactome-mapping",
             assets=tuple(assets),
             resource_name="reactome",
@@ -434,7 +435,8 @@ class ReactomeDatabase:
         canonical = ReactomeTidyDataset(
             frames=dataset.frames,
             source=dataset.source,
-            schema_version=dataset.schema_version,
+            resource_schema_version=dataset.resource_schema_version,
+            source_schema_profile=dataset.source_schema_profile,
             build_id_prefix=dataset.build_id_prefix,
             assets=assets,
             resource_name=dataset.resource_name,
@@ -526,17 +528,26 @@ class ReactomeDatabase:
         if self.snapshot.file_uniprot2reactome is not None:
             sources.append(
                 TidySource(
+                    logical_name="uniprot_mapping",
                     path=self.snapshot.file_uniprot2reactome,
                     media_type=MEDIA_TYPE_TSV,
                 )
             )
         if self.snapshot.file_pathways is not None:
             sources.append(
-                TidySource(path=self.snapshot.file_pathways, media_type=MEDIA_TYPE_TSV)
+                TidySource(
+                    logical_name="pathways",
+                    path=self.snapshot.file_pathways,
+                    media_type=MEDIA_TYPE_TSV,
+                )
             )
         if self.snapshot.file_relations is not None:
             sources.append(
-                TidySource(path=self.snapshot.file_relations, media_type=MEDIA_TYPE_TSV)
+                TidySource(
+                    logical_name="relations",
+                    path=self.snapshot.file_relations,
+                    media_type=MEDIA_TYPE_TSV,
+                )
             )
         return tuple(sources)
 

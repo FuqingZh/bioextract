@@ -504,6 +504,14 @@ def test_capability_metadata_matches_actual_inventory(tmp_path: Path) -> None:
         KEGGDatabase.from_duckdb(path)
 
 
+def test_metadata_v3_requires_validation_issue_table(tmp_path: Path) -> None:
+    _, path = publish(tmp_path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute("DROP TABLE _bioextract.validation_issue")
+    with pytest.raises(ValueError, match="validation_issue"):
+        KEGGDatabase.from_duckdb(path)
+
+
 def test_relation_only_inputs_preserve_rows_and_enable_namespace(
     tmp_path: Path,
 ) -> None:
