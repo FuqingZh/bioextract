@@ -398,6 +398,7 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "gene_list",
             "ncbi_gene_conversion",
         ),
+        kegg.KEGGDatabase.from_metabolic_release: ("source", "release_version"),
         reactome.ReactomeDatabase.from_files: (
             "uniprot_mapping",
             "pathways",

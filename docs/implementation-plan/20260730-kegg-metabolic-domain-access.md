@@ -140,13 +140,19 @@ links.
 Keep `KEGGDatabase` as the single top-level KEGG resource type.
 
 ```python
-database = KEGGDatabase.from_metabolic_release(source)
+database = KEGGDatabase.from_metabolic_release(
+    source,
+    release_version="2026-07",  # optional caller-known official identity
+)
 ```
 
 `from_metabolic_release(source)` accepts a release directory, its `raw`
 directory, or a supported archive containing that layout. It discovers
 available logical roles rather than depending on an organization-specific
-absolute path.
+absolute path. `source` declares where to discover the logical roles; its
+directory, file, or archive name never supplies release identity. When known,
+the caller may pass `release_version`; otherwise publication omits release
+metadata.
 
 An explicit partial-input constructor supports tests, nonstandard layouts, and
 callers that possess only some official assets:

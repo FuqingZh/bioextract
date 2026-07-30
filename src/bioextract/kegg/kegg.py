@@ -152,7 +152,9 @@ class KEGGDatabase:
         """Discover a complete local KEGG metabolic release.
 
         ``source`` may be the release directory, its ``raw`` directory, or a
-        zip/tar archive containing the layout. No network access is performed.
+        zip/tar archive containing the layout. ``release_version`` is an
+        optional caller-declared official identity. Paths and archive names
+        never supply or validate it. No network access is performed.
 
         Examples:
             >>> db = KEGGDatabase.from_metabolic_release(  # doctest: +SKIP

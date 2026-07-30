@@ -409,14 +409,22 @@ NAME        Transferred to 1.1.1.999
         ).fetchall() == [("foreign_key_violation", "1.1.1.999")]
 
 
-def test_release_discovery_uses_exact_layout(tmp_path: Path) -> None:
-    raw = tmp_path / "2026-07" / "raw"
+def metabolic_release(tmp_path: Path, *, directory_name: str = "2026-07") -> Path:
+    release = tmp_path / directory_name
+    raw = release / "raw"
     files = metabolic_files(tmp_path)
+    list_ids = {
+        "compound": ("C00001", "C00002"),
+        "reaction": ("R00001",),
+        "enzyme": ("3.6.1.3", "9.9.9.9"),
+        "module": ("M00001",),
+    }
     for family in ("compound", "reaction", "enzyme", "module"):
         entries = raw / family / "entries"
         entries.mkdir(parents=True)
         (raw / family / "list.tsv").write_text(
-            f"{family[:1].upper()}00001\tentry\n", encoding="utf-8"
+            "".join(f"{identifier}\tentry\n" for identifier in list_ids[family]),
+            encoding="utf-8",
         )
         (entries / "000001.keg").write_text(
             files[f"{family}_entries"].read_text(encoding="utf-8"),
@@ -435,11 +443,47 @@ def test_release_discovery_uses_exact_layout(tmp_path: Path) -> None:
             files[relation].read_text(encoding="utf-8"), encoding="utf-8"
         )
     (raw / "reaction" / "ignore.tsv").write_text("noise", encoding="utf-8")
+    return release
+
+
+def test_release_discovery_uses_exact_layout(tmp_path: Path) -> None:
+    release = metabolic_release(tmp_path)
+    raw = release / "raw"
     db = KEGGDatabase.from_metabolic_release(raw.parent)
     snapshot = db.snapshot.metabolic
     assert snapshot is not None
     assert len(snapshot.sources["reaction_entries"]) == 1
     assert snapshot.sources["reaction_list"] == (raw / "reaction" / "list.tsv",)
+
+
+def test_release_directory_name_does_not_create_release_metadata(
+    tmp_path: Path,
+) -> None:
+    release = metabolic_release(tmp_path, directory_name="2099-12")
+    path = tmp_path / "unknown-release.duckdb"
+    KEGGDatabase.from_metabolic_release(release).write_duckdb(path)
+
+    with duckdb.connect(str(path), read_only=True) as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+    assert "bioextract.release_version" not in metadata
+    assert "bioextract.release_version_source" not in metadata
+
+
+def test_caller_release_version_is_recorded_with_caller_source(tmp_path: Path) -> None:
+    release = metabolic_release(tmp_path, directory_name="arbitrary-layout")
+    path = tmp_path / "caller-release.duckdb"
+    KEGGDatabase.from_metabolic_release(
+        release, release_version="2026-07"
+    ).write_duckdb(path)
+
+    with duckdb.connect(str(path), read_only=True) as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+    assert metadata["bioextract.release_version"] == "2026-07"
+    assert metadata["bioextract.release_version_source"] == "caller"
 
 
 def test_release_archive_accepts_an_extra_top_level_directory(tmp_path: Path) -> None:
