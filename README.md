@@ -255,19 +255,45 @@ db.write_duckdb("out/interpro_pfam.duckdb", config="pfam")
 
 ## UniProt
 
-Single-relation UniProt products are Parquet:
+UniProt idmapping remains a separate lazy Parquet product:
 
 ```python
 from bioextract.uniprot import UniProtDatabase
 
-UniProtDatabase.from_files(
-    id_mapping="idmapping_selected.tab.gz",
-).with_taxids("9606", "10090").write_parquet("out/uniprot.parquet")
+UniProtDatabase.from_idmapping(
+    "idmapping_selected.tab.gz",
+    release_version="2026_01",
+).write_parquet(
+    "out/uniprot_idmapping.parquet",
+    taxon_ids=["9606", "10090"],
+)
 ```
 
-An all-taxid export requires `allow_all_taxa=True`. Flat-file handles also
-offer `write_eggnog_xref_parquet()` and
-`write_subcellular_location_parquet()`.
+Reviewed UniProtKB is a multi-relation DuckDB publication:
+
+```python
+UniProtDatabase.from_knowledgebase(
+    entries="uniprot_sprot.dat.gz",
+    canonical_sequences="uniprot_sprot.fasta.gz",
+    isoform_sequences="uniprot_sprot_varsplic.fasta.gz",
+    release_version="2026_01",
+).write_duckdb("out/uniprot.duckdb")
+
+db = UniProtDatabase.from_duckdb("out/uniprot.duckdb")
+proteins = db.select_ids(
+    ["P04637"],
+    namespace="uniprot",
+    taxon_ids=["9606"],
+).extract_proteins()
+with db.connect() as connection:
+    relation_count = connection.execute(
+        "SELECT count(*) FROM protein"
+    ).fetchone()[0]
+```
+
+Constructor arguments declare source roles, while headers and record grammar
+validate their content. Paths never supply release identity. An all-taxid
+idmapping export requires `allow_all_taxa=True`.
 
 ## STRING
 
