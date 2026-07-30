@@ -229,6 +229,23 @@ def test_tidy_publication_rejects_mapping_relationships_absent_from_xml(
             ),
             "one non-empty XML MemberDb",
         ),
+        (
+            "</member_list>\n</interpro>",
+            (
+                "</member_list>\n</interpro>"
+                '<interpro id="IPR000001" type=""><name>Duplicate</name>'
+                "</interpro>"
+            ),
+            "one non-empty XML InterProType",
+        ),
+        (
+            '<db_xref db="PFAM" dbkey="PF00051" name="Kringle"/>',
+            (
+                '<db_xref db="PFAM" dbkey="PF00051" name="Kringle"/>'
+                '<db_xref db="" dbkey="PF00051" name="Kringle"/>'
+            ),
+            "one non-empty XML MemberDb",
+        ),
     ],
 )
 def test_tidy_publication_requires_unique_nonempty_xml_enrichment(
