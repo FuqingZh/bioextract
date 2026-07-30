@@ -12,7 +12,7 @@ from typing import Literal
 import duckdb
 import polars as pl
 
-from .constant import SCHEMA_VERSION
+from .constant import SCHEMA_VERSION, SOURCE_SCHEMA_PROFILE
 from .rhea import RheaWriteResult
 from .util import (
     calculate_sha256,
@@ -748,9 +748,10 @@ def _record_metadata(
         for name, display_path, size, media_type, sha256 in source_rows
     ]
     values = {
-        "bioextract.metadata_schema_version": "2",
+        "bioextract.metadata_schema_version": "3",
         "bioextract.resource_name": "rhea",
-        "bioextract.schema_version": SCHEMA_VERSION,
+        "bioextract.resource_schema_version": SCHEMA_VERSION,
+        "bioextract.source_schema_profile": SOURCE_SCHEMA_PROFILE,
         "bioextract.scope": scope,
         "bioextract.generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "bioextract.package_version": bioextract_version,
@@ -761,6 +762,9 @@ def _record_metadata(
         ),
         "bioextract.release_version": (
             None if release_number is None else str(release_number)
+        ),
+        "bioextract.release_version_source": (
+            None if release_number is None else "official_metadata"
         ),
         "bioextract.rhea_release_date": release_date,
         "bioextract.validation_status": "passed",
@@ -815,7 +819,8 @@ def _validate_staged_database(
         required_metadata = {
             "bioextract.metadata_schema_version",
             "bioextract.resource_name",
-            "bioextract.schema_version",
+            "bioextract.resource_schema_version",
+            "bioextract.source_schema_profile",
             "bioextract.scope",
             "bioextract.generated_at",
             "bioextract.package_version",

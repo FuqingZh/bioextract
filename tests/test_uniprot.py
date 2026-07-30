@@ -1,61 +1,82 @@
 from __future__ import annotations
 
 import gzip
+import json
+import sqlite3
 from pathlib import Path
 
+import duckdb
 import polars as pl
 import pytest
 
+import bioextract.uniprot._knowledgebase as knowledgebase
 from bioextract.uniprot import UniProtDatabase
-from bioextract.uniprot.constant import (
-    COLS_IDMAPPING_SELECTED,
-    COLS_SUBCELLULAR_LOCATION,
-    SCHEMA_SUBCELLULAR_LOCATION,
-    SCHEMA_VERSION_SUBCELLULAR_LOCATION,
-)
-from bioextract.uniprot.util import read_subcellular_location_frame
 
 
-def write_idmapping_fixture(tmp_path: Path, *, should_gzip: bool = True) -> Path:
-    suffix = ".tab.gz" if should_gzip else ".tab"
-    file_in = tmp_path / f"idmapping_selected{suffix}"
+def _write_dat(path: Path) -> Path:
+    text = """ID   TEST_HUMAN              Reviewed;         10 AA.
+AC   P12345; Q11111;
+DT   01-JAN-2000, sequence version 2.
+DT   01-JAN-2026, entry version 9.
+DE   RecName: Full=Test protein;
+DE            EC=1.2.3.4;
+DE   AltName: Full=First alternative;
+DE   AltName: Full=Second alternative;
+GN   Name=TEST;
+GN   Synonyms=ALT;
+GN   OrderedLocusNames=LOC1; ORFNames=ORF1;
+GN   and Name=TEST2; Synonyms=ALT2;
+OX   NCBI_TaxID=9606;
+PE   1: Evidence at protein level;
+CC   -!- FUNCTION: Demonstrates a mem-
+CC       brane fixture.
+CC   -!- SUBCELLULAR LOCATION: Nucleus. Note=Fixture location.
+CC   -!- ALTERNATIVE PRODUCTS:
+CC       Name=Isoform 1; IsoId=P12345-1; Sequence=Displayed;
+CC       Name=Isoform 2; IsoId=P12345-2; Sequence=VSP_000001;
+DR   GO; GO:0003677; F:binding; EXP:UniProtKB.
+DR   GeneID; 1234; -.
+DR   RefSeq; NP_000001.1; NM_000001.1. [P12345-2].
+DR   Ensembl; ENST1; ENSP1; ENSG1. [P12345-2].
+DR   ConoServer; 1570; GIIIA [R13A].
+DR   eggNOG; KOG1; Eukaryota.
+KW   Reference proteome; Nucleus.
+FT   VAR_SEQ         3..4
+FT                   /note="AA -> GG (in isoform 2)"
+FT                   /id="VSP_000001"
+FT                   /evidence="ECO:0000269|PubMed:1"
+FT   CONFLICT        8
+FT                   /note="I -> V (in another source)"
+SQ   SEQUENCE   10 AA;  1132 MW;  81FC3551E879CB1A CRC64;
+     ACDEFGHIKL
+//
+"""
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        handle.write(text)
+    return path
+
+
+def _write_fasta(path: Path, records: dict[str, str]) -> Path:
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        for identifier, sequence in records.items():
+            handle.write(f">sp|{identifier}|fixture\n{sequence}\n")
+    return path
+
+
+def _write_idmapping(path: Path) -> Path:
     rows = [
         [
-            "P04637",
-            "P53_HUMAN",
-            "7157",
-            "NP_000537.3",
-            "",
-            "1TUP",
-            "GO:0006915; GO:0003677",
-            "UniRef100_P04637",
-            "UniRef90_P04637",
-            "UniRef50_P04637",
-            "UPI000002ED67",
-            "",
-            "9606",
+            "P12345",
+            "TEST_HUMAN",
+            "1234",
+            "NP_000001.1",
             "",
             "",
-            "123456",
-            "X54156",
-            "CAA38295.1",
-            "ENSG00000141510",
-            "ENST00000269305",
-            "ENSP00000269305",
-            "",
-        ],
-        [
-            "Q9Y243",
-            "AKT3_HUMAN",
-            "10000",
-            "NP_005456.1",
+            "GO:0003677",
             "",
             "",
-            "GO:0004672",
-            "UniRef100_Q9Y243",
-            "UniRef90_Q9Y243",
-            "UniRef50_Q9Y243",
-            "UPI000013D9F8",
+            "",
+            "",
             "",
             "9606",
             "",
@@ -63,485 +84,854 @@ def write_idmapping_fixture(tmp_path: Path, *, should_gzip: bool = True) -> Path
             "",
             "",
             "",
-            "ENSG00000117020",
+            "ENSG1",
+            "ENST1",
+            "ENSP1",
             "",
-            "",
-            "",
-        ],
-        [
-            "P31750",
-            "AKT1_MOUSE",
-            "11651",
-            "NP_033782.1",
-            "",
-            "",
-            "GO:0004672",
-            "UniRef100_P31750",
-            "UniRef90_P31750",
-            "UniRef50_P31750",
-            "UPI0000000001",
-            "",
-            "10090",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "ENSMUSG00000001729",
-            "",
-            "",
-            "",
-        ],
+        ]
     ]
-    text = "\n".join("\t".join(row) for row in rows) + "\n"
-    if should_gzip:
-        with gzip.open(file_in, "wt", encoding="utf-8") as handle:
-            handle.write(text)
-    else:
-        file_in.write_text(text, encoding="utf-8")
-    return file_in
+    with gzip.open(path, "wt", encoding="utf-8") as handle:
+        handle.write("\n".join("\t".join(row) for row in rows) + "\n")
+    return path
 
 
-def write_uniprot_dat_fixture(tmp_path: Path, *, should_gzip: bool = True) -> Path:
-    suffix = ".dat.gz" if should_gzip else ".dat"
-    file_in = tmp_path / f"uniprot_sprot{suffix}"
-    text = """ID   TEST1_HUMAN              Reviewed;         100 AA.
-AC   P12345; Q11111;
-DR   eggNOG; KOG0001; Eukaryota.
-DR   eggNOG; ENOG502ABC; Metazoa.
-//
-ID   TEST2_BACTERIA           Reviewed;         200 AA.
-AC   Q9Y243;
-DR   eggNOG; COG1028; Bacteria.
-//
-ID   TEST3_HUMAN              Reviewed;         300 AA.
-AC   P31750;
-//
-"""
-    if should_gzip:
-        with gzip.open(file_in, "wt", encoding="utf-8") as handle:
-            handle.write(text)
-    else:
-        file_in.write_text(text, encoding="utf-8")
-    return file_in
+def test_varsplic_identifier_lookup_uses_identifier_index() -> None:
+    with sqlite3.connect(":memory:") as connection:
+        knowledgebase._create_validation_index(  # pyright: ignore[reportPrivateUsage]
+            connection
+        )
+        plan = connection.execute(
+            "EXPLAIN QUERY PLAN "
+            "SELECT i.primary_accession, i.isoform_id "
+            "FROM isoform_identifier ii "
+            "JOIN isoform i USING (primary_accession, isoform_id) "
+            "WHERE ii.identifier=? AND i.sequence_status='Alternative'",
+            ("P22966-1",),
+        ).fetchall()
 
-
-def write_uniprot_subcellular_dat_fixture(
-    tmp_path: Path,
-    *,
-    should_gzip: bool = True,
-) -> Path:
-    suffix = ".dat.gz" if should_gzip else ".dat"
-    file_in = tmp_path / f"uniprot_sprot_subcellular{suffix}"
-    text = """ID   TEST1_HUMAN              Reviewed;         100 AA.
-AC   P12345; Q11111;
-DE   RecName: Full=Cellular tumor antigen p53;
-GN   Name=TP53; Synonyms=P53;
-CC   -!- SUBCELLULAR LOCATION: Cytoplasm {ECO:0000269|PubMed:123456}.
-CC       Nucleus {ECO:0000305}. Note=Shuttles between cytoplasm and nucleus.
-CC   -!- FUNCTION: DNA-binding transcription factor.
-DR   eggNOG; KOG0001; Eukaryota.
-//
-ID   TEST2_HUMAN              Reviewed;         200 AA.
-AC   Q9Y243;
-DE   RecName: Full=RAC-gamma serine/threonine-protein kinase {ECO:0000303|Ref.6};
-GN   ORFNames=CG14996;
-CC   -!- SUBCELLULAR LOCATION: Membrane.
-//
-ID   TEST3_HUMAN              Reviewed;         300 AA.
-AC   P31750;
-//
-"""
-    if should_gzip:
-        with gzip.open(file_in, "wt", encoding="utf-8") as handle:
-            handle.write(text)
-    else:
-        file_in.write_text(text, encoding="utf-8")
-    return file_in
-
-
-def test_extract_mapping_filters_taxids_from_raw_gzip(tmp_path: Path) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
-
-    df_mapping = (
-        UniProtDatabase.from_files(id_mapping=file_in)
-        .with_taxids("9606")
-        .extract_mapping()
+    assert any(
+        "isoform_identifier_lookup" in str(detail)
+        for _select_id, _order, _from, detail in plan
     )
 
-    assert df_mapping.columns == COLS_IDMAPPING_SELECTED
-    assert df_mapping.select("UniProtId", "GeneId", "TaxId").to_dicts() == [
-        {"UniProtId": "P04637", "GeneId": "7157", "TaxId": "9606"},
-        {"UniProtId": "Q9Y243", "GeneId": "10000", "TaxId": "9606"},
+
+def test_idmapping_is_lazy_and_requires_explicit_eager_scope(tmp_path: Path) -> None:
+    source = _write_idmapping(tmp_path / "renamed.tab.gz")
+    database = UniProtDatabase.from_idmapping(source, release_version="2026_01")
+
+    assert database.scan_mapping().collect().height == 1
+    with pytest.raises(ValueError, match="allow_all_taxa"):
+        database.read_mapping()
+    assert database.read_mapping(taxon_ids=["9606"]).height == 1
+
+    result = database.write_parquet(tmp_path / "mapping.parquet", taxon_ids=["9606"])
+    assert result.resource_schema_version == "uniprot-idmapping-selected-v0.1"
+
+
+@pytest.mark.parametrize("compressed", [False, True])
+def test_idmapping_reads_plain_and_gzip(tmp_path: Path, compressed: bool) -> None:
+    path = tmp_path / ("mapping.tab.gz" if compressed else "mapping.tab")
+    if compressed:
+        _write_idmapping(path)
+    else:
+        compressed_path = _write_idmapping(tmp_path / "source.tab.gz")
+        with gzip.open(compressed_path, "rt", encoding="utf-8") as source:
+            path.write_text(source.read(), encoding="utf-8")
+    frame = UniProtDatabase.from_idmapping(path).read_mapping(taxon_ids=["9606"])
+    assert frame.select("UniProtId", "TaxId").to_dicts() == [
+        {"UniProtId": "P12345", "TaxId": "9606"}
     ]
+    publication = tmp_path / f"published-{compressed}.parquet"
+    UniProtDatabase.from_idmapping(path).write_parquet(publication, taxon_ids=["9606"])
+    with duckdb.connect() as connection:
+        sources_json = connection.execute(
+            "SELECT decode(value) FROM parquet_kv_metadata(?) "
+            "WHERE CAST(key AS VARCHAR)='bioextract.sources'",
+            [str(publication)],
+        ).fetchone()
+    assert sources_json is not None
+    assert json.loads(sources_json[0])[0]["media_type"] == (
+        "text/tab-separated-values+gzip" if compressed else "text/tab-separated-values"
+    )
 
 
-def test_extract_eggnog_xref_from_dat_gzip(tmp_path: Path) -> None:
-    file_dat = write_uniprot_dat_fixture(tmp_path)
+def test_idmapping_parquet_and_hive_inputs(tmp_path: Path) -> None:
+    raw = _write_idmapping(tmp_path / "mapping.tab.gz")
+    frame = UniProtDatabase.from_idmapping(raw).read_mapping(taxon_ids=["9606"])
+    parquet = tmp_path / "mapping.parquet"
+    frame.write_parquet(parquet)
+    assert UniProtDatabase.from_idmapping(parquet).scan_mapping().collect().height == 1
+    published = tmp_path / "republished.parquet"
+    UniProtDatabase.from_idmapping(parquet).write_parquet(published, taxon_ids=["9606"])
+    with duckdb.connect() as connection:
+        sources_json = connection.execute(
+            "SELECT decode(value) FROM parquet_kv_metadata(?) "
+            "WHERE CAST(key AS VARCHAR)='bioextract.sources'",
+            [str(published)],
+        ).fetchone()
+    assert sources_json is not None
+    assert (
+        json.loads(sources_json[0])[0]["media_type"] == "application/vnd.apache.parquet"
+    )
 
-    df_xref = UniProtDatabase.from_dat(
-        path=file_dat,
-        source_database="sprot",
-    ).extract_eggnog_xref()
+    hive = tmp_path / "hive" / "TaxId=9606"
+    hive.mkdir(parents=True)
+    frame.drop("TaxId").write_parquet(hive / "part.parquet")
+    (tmp_path / "hive" / "README.txt").write_text("ignored", encoding="utf-8")
+    assert (
+        UniProtDatabase.from_idmapping(tmp_path / "hive")
+        .read_mapping(taxon_ids=["9606"])
+        .height
+        == 1
+    )
 
-    assert df_xref.to_dicts() == [
+
+def test_idmapping_schema_and_path_validation(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.parquet"
+    pl.DataFrame({"UniProtId": ["P12345"]}).write_parquet(bad)
+    with pytest.raises(ValueError, match="schema mismatch"):
+        UniProtDatabase.from_idmapping(bad).scan_mapping()
+    with pytest.raises(FileNotFoundError):
+        UniProtDatabase.from_idmapping(tmp_path / "missing.tab.gz")
+    unsupported = tmp_path / "mapping.txt"
+    unsupported.write_text("", encoding="utf-8")
+    with pytest.raises(pl.exceptions.NoDataError, match="empty CSV"):
+        UniProtDatabase.from_idmapping(unsupported).scan_mapping().collect_schema()
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(ValueError, match="no parquet"):
+        UniProtDatabase.from_idmapping(empty)
+
+
+@pytest.mark.parametrize("container", ["parquet", "hive"])
+def test_idmapping_parquet_schema_requires_all_string_columns(
+    tmp_path: Path, container: str
+) -> None:
+    raw = _write_idmapping(tmp_path / "mapping.tab.gz")
+    frame = (
+        UniProtDatabase.from_idmapping(raw)
+        .scan_mapping()
+        .collect()
+        .with_columns(pl.col("GeneId").cast(pl.Int64))
+    )
+    if container == "parquet":
+        source = tmp_path / "wrong-type.parquet"
+        frame.write_parquet(source)
+    else:
+        source = tmp_path / "wrong-type-hive"
+        partition = source / "TaxId=9606"
+        partition.mkdir(parents=True)
+        frame.drop("TaxId").write_parquet(partition / "part.parquet")
+
+    with pytest.raises(ValueError, match="schema mismatch"):
+        UniProtDatabase.from_idmapping(source).scan_mapping()
+
+
+def test_idmapping_publication_is_atomic(tmp_path: Path) -> None:
+    raw = _write_idmapping(tmp_path / "mapping.tab.gz")
+    destination = tmp_path / "mapping.parquet"
+    destination.write_bytes(b"existing")
+    database = UniProtDatabase.from_idmapping(raw)
+    with pytest.raises(FileExistsError):
+        database.write_parquet(destination, taxon_ids=["9606"])
+    assert destination.read_bytes() == b"existing"
+
+
+def test_idmapping_taxon_validation_and_all_taxa_opt_in(tmp_path: Path) -> None:
+    database = UniProtDatabase.from_idmapping(
+        _write_idmapping(tmp_path / "mapping.tab.gz")
+    )
+    with pytest.raises(ValueError, match="TaxId"):
+        database.scan_mapping(taxon_ids=["9606", ""])
+    with pytest.raises(ValueError, match="allow_all_taxa"):
+        database.write_parquet(tmp_path / "blocked.parquet")
+    assert database.write_parquet(
+        tmp_path / "all.parquet", allow_all_taxa=True
+    ).path.is_file()
+
+
+def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> None:
+    entries = _write_dat(tmp_path / "entries.bin")
+    canonical = _write_fasta(tmp_path / "canonical.bin", {"P12345": "ACDEFGHIKL"})
+    isoforms = _write_fasta(tmp_path / "isoforms.bin", {"P12345-2": "ACGGFGHIKL"})
+    path = tmp_path / "uniprot.duckdb"
+
+    result = UniProtDatabase.from_knowledgebase(
+        entries=entries,
+        canonical_sequences=canonical,
+        isoform_sequences=isoforms,
+        release_version="2026_01",
+    ).write_duckdb(path)
+
+    assert result.resource_schema_version == "uniprot-knowledgebase-duckdb-v1"
+    database = UniProtDatabase.from_duckdb(path)
+    assert database.release_version == "2026_01"
+    matches = database.select_ids(["Q11111", "TEST", "missing"], namespace="uniprot")
+    assert matches.extract_proteins()["UniProtId"].to_list() == ["P12345"]
+    assert matches.extract_proteins()["ProteinExistence"].to_list() == [
+        "1: Evidence at protein level"
+    ]
+    assert matches.extract_proteins().schema["GroupId"] == pl.String
+    assert matches.extract_unmatched_ids()["InputId"].to_list() == [
+        "TEST",
+        "missing",
+    ]
+    assert database.select_ids(["TEST"], namespace="gene_name").extract_gene_names()[
+        "GeneName"
+    ].to_list() == ["TEST", "ALT", "LOC1", "ORF1", "TEST2", "ALT2"]
+    assert database.select_ids(["P12345"], namespace="uniprot").extract_protein_names()[
+        "ProteinName"
+    ].to_list() == [
+        "Test protein",
+        "First alternative",
+        "Second alternative",
+    ]
+    assert database.select_ids(["1234"], namespace="gene_id").extract_cross_references(
+        databases=["GeneID"]
+    )["ExternalId"].to_list() == ["1234"]
+    refseq = database.select_ids(
+        ["NP_000001.1"], namespace="refseq"
+    ).extract_cross_references(databases=["RefSeq"])
+    assert refseq.select("ExternalId", "IsoformId").to_dicts() == [
+        {"ExternalId": "NP_000001.1", "IsoformId": "P12345-2"}
+    ]
+    con_server = database.select_ids(
+        ["P12345"], namespace="uniprot"
+    ).extract_cross_references(databases=["ConoServer"])
+    assert con_server.select("ExternalId", "Properties", "IsoformId").to_dicts() == [
         {
-            "UniProtId": "P12345",
-            "PrimaryUniProtId": "P12345",
-            "IsPrimaryAccession": True,
-            "EggnogOgId": "ENOG502ABC",
-            "EggnogLevel": "Metazoa",
-            "SourceDb": "sprot",
+            "ExternalId": "1570",
+            "Properties": "GIIIA [R13A]",
+            "IsoformId": None,
+        }
+    ]
+    sequences = database.select_ids(["P12345"], namespace="uniprot").extract_sequences(
+        sequence_type="all"
+    )
+    assert sequences.schema["CRC64"] == pl.String
+    assert sequences.select("SequenceType", "CRC64").to_dicts() == [
+        {"SequenceType": "canonical", "CRC64": "81FC3551E879CB1A"},
+        {"SequenceType": "isoform", "CRC64": None},
+    ]
+    selection = database.select_ids(["P12345"], namespace="uniprot")
+    assert selection.extract_ec_numbers()["ECNumber"].to_list() == ["1.2.3.4"]
+    assert selection.extract_go_annotations()["GOId"].to_list() == ["GO:0003677"]
+    assert selection.extract_comments(comment_types=["FUNCTION"])[
+        ["CommentType", "CommentText"]
+    ].to_dicts() == [
+        {
+            "CommentType": "FUNCTION",
+            "CommentText": "Demonstrates a mem-brane fixture.",
+        }
+    ]
+    assert selection.extract_subcellular_locations()[
+        "SubcellularLocation"
+    ].to_list() == ["Nucleus"]
+    assert selection.extract_keywords()["Keyword"].to_list() == [
+        "Reference proteome",
+        "Nucleus",
+    ]
+    grouped = database.select_groups(
+        {"case": ["P12345"], "control": ["missing"]},
+        namespace="uniprot",
+    )
+    assert grouped.extract_proteins()["GroupId"].to_list() == ["case"]
+    assert grouped.extract_unmatched_ids().select("GroupId", "InputId").to_dicts() == [
+        {"GroupId": "control", "InputId": "missing"}
+    ]
+    isoforms_frame = database.select_ids(
+        ["P12345"], namespace="uniprot"
+    ).extract_isoforms()
+    assert isoforms_frame.select(
+        "IsoformId", "IsoformOrder", "SequenceStatus", "SequenceId"
+    ).to_dicts() == [
+        {
+            "IsoformId": "P12345-1",
+            "IsoformOrder": 1,
+            "SequenceStatus": "Displayed",
+            "SequenceId": "P12345:canonical",
         },
         {
-            "UniProtId": "P12345",
-            "PrimaryUniProtId": "P12345",
-            "IsPrimaryAccession": True,
-            "EggnogOgId": "KOG0001",
-            "EggnogLevel": "Eukaryota",
-            "SourceDb": "sprot",
-        },
-        {
-            "UniProtId": "Q11111",
-            "PrimaryUniProtId": "P12345",
-            "IsPrimaryAccession": False,
-            "EggnogOgId": "ENOG502ABC",
-            "EggnogLevel": "Metazoa",
-            "SourceDb": "sprot",
-        },
-        {
-            "UniProtId": "Q11111",
-            "PrimaryUniProtId": "P12345",
-            "IsPrimaryAccession": False,
-            "EggnogOgId": "KOG0001",
-            "EggnogLevel": "Eukaryota",
-            "SourceDb": "sprot",
-        },
-        {
-            "UniProtId": "Q9Y243",
-            "PrimaryUniProtId": "Q9Y243",
-            "IsPrimaryAccession": True,
-            "EggnogOgId": "COG1028",
-            "EggnogLevel": "Bacteria",
-            "SourceDb": "sprot",
+            "IsoformId": "P12345-2",
+            "IsoformOrder": 2,
+            "SequenceStatus": "Alternative",
+            "SequenceId": "P12345-2",
         },
     ]
-
-
-def test_select_eggnog_xref_ids_filters_accessions(tmp_path: Path) -> None:
-    file_dat = write_uniprot_dat_fixture(tmp_path, should_gzip=False)
-    db = UniProtDatabase.from_dat(path=file_dat, source_database="sprot")
-
-    df_xref = db.select_eggnog_xref_ids(["Q11111", "MISSING"])
-
-    assert df_xref.select("UniProtId", "PrimaryUniProtId", "EggnogOgId").to_dicts() == [
+    assert selection.extract_isoform_identifiers().select(
+        "IsoformId", "Identifier", "IdentifierOrder", "IsMain"
+    ).to_dicts() == [
         {
-            "UniProtId": "Q11111",
-            "PrimaryUniProtId": "P12345",
-            "EggnogOgId": "ENOG502ABC",
+            "IsoformId": "P12345-1",
+            "Identifier": "P12345-1",
+            "IdentifierOrder": 1,
+            "IsMain": True,
         },
         {
-            "UniProtId": "Q11111",
-            "PrimaryUniProtId": "P12345",
-            "EggnogOgId": "KOG0001",
+            "IsoformId": "P12345-2",
+            "Identifier": "P12345-2",
+            "IdentifierOrder": 1,
+            "IsMain": True,
         },
     ]
-
-
-def test_subcellular_location_schema_constants_are_declared() -> None:
-    assert SCHEMA_VERSION_SUBCELLULAR_LOCATION == "uniprot-subcellular-location-v0.1"
-    assert COLS_SUBCELLULAR_LOCATION == [
+    assert database.select_ids(
+        ["P12345"], namespace="uniprot"
+    ).extract_isoform_variations().select(
+        "IsoformId", "VariationId", "VariationOrder"
+    ).to_dicts() == [
+        {
+            "IsoformId": "P12345-2",
+            "VariationId": "VSP_000001",
+            "VariationOrder": 1,
+        }
+    ]
+    variation = database.select_ids(
+        ["P12345"], namespace="uniprot"
+    ).extract_sequence_variations()
+    assert variation.select("VariationId", "Note").to_dicts() == [
+        {"VariationId": "VSP_000001", "Note": "AA -> GG (in isoform 2)"}
+    ]
+    assert database.select_ids(
+        ["P12345"], namespace="uniprot", taxon_ids=["10090"]
+    ).extract_proteins().columns == [
+        "GroupId",
+        "InputId",
+        "InputNamespace",
         "UniProtId",
-        "PrimaryUniProtId",
-        "UniProtEntryName",
-        "GeneName",
-        "ProteinName",
-        "SubcellularLocation",
-        "SubcellularLocationNote",
-        "EvidenceCode",
-        "EvidenceSource",
-        "EvidenceId",
-        "SourceDb",
+        "EntryName",
+        "IsReviewed",
+        "TaxonId",
+        "ProteinExistence",
+        "SequenceLength",
+        "MolecularWeight",
+        "SequenceVersion",
+        "EntryVersion",
     ]
-    assert list(SCHEMA_SUBCELLULAR_LOCATION) == COLS_SUBCELLULAR_LOCATION
-
-
-def test_read_subcellular_location_frame_from_dat_gzip(tmp_path: Path) -> None:
-    file_dat = write_uniprot_subcellular_dat_fixture(tmp_path)
-
-    df_subcellular = read_subcellular_location_frame(file_dat, source_db="sprot")
-
-    assert df_subcellular.columns == COLS_SUBCELLULAR_LOCATION
-    assert df_subcellular.to_dicts() == [
-        {
-            "UniProtId": "P12345",
-            "PrimaryUniProtId": "P12345",
-            "UniProtEntryName": "TEST1_HUMAN",
-            "GeneName": "TP53",
-            "ProteinName": "Cellular tumor antigen p53",
-            "SubcellularLocation": "Cytoplasm",
-            "SubcellularLocationNote": "Shuttles between cytoplasm and nucleus",
-            "EvidenceCode": "ECO:0000269",
-            "EvidenceSource": "PubMed",
-            "EvidenceId": "123456",
-            "SourceDb": "sprot",
-        },
-        {
-            "UniProtId": "P12345",
-            "PrimaryUniProtId": "P12345",
-            "UniProtEntryName": "TEST1_HUMAN",
-            "GeneName": "TP53",
-            "ProteinName": "Cellular tumor antigen p53",
-            "SubcellularLocation": "Nucleus",
-            "SubcellularLocationNote": "Shuttles between cytoplasm and nucleus",
-            "EvidenceCode": "ECO:0000305",
-            "EvidenceSource": None,
-            "EvidenceId": None,
-            "SourceDb": "sprot",
-        },
-        {
-            "UniProtId": "Q11111",
-            "PrimaryUniProtId": "P12345",
-            "UniProtEntryName": "TEST1_HUMAN",
-            "GeneName": "TP53",
-            "ProteinName": "Cellular tumor antigen p53",
-            "SubcellularLocation": "Cytoplasm",
-            "SubcellularLocationNote": "Shuttles between cytoplasm and nucleus",
-            "EvidenceCode": "ECO:0000269",
-            "EvidenceSource": "PubMed",
-            "EvidenceId": "123456",
-            "SourceDb": "sprot",
-        },
-        {
-            "UniProtId": "Q11111",
-            "PrimaryUniProtId": "P12345",
-            "UniProtEntryName": "TEST1_HUMAN",
-            "GeneName": "TP53",
-            "ProteinName": "Cellular tumor antigen p53",
-            "SubcellularLocation": "Nucleus",
-            "SubcellularLocationNote": "Shuttles between cytoplasm and nucleus",
-            "EvidenceCode": "ECO:0000305",
-            "EvidenceSource": None,
-            "EvidenceId": None,
-            "SourceDb": "sprot",
-        },
-        {
-            "UniProtId": "Q9Y243",
-            "PrimaryUniProtId": "Q9Y243",
-            "UniProtEntryName": "TEST2_HUMAN",
-            "GeneName": None,
-            "ProteinName": "RAC-gamma serine/threonine-protein kinase",
-            "SubcellularLocation": "Membrane",
-            "SubcellularLocationNote": None,
-            "EvidenceCode": None,
-            "EvidenceSource": None,
-            "EvidenceId": None,
-            "SourceDb": "sprot",
-        },
+    assert database.select_ids(
+        [], namespace="uniprot"
+    ).extract_accessions().columns == [
+        "GroupId",
+        "InputId",
+        "InputNamespace",
+        "UniProtId",
+        "Accession",
+        "AccessionOrder",
+        "IsPrimaryAccession",
     ]
+    with database.connect() as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+        assert metadata["bioextract.metadata_schema_version"] == "3"
+        assert (
+            metadata["bioextract.resource_schema_version"]
+            == "uniprot-knowledgebase-duckdb-v1"
+        )
+        assert metadata["bioextract.source_schema_profile"] == "uniprotkb-flat-file-v1"
+        assert (
+            metadata["bioextract.molecular_weight_validation_model"]
+            == "compatible-current-and-legacy"
+        )
+        with pytest.raises(duckdb.Error):
+            connection.execute("CREATE TABLE forbidden(value INTEGER)")
 
 
-def test_read_subcellular_location_frame_from_plain_dat(tmp_path: Path) -> None:
-    file_dat = write_uniprot_subcellular_dat_fixture(tmp_path, should_gzip=False)
+def test_roles_are_validated_by_content_not_basename(tmp_path: Path) -> None:
+    entries = _write_dat(tmp_path / "anything.gz")
+    canonical = _write_fasta(tmp_path / "other.dat", {"P12345": "WRONG"})
+    with pytest.raises(ValueError, match="Canonical FASTA"):
+        UniProtDatabase.from_knowledgebase(
+            entries=entries, canonical_sequences=canonical
+        ).write_duckdb(tmp_path / "bad.duckdb")
 
-    df_subcellular = read_subcellular_location_frame(file_dat, source_db="sprot")
-
-    assert df_subcellular.height == 5
-    assert df_subcellular.select("UniProtId", "SubcellularLocation").to_dicts()[-1] == {
-        "UniProtId": "Q9Y243",
-        "SubcellularLocation": "Membrane",
-    }
-
-
-def test_extract_subcellular_location_from_dat_handle(tmp_path: Path) -> None:
-    file_dat = write_uniprot_subcellular_dat_fixture(tmp_path)
-
-    df_subcellular = UniProtDatabase.from_dat(
-        path=file_dat,
-        source_database="sprot",
-    ).extract_subcellular_location()
-
-    assert df_subcellular.columns == COLS_SUBCELLULAR_LOCATION
-    assert df_subcellular.height == 5
-    assert sorted(
-        df_subcellular.select("PrimaryUniProtId").unique().to_series().to_list()
-    ) == ["P12345", "Q9Y243"]
+    with pytest.raises(ValueError, match="no UniProtKB records"):
+        UniProtDatabase.from_knowledgebase(
+            entries=_write_fasta(tmp_path / "not-dat", {"P12345": "ACD"})
+        ).write_duckdb(tmp_path / "wrong-role.duckdb")
 
 
-def test_write_subcellular_location_parquet_writes_data_without_sidecar(
-    tmp_path: Path,
-) -> None:
-    file_dat = write_uniprot_subcellular_dat_fixture(tmp_path)
-    db = UniProtDatabase.from_dat(path=file_dat, source_database="sprot")
-
-    path = tmp_path / "subcellular_location.parquet"
-    result = db.write_subcellular_location_parquet(path)
-
-    assert result.path == path
-    assert not (tmp_path / "manifest.json").exists()
-    df_written = pl.read_parquet(path)
-    assert df_written.columns == [
-        "uniprot_id",
-        "primary_uniprot_id",
-        "uniprot_entry_name",
-        "gene_name",
-        "protein_name",
-        "subcellular_location",
-        "subcellular_location_note",
-        "evidence_code",
-        "evidence_source",
-        "evidence_id",
-        "source_db",
-    ]
-    assert df_written.height == 5
+def test_release_version_is_never_inferred_from_path(tmp_path: Path) -> None:
+    entries = _write_dat(tmp_path / "2026_01-uniprot.dat.gz")
+    path = tmp_path / "unknown-version.duckdb"
+    UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(path)
+    assert UniProtDatabase.from_duckdb(path).release_version is None
 
 
-def test_write_eggnog_xref_parquet_writes_mapping_without_sidecar(
-    tmp_path: Path,
-) -> None:
-    file_dat = write_uniprot_dat_fixture(tmp_path)
-    db = UniProtDatabase.from_dat(path=file_dat, source_database="sprot")
-
-    path = tmp_path / "eggnog_xref.parquet"
-    result = db.write_eggnog_xref_parquet(path)
-
-    assert result.path == path
-    assert not (tmp_path / "manifest.json").exists()
-    assert pl.read_parquet(path).height == 5
-
-
-def test_uniprot_dat_and_idmapping_methods_are_separated(tmp_path: Path) -> None:
-    file_dat = write_uniprot_dat_fixture(tmp_path)
-    db_dat = UniProtDatabase.from_dat(path=file_dat, source_database="sprot")
-
-    with pytest.raises(ValueError, match="idmapping"):
-        db_dat.extract_mapping()
-
-    file_idmapping = write_idmapping_fixture(tmp_path)
-    db_idmapping = UniProtDatabase.from_files(id_mapping=file_idmapping)
-    with pytest.raises(ValueError, match="eggNOG"):
-        db_idmapping.extract_eggnog_xref()
-    with pytest.raises(ValueError, match="subcellular"):
-        db_idmapping.extract_subcellular_location()
-
-
-def test_write_parquet_writes_single_file_by_default(tmp_path: Path) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
-    path = tmp_path / "uniprot.parquet"
-
-    result = (
-        UniProtDatabase.from_files(id_mapping=file_in)
-        .with_taxids("9606", "10090")
-        .write_parquet(path)
+def test_missing_required_source_field_always_fails(tmp_path: Path) -> None:
+    path = tmp_path / "missing-ox.dat"
+    path.write_text(
+        """ID   TEST_HUMAN Reviewed; 3 AA.
+AC   P12345;
+SQ   SEQUENCE   3 AA;  307 MW;  6AAEBDB000000000 CRC64;
+     ACD
+//
+""",
+        encoding="utf-8",
     )
-
-    assert result.path == path
-    assert not (tmp_path / "manifest.json").exists()
-
-    df_hsa = (
-        UniProtDatabase.from_files(id_mapping=path)
-        .with_taxids("9606")
-        .extract_mapping()
-    )
-    assert df_hsa["TaxId"].unique().to_list() == ["9606"]
-    assert df_hsa.height == 2
+    with pytest.raises(ValueError, match="OX"):
+        UniProtDatabase.from_knowledgebase(entries=path).write_duckdb(
+            tmp_path / "invalid.duckdb"
+        )
 
 
-def test_hive_dataset_allows_manifest_and_nested_non_parquet_files(
-    tmp_path: Path,
-) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
-    df_fixture = (
-        UniProtDatabase.from_files(id_mapping=file_in)
-        .with_taxids("9606")
-        .extract_mapping()
-    )
-    dir_out = tmp_path / "tidy"
-    dir_taxid = dir_out / "TaxId=9606"
-    dir_taxid.mkdir(parents=True)
-    df_fixture.write_parquet(dir_taxid / "00000000.parquet")
-    (dir_out / "README.txt").write_text("metadata", encoding="utf-8")
-    (dir_taxid / "note.txt").write_text("metadata", encoding="utf-8")
-
-    df_mapping = (
-        UniProtDatabase.from_files(id_mapping=dir_out)
-        .with_taxids("9606")
-        .extract_mapping()
-    )
-
-    assert df_mapping.height == 2
-    assert df_mapping["TaxId"].unique().to_list() == ["9606"]
-
-
-def test_write_parquet_all_requires_explicit_flag(tmp_path: Path) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
-    db = UniProtDatabase.from_files(id_mapping=file_in)
-
-    with pytest.raises(ValueError, match="allow_all_taxa=True"):
-        db.write_parquet(tmp_path / "blocked.parquet")
-
-    result = db.write_parquet(tmp_path / "all.parquet", allow_all_taxa=True)
-    assert result.path == tmp_path / "all.parquet"
-
-
-def test_single_taxid_can_write_single_parquet_and_read_it(tmp_path: Path) -> None:
-    file_in = write_idmapping_fixture(tmp_path, should_gzip=False)
-    path = tmp_path / "single.parquet"
-
-    UniProtDatabase.from_files(id_mapping=file_in).with_taxids("9606").write_parquet(
-        path
-    )
-
-    df_mapping = UniProtDatabase.from_files(id_mapping=path).extract_mapping()
-    assert df_mapping.height == 2
-    assert df_mapping["TaxId"].unique().to_list() == ["9606"]
-
-
-def test_write_parquet_preserves_existing_output_by_default(tmp_path: Path) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
-    path = tmp_path / "uniprot.parquet"
-    path.write_bytes(b"existing")
-    db = UniProtDatabase.from_files(id_mapping=file_in).with_taxids("9606")
+def test_existing_destination_fails_before_entries_are_parsed(tmp_path: Path) -> None:
+    entries = tmp_path / "invalid.dat"
+    entries.write_text("not a UniProt record\n", encoding="utf-8")
+    destination = tmp_path / "existing.duckdb"
+    destination.write_bytes(b"existing")
 
     with pytest.raises(FileExistsError):
-        db.write_parquet(path)
-    assert path.read_bytes() == b"existing"
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(destination)
+    assert destination.read_bytes() == b"existing"
 
 
-def test_validate_schema_rejects_bad_parquet(tmp_path: Path) -> None:
-    file_bad = tmp_path / "bad.parquet"
-    pl.DataFrame({"UniProtId": ["P04637"]}).write_parquet(file_bad)
+def test_accessions_must_be_unique_across_records(tmp_path: Path) -> None:
+    entries = tmp_path / "duplicate-accession.dat"
+    entries.write_text(
+        """ID   FIRST_HUMAN Reviewed; 3 AA.
+AC   P11111; Q99999;
+OX   NCBI_TaxID=9606;
+SQ   SEQUENCE   3 AA;  307 MW;  6AAEBDB000000000 CRC64;
+     ACD
+//
+ID   SECOND_HUMAN Reviewed; 3 AA.
+AC   P22222; Q99999;
+OX   NCBI_TaxID=9606;
+SQ   SEQUENCE   3 AA;  365 MW;  69CB1DB000000000 CRC64;
+     AEF
+//
+""",
+        encoding="utf-8",
+    )
 
-    with pytest.raises(ValueError, match="missing required columns"):
-        UniProtDatabase.from_files(id_mapping=file_bad).validate_schema()
+    with pytest.raises(ValueError, match="reused across records: Q99999"):
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+            tmp_path / "duplicate.duckdb"
+        )
 
 
-def test_from_files_rejects_missing_unsupported_and_empty_hive(
+def test_metadata_v3_requires_validation_issue_table(tmp_path: Path) -> None:
+    path = tmp_path / "uniprot.duckdb"
+    UniProtDatabase.from_knowledgebase(
+        entries=_write_dat(tmp_path / "entries.dat.gz")
+    ).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute("DROP TABLE _bioextract.validation_issue")
+    with pytest.raises(ValueError, match="validation_issue"):
+        UniProtDatabase.from_duckdb(path)
+
+
+@pytest.mark.parametrize(
+    ("corruption", "message"),
+    [
+        (
+            "ALTER TABLE protein ALTER sequence_length TYPE VARCHAR",
+            "physical schema mismatch",
+        ),
+        (
+            "ALTER TABLE protein RENAME sequence_length TO reported_length",
+            "physical schema mismatch",
+        ),
+        ("CREATE TABLE unexpected(value INTEGER)", "relation inventory mismatch"),
+        (
+            "INSERT INTO _bioextract.table_info VALUES ('unexpected', 'canonical', 0)",
+            "table_info inventory mismatch",
+        ),
+        (
+            "UPDATE _bioextract.metadata SET value='unsupported-profile' "
+            "WHERE key='bioextract.source_schema_profile'",
+            "source schema profile",
+        ),
+    ],
+)
+def test_from_duckdb_rejects_physical_contract_corruption(
+    tmp_path: Path, corruption: str, message: str
+) -> None:
+    path = tmp_path / "uniprot.duckdb"
+    UniProtDatabase.from_knowledgebase(
+        entries=_write_dat(tmp_path / "entries.dat.gz")
+    ).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(corruption)
+
+    with pytest.raises(ValueError, match=message):
+        UniProtDatabase.from_duckdb(path)
+
+
+def test_selection_and_fasta_inputs_reject_empty_values(tmp_path: Path) -> None:
+    path = tmp_path / "uniprot.duckdb"
+    entries = _write_dat(tmp_path / "entries.dat.gz")
+    UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(path)
+    database = UniProtDatabase.from_duckdb(path)
+    with pytest.raises(ValueError, match="TaxId"):
+        database.select_ids(["P12345"], namespace="uniprot", taxon_ids=[""])
+    with pytest.raises(ValueError, match="group labels"):
+        database.select_groups({"": ["P12345"]}, namespace="uniprot")
+    with pytest.raises(ValueError, match="unique after normalization"):
+        database.select_groups(
+            {" A ": ["P12345"], "A": ["Q11111"]}, namespace="uniprot"
+        )
+
+    empty_fasta = tmp_path / "empty-sequence.fasta"
+    empty_fasta.write_text(">sp|P12345|TEST_HUMAN\n   \n\t\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid sequence characters"):
+        UniProtDatabase.from_knowledgebase(
+            entries=entries, canonical_sequences=empty_fasta
+        ).write_duckdb(tmp_path / "invalid-fasta.duckdb")
+
+    embedded_blank = tmp_path / "embedded-blank.fasta"
+    embedded_blank.write_text(">sp|P12345-2|TEST_HUMAN\nACD\n\nEF\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid sequence characters"):
+        UniProtDatabase.from_knowledgebase(
+            entries=entries, isoform_sequences=embedded_blank
+        ).write_duckdb(tmp_path / "embedded-blank.duckdb")
+
+    leading_whitespace = tmp_path / "leading-whitespace.fasta"
+    leading_whitespace.write_text(
+        ">sp|P12345|TEST_HUMAN\n ACDEFGHIKL\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="invalid sequence characters"):
+        UniProtDatabase.from_knowledgebase(
+            entries=entries, canonical_sequences=leading_whitespace
+        ).write_duckdb(tmp_path / "leading-whitespace.duckdb")
+
+    trailing_whitespace = tmp_path / "trailing-whitespace.fasta"
+    trailing_whitespace.write_text(">sp|P12345-2|TEST_HUMAN\nACD \n", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid sequence characters"):
+        UniProtDatabase.from_knowledgebase(
+            entries=entries, isoform_sequences=trailing_whitespace
+        ).write_duckdb(tmp_path / "trailing-whitespace.duckdb")
+
+    invalid_fasta = tmp_path / "invalid-sequence.fasta"
+    invalid_fasta.write_text(">sp|P12345-2|TEST_HUMAN\nAC D1!\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid sequence characters"):
+        UniProtDatabase.from_knowledgebase(
+            entries=entries, isoform_sequences=invalid_fasta
+        ).write_duckdb(tmp_path / "invalid-characters.duckdb")
+
+
+def test_dat_crc64_must_match_sequence(tmp_path: Path) -> None:
+    entries = tmp_path / "bad-checksum.dat"
+    entries.write_text(
+        """ID   TEST_HUMAN Reviewed; 3 AA.
+AC   P12345;
+OX   NCBI_TaxID=9606;
+SQ   SEQUENCE   3 AA;  300 MW;  0000000000000000 CRC64;
+     ACD
+//
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="CRC64 mismatch"):
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+            tmp_path / "bad-checksum.duckdb"
+        )
+
+
+def test_uniprot_molecular_weight_matches_real_q6gzx4_vector() -> None:
+    sequence = (
+        "MAFSAEDVLKEYDRRRRMEALLLSLYYPNDRKLLDYKEWSPPRVQVECPKAPVEWNNPPS"
+        "EKGLIVGHFSGIKYKGEKAQASEVDVNKMCCWVSKFKDAMRRYQGIQTCKIPGKVLSDLD"
+        "AKIKAYNLTVEGVEGFVRYSRVTKQHVAAFLKELRHSKQYENVNLIHYILTDKRVDIQHL"
+        "EKDLVKDFKALVESAHRMRQGHMINVKYILYQLLKKHGHGPDGPDILTVKTGSKGVLYDD"
+        "SFRKIYTDLGWKFTPL"
+    )
+    assert len(sequence) == 256
+    assert (
+        knowledgebase._calculate_molecular_weight(  # pyright: ignore[reportPrivateUsage]
+            sequence
+        )
+        == 29735
+    )
+
+
+def test_uniprot_molecular_weight_accepts_real_q6t412_rounding_vector(
     tmp_path: Path,
 ) -> None:
-    with pytest.raises(FileNotFoundError):
-        UniProtDatabase.from_files(id_mapping=tmp_path / "missing.tab.gz")
+    sequence = (
+        "MTEVQPPPAQSTVATADTPSLAPDTTLETSTSTELAPITTEQTIITTNAEGKKVKKIIRR"
+        "KRRPARPQVDPATFKTDT PAPT GTSFNIWYNKWSGGDREDKYLSQTAAQGRCNVARDSGY"
+        "TKADKTPGSYFCLFFARGICPKGVDCEYLHRLPTVTDIFPSNIDCFGRDKHSDYRDDMGG"
+        "VGSFQRQNRTLYIGRIHVTDDIEEIVARHFQEWGQIERTRVLTARGVAFVTYMNEANSQF"
+        "AKEAMAHQSLDHNEILNVRWATVDPNPQAAKREAHRIEEQAAEAIRKALPAAYVAELEGR"
+        "DPEAKKRRKIEGSFGLQGYEAPDDVWYAKEKAEWEAAKEIEAAGGAAXPRQMIESGEDAH"
+        "AHEADCAAMQVAPSGQHSQGNGIFSTSTLAALRGYTAAPAKPKVAPVAGPLVGYGSDDDSD"
+    ).replace(" ", "")
+    assert len(sequence) == 421
+    calculated = knowledgebase._calculate_molecular_weight(  # pyright: ignore[reportPrivateUsage]
+        sequence
+    )
+    assert calculated == 46189
 
-    file_unsupported = tmp_path / "mapping.txt"
-    file_unsupported.write_text("", encoding="utf-8")
-    with pytest.raises(ValueError, match="Unsupported UniProt"):
-        UniProtDatabase.from_files(id_mapping=file_unsupported)
-
-    dir_empty = tmp_path / "empty"
-    dir_empty.mkdir()
-    with pytest.raises(ValueError, match="contains no parquet"):
-        UniProtDatabase.from_files(id_mapping=dir_empty)
-
-    dir_no_parquet = tmp_path / "no_parquet"
-    (dir_no_parquet / "TaxId=9606").mkdir(parents=True)
-    (dir_no_parquet / "manifest.json").write_text("{}", encoding="utf-8")
-    (dir_no_parquet / "TaxId=9606" / "note.txt").write_text("x", encoding="utf-8")
-    with pytest.raises(ValueError, match="contains no parquet"):
-        UniProtDatabase.from_files(id_mapping=dir_no_parquet)
+    entries = tmp_path / "q6t412.dat"
+    entries.write_text(
+        "ID   Q6T412_FIXTURE Reviewed; 421 AA.\n"
+        "AC   Q6T412;\n"
+        "OX   NCBI_TaxID=9606;\n"
+        "SQ   SEQUENCE   421 AA;  46189 MW;  EE7D1FA88E010B94 CRC64;\n"
+        f"     {sequence}\n"
+        "//\n",
+        encoding="utf-8",
+    )
+    UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+        tmp_path / "q6t412.duckdb"
+    )
 
 
-def test_taxid_validation(tmp_path: Path) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
+def test_dat_molecular_weight_must_match_sequence(tmp_path: Path) -> None:
+    entries = tmp_path / "bad-molecular-weight.dat"
+    entries.write_text(
+        """ID   TEST_HUMAN Reviewed; 3 AA.
+AC   P12345;
+OX   NCBI_TaxID=9606;
+SQ   SEQUENCE   3 AA;  308 MW;  6AAEBDB000000000 CRC64;
+     ACD
+//
+""",
+        encoding="utf-8",
+    )
 
-    with pytest.raises(ValueError, match="TaxId values"):
-        UniProtDatabase.from_files(id_mapping=file_in).with_taxids("9606", "")
+    with pytest.raises(ValueError, match="molecular weight mismatch"):
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+            tmp_path / "bad-molecular-weight.duckdb"
+        )
+
+
+@pytest.mark.parametrize("molecular_weight", [5719, 5720])
+def test_knowledgebase_accepts_one_consistent_sec_weight_model(
+    tmp_path: Path, molecular_weight: int
+) -> None:
+    entries = tmp_path / f"sec-{molecular_weight}.dat"
+    entries.write_text(
+        "ID   SEC_FIXTURE Reviewed; 38 AA.\n"
+        f"AC   P{molecular_weight};\n"
+        "OX   NCBI_TaxID=9606;\n"
+        f"SQ   SEQUENCE   38 AA;  {molecular_weight} MW;  "
+        "3100000000007707 CRC64;\n"
+        f"     {'U' * 38}\n"
+        "//\n",
+        encoding="utf-8",
+    )
+    UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+        tmp_path / f"sec-{molecular_weight}.duckdb"
+    )
+
+
+def test_knowledgebase_rejects_conflicting_sec_weight_models(tmp_path: Path) -> None:
+    sequence = "U" * 38
+    entries = tmp_path / "conflicting-sec.dat"
+    entries.write_text(
+        "ID   CURRENT_SEC Reviewed; 38 AA.\n"
+        "AC   P5720;\n"
+        "OX   NCBI_TaxID=9606;\n"
+        "SQ   SEQUENCE   38 AA;  5720 MW;  3100000000007707 CRC64;\n"
+        f"     {sequence}\n"
+        "//\n"
+        "ID   LEGACY_SEC Reviewed; 38 AA.\n"
+        "AC   P5719;\n"
+        "OX   NCBI_TaxID=9606;\n"
+        "SQ   SEQUENCE   38 AA;  5719 MW;  3100000000007707 CRC64;\n"
+        f"     {sequence}\n"
+        "//\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="conflicting molecular-weight models"):
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+            tmp_path / "conflicting-sec.duckdb"
+        )
+
+
+@pytest.mark.parametrize(
+    ("alternative_products", "feature", "message"),
+    [
+        (
+            "CC       Name=Bad; IsoId=P12345-2; Sequence=Bogus;\n",
+            "",
+            "alternative-products Sequence",
+        ),
+        (
+            "CC       Name=Bad; IsoId=P12345-2; Sequence=VSP_000001;\n",
+            'FT   VAR_SEQ         2\nFT                   /note="C -> G"\n',
+            "VAR_SEQ feature is missing /id",
+        ),
+        (
+            "CC       Name=Bad; Sequence=Displayed;\n",
+            "",
+            "Name block is missing IsoId",
+        ),
+        (
+            "CC       Name=Bad; IsoId=P12345-2;\n",
+            "",
+            "Name block is missing Sequence",
+        ),
+        (
+            "CC       Name=Bad; IsoId=P12345-2; Sequence=VSP_000001;\n",
+            'FT   VAR_SEQ         2\nFT                   /id="VSP_1"\n',
+            "Invalid UniProt VAR_SEQ /id",
+        ),
+        (
+            "CC       Name=Bad; IsoId=P12345-2; Sequence=VSP_000001;\n",
+            (
+                'FT   VAR_SEQ         2\nFT                   /id="VSP_000001"\n'
+                'FT                   /id="VSP_000001"\n'
+            ),
+            "Duplicate UniProt VAR_SEQ /id",
+        ),
+    ],
+)
+def test_knowledgebase_rejects_invalid_isoform_sequence_semantics(
+    tmp_path: Path,
+    alternative_products: str,
+    feature: str,
+    message: str,
+) -> None:
+    entries = tmp_path / "invalid-isoform.dat"
+    entries.write_text(
+        (
+            "ID   TEST_HUMAN Reviewed; 3 AA.\n"
+            "AC   P12345;\n"
+            "OX   NCBI_TaxID=9606;\n"
+            "CC   -!- ALTERNATIVE PRODUCTS:\n"
+            f"{alternative_products}"
+            f"{feature}"
+            "SQ   SEQUENCE   3 AA;  307 MW;  6AAEBDB000000000 CRC64;\n"
+            "     ACD\n"
+            "//\n"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+            tmp_path / "invalid-isoform.duckdb"
+        )
+
+
+@pytest.mark.parametrize(
+    "sq_line",
+    [
+        "SQ   SEQUENCE   3 AA;  300 MW;  6AAEBDB0 CRC64;",
+        "SQ   SEQUENCE   3 AA;  300 MW;  6aaebdb000000000 CRC64;",
+        "SQ   SEQUENCE   3 AA;  300 MW;  6AAEBDBG000000000 CRC64;",
+        "SQ   SEQUENCE   3 AA;  300 MW;  6AAEBDB000000000 CRC64; trailing",
+        "SQ\tSEQUENCE   3 AA;  300 MW;  6AAEBDB000000000 CRC64;",
+        "SQ   junk SEQUENCE   3 AA;  300 MW;  6AAEBDB000000000 CRC64;",
+    ],
+)
+def test_dat_sq_line_requires_exact_crc64_grammar(tmp_path: Path, sq_line: str) -> None:
+    entries = tmp_path / "invalid-sq.dat"
+    entries.write_text(
+        "\n".join(
+            [
+                "ID   TEST_HUMAN Reviewed; 3 AA.",
+                "AC   P12345;",
+                "OX   NCBI_TaxID=9606;",
+                sq_line,
+                "     ACD",
+                "//",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Invalid UniProt SQ line"):
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+            tmp_path / "invalid-sq.duckdb"
+        )
+
+
+def test_cross_entry_external_isoform_contexts_and_owner_materialization(
+    tmp_path: Path,
+) -> None:
+    entries = tmp_path / "paired-entries.dat"
+    entries.write_text(
+        """ID   7UP1_DROME Reviewed; 3 AA.
+AC   P16375;
+OX   NCBI_TaxID=7227;
+CC   -!- ALTERNATIVE PRODUCTS:
+CC       Event=Alternative splicing; Named isoforms=3;
+CC       Name=B; IsoId=P16375-1; Sequence=Displayed;
+CC       Name=C; IsoId=P16375-2, P22966-1; Sequence=VSP_013348;
+CC       Name=A; IsoId=P16376-1; Sequence=External;
+FT   VAR_SEQ         2
+FT                   /note="C -> G (in isoform C)"
+FT                   /id="VSP_013348"
+SQ   SEQUENCE   3 AA;  307 MW;  6AAEBDB000000000 CRC64;
+     ACD
+//
+ID   7UP2_DROME Reviewed; 3 AA.
+AC   P16376;
+OX   NCBI_TaxID=7227;
+CC   -!- ALTERNATIVE PRODUCTS:
+CC       Event=Alternative splicing; Named isoforms=3;
+CC       Name=A; IsoId=P16376-1; Sequence=Displayed;
+CC       Name=B; IsoId=P16375-1; Sequence=External;
+CC       Name=C; IsoId=P16375-2, P22966-1; Sequence=External;
+SQ   SEQUENCE   3 AA;  365 MW;  69CB1DB000000000 CRC64;
+     AEF
+//
+""",
+        encoding="utf-8",
+    )
+    path = tmp_path / "paired.duckdb"
+    varsplic = _write_fasta(tmp_path / "paired-varsplic.fasta.gz", {"P22966-1": "AGD"})
+    UniProtDatabase.from_knowledgebase(
+        entries=entries, isoform_sequences=varsplic
+    ).write_duckdb(path)
+
+    with UniProtDatabase.from_duckdb(path).connect() as connection:
+        assert connection.execute(
+            "SELECT primary_accession, isoform_id, sequence_status, sequence_id "
+            "FROM protein_isoform ORDER BY primary_accession, isoform_id"
+        ).fetchall() == [
+            ("P16375", "P16375-1", "Displayed", "P16375:canonical"),
+            ("P16375", "P16375-2", "Alternative", "P16375-2"),
+            ("P16375", "P16376-1", "External", None),
+            ("P16376", "P16375-1", "External", None),
+            ("P16376", "P16375-2", "External", None),
+            ("P16376", "P16376-1", "Displayed", "P16376:canonical"),
+        ]
+        assert connection.execute(
+            "SELECT primary_accession, isoform_id, identifier, identifier_order, "
+            "is_main FROM protein_isoform_identifier "
+            "WHERE isoform_id='P16375-2' "
+            "ORDER BY primary_accession, identifier_order"
+        ).fetchall() == [
+            ("P16375", "P16375-2", "P16375-2", 1, True),
+            ("P16375", "P16375-2", "P22966-1", 2, False),
+            ("P16376", "P16375-2", "P16375-2", 1, True),
+            ("P16376", "P16375-2", "P22966-1", 2, False),
+        ]
+        assert connection.execute(
+            "SELECT primary_accession, isoform_id, variation_id "
+            "FROM protein_isoform_variation"
+        ).fetchall() == [("P16375", "P16375-2", "VSP_013348")]
+        assert connection.execute(
+            "SELECT sequence_id, primary_accession, sequence_type, sequence "
+            "FROM protein_sequence WHERE sequence_type='isoform'"
+        ).fetchall() == [("P16375-2", "P16375", "isoform", "AGD")]
+        assert connection.execute(
+            "SELECT ii.identifier, i.sequence_id "
+            "FROM protein_isoform_identifier ii "
+            "JOIN protein_isoform i USING (primary_accession, isoform_id) "
+            "WHERE ii.primary_accession='P16375' "
+            "AND ii.isoform_id='P16375-2' ORDER BY ii.identifier_order"
+        ).fetchall() == [
+            ("P16375-2", "P16375-2"),
+            ("P22966-1", "P16375-2"),
+        ]
+
+    database = UniProtDatabase.from_duckdb(path)
+    assert database.select_ids(["P22966-1"], namespace="isoform_id").extract_proteins()[
+        "UniProtId"
+    ].to_list() == ["P16375", "P16376"]
+    assert database.select_ids(
+        ["P16375"], namespace="uniprot"
+    ).extract_isoform_variations()["VariationId"].to_list() == ["VSP_013348"]
+    assert (
+        database.select_ids(["P16376"], namespace="uniprot")
+        .extract_isoform_variations()
+        .is_empty()
+    )

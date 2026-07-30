@@ -128,7 +128,7 @@ The smoke test should verify:
 - DuckDB publication succeeds under `/tmp`
 - the formal v96 publication has 322,435 `protein_pathway`, 23,498 `pathway`,
   and 23,612 `pathway_relation` rows
-- metadata schema v2 has all five `_bioextract` tables and reports
+- metadata schema v3 has all five `_bioextract` tables and reports
   `validation_status=passed`
 
 Example command:

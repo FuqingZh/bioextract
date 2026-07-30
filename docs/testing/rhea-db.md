@@ -32,7 +32,7 @@ Changes to `RheaDatabase` must verify:
 15. All public classes and methods provide direct, observable examples.
 16. Rhea ChEBI fields are complete CURIE strings and numeric legacy
     publications are rejected as an incompatible v1 physical layout.
-17. Metadata v1 remains readable, metadata v2 requires the fifth
+17. Metadata v1 remains readable, metadata v2/v3 requires the fifth
     `validation_issue` table, and unknown metadata versions are rejected.
 18. `connect()` returns independent native read-only connections and rejects
     persistent writes.

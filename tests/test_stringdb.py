@@ -428,16 +428,16 @@ def test_from_files_rejects_missing_files(tmp_path: Path) -> None:
         STRINGDatabase.from_files(aliases=file_aliases, links=file_links)
 
 
-def test_from_files_rejects_unsupported_version(tmp_path: Path) -> None:
+def test_from_files_rejects_empty_release_version(tmp_path: Path) -> None:
     file_aliases = tmp_path / "aliases.txt"
     file_links = tmp_path / "links.txt"
     _write_demo_string_files(aliases=file_aliases, links=file_links)
 
-    with pytest.raises(ValueError, match="Unsupported STRING version"):
+    with pytest.raises(ValueError, match="release_version"):
         STRINGDatabase.from_files(
             aliases=file_aliases,
             links=file_links,
-            version="v11.5",  # type: ignore[arg-type]
+            release_version="",
         )
 
 

@@ -133,7 +133,7 @@ def test_build_pfam_tidy_keeps_lazy_frames(tmp_path: Path) -> None:
     dataset = db.build_tidy(config="pfam")
     result = dataset.write_duckdb(tmp_path / "interpro_pfam.duckdb")
 
-    assert dataset.schema_version == "interpro-pfam-v0.1"
+    assert dataset.resource_schema_version == "interpro-pfam-v0.1"
     assert result.tables == ("protein_term", "term", "term_xref")
     assert all(isinstance(frame, pl.LazyFrame) for frame in dataset.frames.values())
     assert dataset.frames["protein_term"].collect_schema() == pl.Schema(
@@ -227,7 +227,9 @@ def test_build_pfam_tidy_rejects_invalid_contracts(
         ).build_tidy(config="pfam")
 
 
-def test_build_pfam_tidy_rejects_cross_version_inputs(tmp_path: Path) -> None:
+def test_build_pfam_tidy_uses_xml_release_not_parent_directories(
+    tmp_path: Path,
+) -> None:
     file_protein2ipr, _file_xml_108 = write_interpro_snapshot(
         tmp_path / "snapshot-108",
         version="108.0",
@@ -237,11 +239,13 @@ def test_build_pfam_tidy_rejects_cross_version_inputs(tmp_path: Path) -> None:
         version="109.0",
     )
 
-    with pytest.raises(ValueError, match="same snapshot directory"):
-        InterProDatabase.from_mapping_files(
-            protein_to_interpro=file_protein2ipr,
-            interpro_xml=file_xml,
-        ).build_tidy(config="pfam")
+    dataset = InterProDatabase.from_mapping_files(
+        protein_to_interpro=file_protein2ipr,
+        interpro_xml=file_xml,
+    ).build_tidy(config="pfam")
+    assert dataset.release_version == "109.0"
+    assert dataset.release_version_source == "official_metadata"
+    assert dataset.source_schema_version is None
 
 
 def test_tidy_config_defaults_to_mapping(tmp_path: Path) -> None:

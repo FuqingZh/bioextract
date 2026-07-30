@@ -25,6 +25,7 @@ from bioextract._publication import (
 
 from ._canonical import ChEBIIntegrityError, build_canonical_relations
 from ._query import (
+    SOURCE_SCHEMA_PROFILE,
     ChEBICapabilityError,
     ChEBICompoundSelection,
     _ChEBIPublication,  # pyright: ignore[reportPrivateUsage]  # sibling publication type
@@ -396,7 +397,8 @@ class ChEBIDatabase:
                 relations,
                 path,
                 resource_name="chebi",
-                schema_version=_SCHEMA_VERSION,
+                resource_schema_version=_SCHEMA_VERSION,
+                source_schema_profile=SOURCE_SCHEMA_PROFILE,
                 sources=provenance_sources,
                 scope=_scope(self.snapshot, bool(table_sources)),
                 release_version=None,

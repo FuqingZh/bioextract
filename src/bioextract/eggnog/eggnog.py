@@ -269,7 +269,8 @@ class EggNOGDatabase:
             dataset = EggnogTidyDataset(
                 frames={"mapping": scan_mapping_tsv(file_mapping_tsv)},
                 source=self._tidy_sources(),
-                schema_version=SCHEMA_VERSION,
+                resource_schema_version=SCHEMA_VERSION,
+                source_schema_profile="eggnog-sqlite-v1",
                 build_id_prefix=f"eggnog-mapping-{self.snapshot.file_eggnog_db.stem}",
                 assets=tuple(
                     TidyAsset(path=path, kind=kind, frame_name=frame_name)
@@ -309,11 +310,19 @@ class EggNOGDatabase:
             else MEDIA_TYPE_SQLITE
         )
         sources = [
-            TidySource(path=self.snapshot.file_eggnog_db, media_type=media_type_db)
+            TidySource(
+                logical_name="eggnog_database",
+                path=self.snapshot.file_eggnog_db,
+                media_type=media_type_db,
+            )
         ]
         if self.snapshot.file_cog_fun is not None:
             sources.append(
-                TidySource(path=self.snapshot.file_cog_fun, media_type=MEDIA_TYPE_TSV)
+                TidySource(
+                    logical_name="cog_functions",
+                    path=self.snapshot.file_cog_fun,
+                    media_type=MEDIA_TYPE_TSV,
+                )
             )
         return tuple(sources)
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 
 import duckdb
@@ -18,6 +19,7 @@ import bioextract.rhea as rhea
 import bioextract.stringdb as stringdb
 import bioextract.uniprot as uniprot
 import bioextract.wikipathways as wikipathways
+from bioextract._publication import validate_duckdb_metadata_v3
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
 from bioextract.stringdb.stringdb import StringSelection
 
@@ -31,8 +33,9 @@ def _dataset(tmp_path: Path, *, relation_count: int = 1) -> TidyDataset:
     }
     return TidyDataset(
         frames=frames,
-        source=TidySource(source, "text/tab-separated-values"),
-        schema_version="example-v1",
+        source=TidySource("source", source, "text/tab-separated-values"),
+        resource_schema_version="example-v1",
+        source_schema_profile="example-source-v1",
         build_id_prefix="example",
         assets=tuple(
             TidyAsset(
@@ -65,8 +68,198 @@ def test_parquet_publication_embeds_provenance_without_sidecar(
         .fetchall()
     )
     assert metadata[b"bioextract.resource_name"] == b"example"
-    assert metadata[b"bioextract.schema_version"] == b"example-v1"
+    assert metadata[b"bioextract.resource_schema_version"] == b"example-v1"
     assert metadata[b"bioextract.release_version"] == b"2026-07-29"
+
+
+@pytest.mark.parametrize(
+    ("release_version", "release_version_source", "message"),
+    [
+        (" ", None, "release_version must be non-empty"),
+        ("2026_01", "filename", "caller or official_metadata"),
+        (None, "caller", "requires release_version"),
+    ],
+)
+def test_publication_rejects_invalid_release_provenance(
+    tmp_path: Path,
+    release_version: str | None,
+    release_version_source: str | None,
+    message: str,
+) -> None:
+    dataset = _dataset(tmp_path)
+    dataset.release_version = release_version
+    dataset.release_version_source = release_version_source
+    with pytest.raises(ValueError, match=message):
+        dataset.write_parquet(tmp_path / "invalid-release.parquet")
+
+
+@pytest.mark.parametrize(
+    ("corruption", "message"),
+    [
+        (
+            "DELETE FROM _bioextract.metadata "
+            "WHERE key='bioextract.release_version_source'",
+            "must occur together",
+        ),
+        (
+            "UPDATE _bioextract.metadata SET value='filename' "
+            "WHERE key='bioextract.release_version_source'",
+            "caller or official_metadata",
+        ),
+        (
+            "UPDATE _bioextract.metadata SET value=' ' "
+            "WHERE key='bioextract.release_version'",
+            "release_version must be non-empty",
+        ),
+    ],
+)
+def test_v3_reader_rejects_invalid_release_provenance(
+    tmp_path: Path, corruption: str, message: str
+) -> None:
+    path = tmp_path / "release.duckdb"
+    _dataset(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(corruption)
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+        with pytest.raises(ValueError, match=message):
+            validate_duckdb_metadata_v3(connection, metadata)
+
+
+def test_v3_reader_rejects_release_source_without_release(tmp_path: Path) -> None:
+    path = tmp_path / "source-only.duckdb"
+    dataset = _dataset(tmp_path)
+    dataset.release_version = None
+    dataset.write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "INSERT INTO _bioextract.metadata VALUES "
+            "('bioextract.release_version_source', 'caller')"
+        )
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+        with pytest.raises(ValueError, match="must occur together"):
+            validate_duckdb_metadata_v3(connection, metadata)
+
+
+@pytest.mark.parametrize(
+    ("status", "count", "insert_issue", "message"),
+    [
+        ("warning", "0", False, "validation_status"),
+        ("passed_with_warnings", "0", False, "does not match"),
+        ("passed", "1", False, "does not match validation_issue"),
+        ("passed", "1", True, "does not match validation_issue_count"),
+    ],
+)
+def test_v3_reader_validates_status_and_issue_count_parity(
+    tmp_path: Path,
+    status: str,
+    count: str,
+    insert_issue: bool,
+    message: str,
+) -> None:
+    path = tmp_path / "validation-state.duckdb"
+    _dataset(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value=? "
+            "WHERE key='bioextract.validation_status'",
+            [status],
+        )
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value=? "
+            "WHERE key='bioextract.validation_issue_count'",
+            [count],
+        )
+        if insert_issue:
+            connection.execute(
+                "INSERT INTO _bioextract.validation_issue "
+                "(issue_id, severity, issue_code, source_name, relation_name, message) "
+                "VALUES (1, 'warning', 'fixture', 'source', 'relation_0', 'fixture')"
+            )
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+        with pytest.raises(ValueError, match=message):
+            validate_duckdb_metadata_v3(connection, metadata)
+
+
+def test_v3_reader_reports_missing_validation_issue_table(tmp_path: Path) -> None:
+    path = tmp_path / "missing-validation-table.duckdb"
+    _dataset(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+        connection.execute("DROP TABLE _bioextract.validation_issue")
+        with pytest.raises(ValueError, match="requires _bioextract.validation_issue"):
+            validate_duckdb_metadata_v3(connection, metadata)
+
+
+@pytest.mark.parametrize("container", ["parquet", "duckdb"])
+@pytest.mark.parametrize("logical_name", ["", "   "])
+def test_tidy_source_logical_name_must_be_nonempty_after_normalization(
+    tmp_path: Path, container: str, logical_name: str
+) -> None:
+    dataset = _dataset(tmp_path)
+    source = dataset._sources[0]  # pyright: ignore[reportPrivateUsage]
+    dataset.source = TidySource(
+        logical_name, source.path, source.media_type, source.sha256
+    )
+
+    with pytest.raises(ValueError, match="logical_name must be non-empty"):
+        if container == "parquet":
+            dataset.write_parquet(tmp_path / "invalid.parquet")
+        else:
+            dataset.write_duckdb(tmp_path / "invalid.duckdb")
+
+
+@pytest.mark.parametrize("container", ["parquet", "duckdb"])
+def test_tidy_source_logical_name_is_normalized_before_publication(
+    tmp_path: Path, container: str
+) -> None:
+    dataset = _dataset(tmp_path)
+    source = dataset._sources[0]  # pyright: ignore[reportPrivateUsage]
+    dataset.source = TidySource(
+        " source ", source.path, source.media_type, source.sha256
+    )
+    path = tmp_path / f"normalized.{container}"
+    if container == "parquet":
+        dataset.write_parquet(path)
+        with duckdb.connect() as connection:
+            value = connection.execute(
+                "SELECT decode(value) FROM parquet_kv_metadata(?) "
+                "WHERE CAST(key AS VARCHAR)='bioextract.sources'",
+                [str(path)],
+            ).fetchone()
+        assert value is not None
+        assert json.loads(value[0])[0]["logical_name"] == "source"
+    else:
+        dataset.write_duckdb(path)
+        with duckdb.connect(str(path), read_only=True) as connection:
+            assert connection.execute(
+                "SELECT logical_name FROM _bioextract.source_file"
+            ).fetchone() == ("source",)
+
+
+@pytest.mark.parametrize("container", ["parquet", "duckdb"])
+def test_tidy_source_rejects_normalized_logical_name_collisions(
+    tmp_path: Path, container: str
+) -> None:
+    dataset = _dataset(tmp_path)
+    source = dataset._sources[0]  # pyright: ignore[reportPrivateUsage]
+    dataset.source = (
+        TidySource("source", source.path, source.media_type),
+        TidySource(" source ", source.path, source.media_type),
+    )
+
+    with pytest.raises(ValueError, match="unique after normalization"):
+        if container == "parquet":
+            dataset.write_parquet(tmp_path / "collision.parquet")
+        else:
+            dataset.write_duckdb(tmp_path / "collision.duckdb")
 
 
 def test_duckdb_publication_has_internal_provenance_schema(
@@ -94,7 +287,7 @@ def test_duckdb_publication_has_internal_provenance_schema(
         assert connection.execute(
             "SELECT value FROM _bioextract.metadata "
             "WHERE key = 'bioextract.metadata_schema_version'"
-        ).fetchone() == ("2",)
+        ).fetchone() == ("3",)
         assert connection.execute(
             "SELECT count(*) FROM _bioextract.validation_issue"
         ).fetchone() == (0,)
@@ -129,8 +322,9 @@ def test_canonical_publication_normalizes_derived_columns_and_records_mapping(
                 {"UniProtId": ["P12345"], "ReactomePathwayId": ["R-HSA-1"]}
             ).lazy()
         },
-        source=TidySource(source, "text/tab-separated-values"),
-        schema_version="example-v1",
+        source=TidySource("source", source, "text/tab-separated-values"),
+        resource_schema_version="example-v1",
+        source_schema_profile="example-source-v1",
         build_id_prefix="example",
         assets=(
             TidyAsset(
@@ -173,8 +367,9 @@ def test_official_headers_receive_only_required_duckdb_mapping(
     source.write_text("Name\tname\nA\tB\n", encoding="utf-8")
     dataset = TidyDataset(
         frames={"official": pl.DataFrame({"Name": ["A"], "name": ["B"]}).lazy()},
-        source=TidySource(source, "text/tab-separated-values"),
-        schema_version="official-v1",
+        source=TidySource("source", source, "text/tab-separated-values"),
+        resource_schema_version="official-v1",
+        source_schema_profile="official-source-v1",
         build_id_prefix="official",
         assets=(TidyAsset("official.parquet", "canonical", "official"),),
     )
@@ -235,8 +430,9 @@ def test_failed_replacement_preserves_existing_publication(
             .lazy()
             .select(pl.col("value").cast(pl.Int64))
         },
-        source=TidySource(source, "text/tab-separated-values"),
-        schema_version="bad-v1",
+        source=TidySource("source", source, "text/tab-separated-values"),
+        resource_schema_version="bad-v1",
+        source_schema_profile="bad-source-v1",
         build_id_prefix="bad",
         assets=(TidyAsset("relation.parquet", "canonical", "relation"),),
     )
@@ -285,7 +481,8 @@ def test_resource_factories_do_not_expose_limits() -> None:
         wikipathways.WikiPathwaysDatabase.from_gmt,
         eggnog.EggNOGDatabase.from_files,
         interpro.InterProDatabase.from_mapping_files,
-        uniprot.UniProtDatabase.from_files,
+        uniprot.UniProtDatabase.from_idmapping,
+        uniprot.UniProtDatabase.from_knowledgebase,
         stringdb.STRINGDatabase.from_files,
         omnipath.OmniPathDatabase.from_files,
         rhea.RheaDatabase.from_release,
@@ -320,6 +517,7 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "gene_list",
             "ncbi_gene_conversion",
         ),
+        kegg.KEGGDatabase.from_metabolic_release: ("source", "release_version"),
         reactome.ReactomeDatabase.from_files: (
             "uniprot_mapping",
             "pathways",
@@ -335,13 +533,19 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "protein_to_interpro",
             "interpro_xml",
         ),
-        uniprot.UniProtDatabase.from_files: ("id_mapping",),
-        uniprot.UniProtDatabase.from_dat: ("path", "source_database"),
+        uniprot.UniProtDatabase.from_idmapping: ("path", "release_version"),
+        uniprot.UniProtDatabase.from_knowledgebase: (
+            "entries",
+            "canonical_sequences",
+            "isoform_sequences",
+            "release_version",
+        ),
+        uniprot.UniProtDatabase.from_duckdb: ("path",),
         stringdb.STRINGDatabase.from_files: (
             "aliases",
             "links",
             "rank_by_source",
-            "version",
+            "release_version",
         ),
         omnipath.OmniPathDatabase.from_files: ("enzsub", "interactions"),
         rhea.RheaDatabase.from_reaction_files: (

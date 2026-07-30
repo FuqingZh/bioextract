@@ -10,7 +10,12 @@ import duckdb
 import polars as pl
 from polars._typing import SchemaDict
 
-from .constant import SCHEMA_VERSION, RheaNamespace
+from bioextract._publication import (
+    validate_duckdb_metadata_v3,
+    validate_duckdb_validation_state,
+)
+
+from .constant import SCHEMA_VERSION, SOURCE_SCHEMA_PROFILE, RheaNamespace
 
 if TYPE_CHECKING:
     from .rhea import RheaDatabase
@@ -22,7 +27,7 @@ _METADATA_TABLES = {
     "table_info",
     "column_mapping",
 }
-_METADATA_SCHEMA_VERSIONS = {"1", "2"}
+_METADATA_SCHEMA_VERSIONS = {"1", "2", "3"}
 _EXTERNAL_DATABASE_BY_NAMESPACE: Mapping[RheaNamespace, str] = {
     "ec": "EC",
     "go": "GO",
@@ -559,14 +564,36 @@ def open_rhea_publication(path: str | Path) -> _RheaPublication:
                 "Unsupported Rhea publication metadata: "
                 f"bioextract.metadata_schema_version={metadata_schema_version!r}"
             )
-        if metadata_schema_version == "2" and "validation_issue" not in metadata_tables:
-            raise ValueError(
-                "DuckDB file is missing bioextract metadata tables: "
-                "['validation_issue']"
-            )
+        if metadata_schema_version == "3":
+            validate_duckdb_metadata_v3(connection, metadata)
+            required_v3 = {
+                "bioextract.resource_name",
+                "bioextract.resource_schema_version",
+                "bioextract.source_schema_profile",
+                "bioextract.package_version",
+                "bioextract.generated_at",
+                "bioextract.validation_status",
+                "bioextract.validation_issue_count",
+                "bioextract.sources",
+            }
+            missing_v3 = sorted(required_v3 - set(metadata))
+            if missing_v3:
+                raise ValueError(f"Rhea metadata v3 is missing keys: {missing_v3}")
+            if (
+                metadata.get("bioextract.source_schema_profile")
+                != SOURCE_SCHEMA_PROFILE
+            ):
+                raise ValueError("Unsupported Rhea source schema profile")
+        if metadata_schema_version == "2":
+            validate_duckdb_validation_state(connection, metadata)
+        resource_schema_key = (
+            "bioextract.resource_schema_version"
+            if metadata_schema_version == "3"
+            else "bioextract.schema_version"
+        )
         expected_metadata = {
             "bioextract.resource_name": "rhea",
-            "bioextract.schema_version": SCHEMA_VERSION,
+            resource_schema_key: SCHEMA_VERSION,
         }
         for key, expected in expected_metadata.items():
             observed = metadata.get(key)

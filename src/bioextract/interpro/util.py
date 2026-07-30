@@ -89,6 +89,77 @@ def scan_protein2ipr_frame(file_protein2ipr: Path) -> pl.LazyFrame:
     )
 
 
+def validate_mapping_xml_relationships(
+    file_protein2ipr: Path,
+    *,
+    df_interpro_entry: pl.DataFrame,
+    df_interpro_member: pl.DataFrame,
+) -> None:
+    """Require one complete XML explanation for every mapping relationship."""
+    mapping_keys = (
+        scan_protein2ipr_frame(file_protein2ipr)
+        .select("InterProId", "MemberDbId")
+        .unique()
+        .collect(engine="streaming")
+    )
+    entry_values: dict[str, set[str]] = {}
+    entry_row_counts: dict[str, int] = {}
+    invalid_entry_keys: set[str] = set()
+    entry_keys: set[str] = set()
+    for interpro_id, interpro_type in df_interpro_entry.iter_rows():
+        entry_keys.add(interpro_id)
+        entry_row_counts[interpro_id] = entry_row_counts.get(interpro_id, 0) + 1
+        if interpro_type is not None and interpro_type.strip():
+            entry_values.setdefault(interpro_id, set()).add(interpro_type.strip())
+        else:
+            invalid_entry_keys.add(interpro_id)
+    member_values: dict[tuple[str, str], set[str]] = {}
+    member_row_counts: dict[tuple[str, str], int] = {}
+    invalid_member_keys: set[tuple[str, str]] = set()
+    member_keys: set[tuple[str, str]] = set()
+    for interpro_id, member_db_id, member_db in df_interpro_member.iter_rows():
+        key = (interpro_id, member_db_id)
+        member_keys.add(key)
+        member_row_counts[key] = member_row_counts.get(key, 0) + 1
+        if member_db is not None and member_db.strip():
+            member_values.setdefault(key, set()).add(member_db.strip())
+        else:
+            invalid_member_keys.add(key)
+
+    for interpro_id, member_db_id in mapping_keys.iter_rows():
+        if interpro_id not in entry_keys:
+            raise ValueError(
+                "InterPro mapping relationship is absent from XML entry metadata: "
+                f"{interpro_id}"
+            )
+        types = entry_values.get(interpro_id, set())
+        if (
+            entry_row_counts[interpro_id] != 1
+            or interpro_id in invalid_entry_keys
+            or len(types) != 1
+        ):
+            raise ValueError(
+                "InterPro mapping entry is not uniquely explained by one non-empty "
+                f"XML InterProType: {interpro_id}"
+            )
+        member_key = (interpro_id, member_db_id)
+        if member_key not in member_keys:
+            raise ValueError(
+                "InterPro mapping relationship is absent from XML member metadata: "
+                f"{interpro_id}/{member_db_id}"
+            )
+        databases = member_values.get(member_key, set())
+        if (
+            member_row_counts[member_key] != 1
+            or member_key in invalid_member_keys
+            or len(databases) != 1
+        ):
+            raise ValueError(
+                "InterPro mapping member is not uniquely explained by one non-empty "
+                f"XML MemberDb: {interpro_id}/{member_db_id}"
+            )
+
+
 def select_mapping_frame(
     file_protein2ipr: Path,
     df_input_ids: pl.DataFrame,
@@ -190,7 +261,7 @@ def read_interpro_xml_frames(file_interpro_xml: Path | None) -> dict[str, pl.Dat
         }
 
     entries: list[dict[str, str | None]] = []
-    members: list[dict[str, str]] = []
+    members: list[dict[str, str | None]] = []
     with gzip.open(file_interpro_xml, "rb") as handle:
         for _event, elem in ET.iterparse(handle, events=("end",)):
             if elem.tag != "interpro":
@@ -210,7 +281,7 @@ def read_interpro_xml_frames(file_interpro_xml: Path | None) -> dict[str, pl.Dat
                 for db_xref in member_list.findall("db_xref"):
                     member_db = db_xref.attrib.get("db")
                     member_db_id = db_xref.attrib.get("dbkey")
-                    if member_db and member_db_id:
+                    if member_db_id:
                         members.append(
                             {
                                 "InterProId": interpro_id,

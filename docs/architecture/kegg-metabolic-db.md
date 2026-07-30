@@ -16,9 +16,13 @@ Parquet products and does not change their schemas or release scopes.
 Use `from_metabolic_release()` for a complete release directory, its `raw`
 directory, or a zip/tar archive. Use the explicit keyword-only
 `from_metabolic_files()` roles for partial fixtures and nonstandard layouts.
+Both constructors accept optional `release_version`. It records only a
+caller-declared official release identity with
+`release_version_source=caller`; directory, file, and archive names never
+supply or validate release identity.
 Entry batches are streamed record by record; excluded large fields are not
 published. The writer stages locally beside the requested destination,
-publishes metadata schema v2, verifies inventory and row counts read-only, and
+publishes metadata schema v3, verifies inventory and row counts read-only, and
 then atomically commits `<resource>.duckdb`.
 
 When a release is supplied as an archive, provenance records the original

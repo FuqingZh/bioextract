@@ -1,179 +1,112 @@
 # UniProtDatabase Architecture
 
 Version: v1.0
-Date: 2026-07-14
+Date: 2026-07-30
 Status: current
 
-## Goal
+`UniProtDatabase` exposes independent idmapping and reviewed UniProtKB
+products. Idmapping uses `from_idmapping(path, release_version=None)`,
+`scan_mapping()`, `read_mapping()`, and `write_parquet()`. An unscoped eager
+read or write requires `allow_all_taxa=True`; lazy scanning remains unscoped by
+default.
 
-`bioextract.uniprot.UniProtDatabase` provides path-first access to UniProt
-`idmapping_selected` resources. The resource is large, so the database handle
-must not load data during construction. It supports raw UniProt selected
-mapping files, normalized parquet files, and hive parquet datasets from
-external or legacy sources.
-
-The MVP covers:
-
-- raw `idmapping_selected.tab` and `idmapping_selected.tab.gz`
-- normalized single `mapping.parquet`
-- hive parquet dataset directories partitioned by `TaxId`
-- `with_taxids(*taxids)` scoped extraction
-- full normalized mapping extraction
-- single parquet tidy writing
-- UniProt `.dat(.gz)` flat-file parsing for eggNOG xref extraction
-- UniProt `.dat(.gz)` flat-file parsing for curated Swiss-Prot subcellular
-  location comments
-
-It intentionally does not cover:
-
-- online UniProt ID mapping service calls
-- broad per-crossref public extraction APIs beyond the explicitly supported
-  eggNOG and subcellular-location paths
-- enrichment statistics
-- GO cellular-component inference from UniProtKB comment text
-
-## Raw Columns
-
-The local `idmapping_selected.tab.gz` has 22 tab-separated columns without a
-header:
-
-```text
-UniProtId
-UniProtEntryName
-GeneId
-RefSeq
-GI
-PDB
-GO
-UniRef100
-UniRef90
-UniRef50
-UniParc
-PIR
-TaxId
-MIM
-UniGene
-PubMed
-EMBL
-EMBLCDS
-Ensembl
-EnsemblTranscript
-EnsemblProtein
-AdditionalPubMed
-```
-
-All columns are normalized as strings.
-
-## Public API
+Swiss-Prot has one raw constructor:
 
 ```python
-from bioextract.uniprot import UniProtDatabase
-
-db = UniProtDatabase.from_files(
-    id_mapping="idmapping_selected.tab.gz",
-)
-
-df_hsa = db.with_taxids("9606").extract_mapping()
-
-db.with_taxids("9606", "10090").write_parquet("out/uniprot.parquet")
-db.write_parquet("out/uniprot-all.parquet", allow_all_taxa=True)
-```
-
-The same constructor accepts tidy outputs:
-
-```python
-db = UniProtDatabase.from_files(id_mapping="out/uniprot")
-df_hsa = db.with_taxids("9606").extract_mapping()
-```
-
-## Construction Checks
-
-`from_files()` performs only lightweight checks:
-
-- path exists
-- path type is supported
-- file inputs pass configured size limits
-- hive dataset directories contain at least one parquet file
-
-It does not read the raw data or collect parquet schemas. Schema validation is
-done by `validate_schema()`, `extract_mapping()`, and `write_parquet()`.
-
-## Publication
-
-`write_parquet(path)` publishes one canonical idmapping relation with
-footer provenance. It requires `allow_all_taxa=True` when no taxids are selected,
-because all-taxa export may scan the entire 9 GB raw gzip file.
-`if_exists="fail"` protects an existing file; `"replace"` publishes through a
-staging file.
-
-For UniProt knowledge-base flat files, the implemented helper path is:
-
-```python
-db = UniProtDatabase.from_dat(
-    path="uniprot_sprot.dat.gz",
-    source_database="Swiss-Prot",
-)
-result = db.write_eggnog_xref_parquet("out/uniprot_eggnog_xref.parquet")
-```
-
-That path emits a canonical `mapping.parquet` with:
-
-```text
-UniProtId
-PrimaryUniProtId
-IsPrimaryAccession
-EggnogOgId
-EggnogLevel
-SourceDb
-```
-
-Swiss-Prot subcellular location comments use the same flat-file constructor:
-
-```python
-db = UniProtDatabase.from_dat(
-    path="uniprot_sprot.dat.gz",
-    source_database="sprot",
-)
-
-df_subcell = db.extract_subcellular_location()
-result = db.write_subcellular_location_parquet(
-    "out/uniprot_subcellular_location.parquet"
+UniProtDatabase.from_knowledgebase(
+    entries=...,
+    canonical_sequences=None,
+    isoform_sequences=None,
+    release_version=None,
 )
 ```
 
-That path emits one Parquet with one row per
-`UniProt accession x subcellular location text x evidence`:
+Arguments declare exact roles. Content and compression magic determine parser
+behavior; basenames and directories do not. The content-validated bundle
+profile is `uniprotkb-flat-file-v1`. The files do not expose a global release
+or upstream schema label, so release identity is caller-only and
+`source_schema_version` is absent.
 
-```text
-UniProtId
-PrimaryUniProtId
-UniProtEntryName
-GeneName
-ProteinName
-SubcellularLocation
-SubcellularLocationNote
-EvidenceCode
-EvidenceSource
-EvidenceId
-SourceDb
-```
+The streaming publisher uses temporary relation spools plus a disk-backed
+sequence/isoform index and commits atomically. DAT is authoritative. Optional
+canonical FASTA must match every DAT primary accession and sequence. Optional
+varsplic FASTA identifiers must resolve to DAT isoform definitions.
 
-The extractor is deliberately conservative. It preserves curated UniProtKB
-`CC   -!- SUBCELLULAR LOCATION:` annotation text and ECO evidence, but it does
-not map locations to GO terms or interpret missing comments as negative
-localization evidence.
+## Published Relations
 
-## Implementation Notes
+The `uniprot-knowledgebase-duckdb-v1` schema has exactly these 16 `main`
+relations:
 
-Raw TSV and parquet inputs are scanned lazily. Tidy writing uses Polars
-`sink_parquet()`, so large writes do not need to collect the full table in
-memory before writing. Hive parquet dataset reading remains supported for
-compatibility, but `write_parquet()` publishes one selected relation rather than `TaxId=` partitioned output
-because UniProt all-taxa data has very high `TaxId` cardinality.
+| Relation | Purpose |
+| --- | --- |
+| `protein` | Reviewed entry identity, taxonomy, existence, and version facts |
+| `protein_accession` | Ordered primary and secondary accessions |
+| `protein_sequence` | Canonical and materialized isoform sequences |
+| `protein_isoform` | Ordered entry-context products keyed by their main IsoId |
+| `protein_isoform_identifier` | Ordered main and old official IsoIds |
+| `protein_sequence_variation` | DAT `VAR_SEQ` features |
+| `protein_isoform_variation` | Ordered entry-context product-to-VSP relationships |
+| `protein_name` | Ordered recommended, alternative, and submitted names |
+| `gene_name` | Ordered official gene-name classes |
+| `protein_ec_number` | EC annotations |
+| `protein_go_annotation` | GO term, aspect, and evidence annotations |
+| `protein_cross_reference` | External database identifiers and isoform scope |
+| `protein_comment` | Parsed comment blocks |
+| `protein_subcellular_location` | Individual locations and optional notes |
+| `protein_keyword` | Ordered keywords |
+| `protein_identifier` | Internal namespace index used for selection |
 
-The shared tidy contract has also changed since the first draft:
+`protein_isoform` is an entry-context product relation keyed by
+`primary_accession + isoform_id`; `isoform_id` is the first, main ID in the
+official IsoId list. `protein_isoform_identifier` retains every listed ID in
+order and marks the main ID. This follows the UniProt XML model, where the first
+`id` is the main product ID and later values are old product IDs, while also
+preserving the documented case where related entries list the same products in
+each entry. [UniProt release 2019_11](https://www.uniprot.org/release-notes/2019-12-18-release)
+and [Alternative products help](https://www.uniprot.org/help/alternative_products)
+define these semantics.
 
-- report assets are dataclasses
-- manifest asset `sha256` is optional
-- `row_count` is no longer part of manifest metadata
-- hashing is opt-in through `should_hash_assets=True`
+Official `External` declarations may therefore repeat a product owned and
+displayed or materialized by another entry. `Displayed` points to the declaring
+entry's canonical sequence. `External` and `Not described` remain unresolved.
+Varsplic headers resolve through the identifier relation and update only the
+unique `Alternative` owner product.
+
+## Selection And Extractor Schemas
+
+Every matched extractor begins with the stable selection prefix
+`GroupId, InputId, InputNamespace, UniProtId`, then adds:
+
+| Extractor | Stable additional columns |
+| --- | --- |
+| `extract_proteins` | `EntryName, IsReviewed, TaxonId, ProteinExistence, SequenceLength, MolecularWeight, SequenceVersion, EntryVersion` |
+| `extract_accessions` | `Accession, AccessionOrder, IsPrimaryAccession` |
+| `extract_protein_names` | `NameType, ProteinName, NameOrder` |
+| `extract_gene_names` | `NameType, GeneName, NameOrder` |
+| `extract_ec_numbers` | `ECNumber` |
+| `extract_go_annotations` | `GOId, Aspect, TermName, EvidenceCode, EvidenceSource` |
+| `extract_cross_references` | `Database, ExternalId, Properties, IsoformId` |
+| `extract_comments` | `CommentId, CommentType, CommentText` |
+| `extract_subcellular_locations` | `SubcellularLocation, SubcellularLocationNote` |
+| `extract_keywords` | `Keyword, KeywordOrder` |
+| `extract_sequences` | `SequenceId, SequenceType, Sequence, Length, CRC64, SHA256` |
+| `extract_isoforms` | `IsoformId, IsoformName, IsoformOrder, SequenceStatus, SequenceId` |
+| `extract_isoform_identifiers` | `IsoformId, Identifier, IdentifierOrder, IsMain` |
+| `extract_sequence_variations` | `VariationId, StartPosition, EndPosition, Note` |
+| `extract_isoform_variations` | `IsoformId, VariationId, VariationOrder` |
+
+`extract_unmatched_ids()` instead returns
+`GroupId, InputId, InputNamespace, Reason`. Empty selections preserve the
+corresponding schema, and every extractor has an explicit domain order after
+the stable selection prefix.
+
+`from_duckdb()` validates metadata/resource schemas, exact table inventories,
+physical column order/types/nullability, and row counts.
+`connect()` is read-only. Selection supports `uniprot`, `entry_name`,
+`gene_name`, `gene_id`, `refseq`, `ensembl`, and `isoform_id`, retaining every
+canonical match. Extractors expose proteins, accessions, names, EC, GO,
+cross-references, comments, locations, keywords, sequences, isoforms, isoform
+identifiers, variations, and unmatched inputs.
+
+See the [implementation plan](../implementation-plan/20260730-uniprot-knowledgebase-domain-access.md)
+for validation details and deferred scope.

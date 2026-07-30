@@ -309,7 +309,7 @@ destination is preserved. Orphan secondary IDs, cross-references, relations,
 structures, and WURCS rows are skipped and persisted as
 `foreign_key_violation` warnings in `_bioextract.validation_issue`.
 
-Metadata schema v2 always contains five tables and records
+Metadata schema v3 always contains five tables and records
 `bioextract.validation_status` plus
 `bioextract.validation_issue_count`. Readers accept v1 as having no persisted
 issue details, require `validation_issue` for v2, and reject unknown versions.
@@ -340,7 +340,7 @@ wrapper is not an acceptable substitute.
 2. Add optional SDF parsing for molfile-backed `compound_structure`.
 3. Make `from_release(source)` discover OBO, SDF, available TSVs, and optional
    ChemOnt without requiring a complete release.
-4. Publish metadata v2 and integrity-check primary IDs,
+4. Publish metadata v3 and integrity-check primary IDs,
    secondary-ID targets, relation endpoints, and structure ownership.
 5. Add `ChEBIDatabase.from_duckdb()` with identity, schema, inventory, row
    count verification, and a fresh read-only native `connect()` escape hatch.
@@ -381,6 +381,6 @@ Unit and integration tests must cover:
 - real-snapshot checks for water (`CHEBI:15377`), one secondary ID, one external
   cross-reference, one `is_a` parent, and one descendant;
 - `_bioextract` identity, source inventory, capability scope, and table counts;
-- metadata v1 compatibility, metadata v2 five-table integrity, validation
+- metadata v1/v2 compatibility, metadata v3 five-table integrity, validation
   warning persistence, and unknown-version rejection;
 - a real-release read/extract smoke after publishing `tidy/chebi.duckdb`.

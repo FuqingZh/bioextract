@@ -192,8 +192,10 @@ The `_bioextract` schema contains:
 - `validation_issue`: non-fatal source-integrity findings; Rhea v1 creates it
   empty because current integrity failures remain fail-fast.
 
-New publications use metadata schema v2. Readers accept metadata v1 without
-persisted issue details and v2 with all five tables; unknown versions fail.
+New publications use metadata schema v3. Readers accept legacy metadata v1
+without persisted issue details and metadata v2 with all five tables. Metadata
+v3 additionally requires the explicit resource schema and source profile keys;
+unknown versions fail.
 
 Rhea v1 stores `compound.chebi_id` and `underlying_chebi_id` as complete
 `CHEBI:<number>` CURIE strings. The resource schema version remains
@@ -208,7 +210,8 @@ full extra read.
 
 Metadata keys use the shared `bioextract.*` namespace, including
 `bioextract.metadata_schema_version`, `bioextract.resource_name`,
-`bioextract.schema_version`, `bioextract.scope`, and source/release identity.
+`bioextract.resource_schema_version`, `bioextract.source_schema_profile`,
+`bioextract.scope`, and source/release identity.
 A publication-backed handle cannot be republished; rebuilding must begin from
 official source files.
 

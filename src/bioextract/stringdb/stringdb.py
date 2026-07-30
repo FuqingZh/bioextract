@@ -16,7 +16,6 @@ from bioextract._shared import (
 
 from .constant import (
     DEFAULT_SOURCE_RANK_MAP,
-    SCHEMA_ALIASES,
     SCHEMA_EDGES,
     SCHEMA_GROUP_EDGES,
     SCHEMA_GROUP_INPUT_IDS,
@@ -43,7 +42,8 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class _StringSnapshot:
-    version: StringDatabaseVersion
+    parser_version: StringDatabaseVersion
+    release_version: str | None = None
     file_aliases: Path | None = None
     file_links: Path | None = None
 
@@ -104,7 +104,7 @@ class STRINGDatabase:
         links: os.PathLike[str] | None = None,
         *,
         rank_by_source: Mapping[str, int] = DEFAULT_SOURCE_RANK_MAP,
-        version: StringDatabaseVersion = "v12.0",
+        release_version: str | None = None,
     ) -> STRINGDatabase:
         """Create a dataset handle from local STRING aliases and links files.
 
@@ -116,18 +116,20 @@ class STRINGDatabase:
             rank_by_source: Source-priority mapping used to break ties when the
                 same input ID maps to the same STRING ID through multiple alias
                 sources.
-            version: Declared STRING schema version used for CSV schema
-                overrides and column validation.
+            release_version: Optional official STRING release identity supplied
+                by the caller. The parser profile is selected internally and
+                every input header is validated against it.
 
         Returns:
             A dataset handle that can produce single or grouped selections.
 
         Raises:
             FileNotFoundError: If either input file does not exist.
-            ValueError: If the requested version is unsupported.
+            ValueError: If the release identity is empty or an input does not
+                match the supported content profile.
 
         Examples:
-            Open a STRING v12 fixture snapshot:
+            Open a STRING fixture snapshot:
 
             >>> db = STRINGDatabase.from_files(
             ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
@@ -141,8 +143,8 @@ class STRINGDatabase:
             ... )
             [{'InputId': 'TP53', 'StringId': '9606.ENSP0001'}]
         """
-        if version not in SCHEMA_ALIASES or version not in SCHEMA_LINKS:
-            raise ValueError(f"Unsupported STRING version: {version}")
+        if release_version is not None and not str(release_version).strip():
+            raise ValueError("STRING release_version must be non-empty")
 
         file_aliases = aliases
         file_links = links
@@ -160,7 +162,8 @@ class STRINGDatabase:
 
         return cls(
             snapshot=_StringSnapshot(
-                version=version,
+                parser_version="v12.0",
+                release_version=release_version,
                 file_aliases=file_aliases,
                 file_links=file_links,
             ),
@@ -280,14 +283,17 @@ class STRINGDatabase:
             return None
 
         lf_aliases = scan_aliases(
-            self.snapshot.file_aliases, version=self.snapshot.version
+            self.snapshot.file_aliases,
+            version=self.snapshot.parser_version,
         )
         cols_available = lf_aliases.collect_schema().names()
         col_id = infer_alias_id_col(
             cols_available,
-            version=self.snapshot.version,
+            version=self.snapshot.parser_version,
         )
-        validate_alias_required_cols(cols_available, version=self.snapshot.version)
+        validate_alias_required_cols(
+            cols_available, version=self.snapshot.parser_version
+        )
         self._alias_schema_cached = _StringAliasInfo(
             col_string_id=col_id,
             has_source="source" in cols_available,
@@ -446,7 +452,7 @@ class StringSelection:
 
         lf_aliases = scan_aliases(
             self.dataset._alias_schema.file_alias,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-            version=self.dataset.snapshot.version,
+            version=self.dataset.snapshot.parser_version,
         )
         lf_input_ids = self._df_input_ids.lazy()
         col_group_id = list(self._col_group_id)
@@ -538,7 +544,7 @@ class StringSelection:
             return self._df_edges
         lf_string_ids = df_string_ids.lazy()
 
-        version_link = self.dataset.snapshot.version
+        version_link = self.dataset.snapshot.parser_version
         lf_links = scan_links(self.dataset.snapshot.file_links, version=version_link)
         validate_required_cols(
             cols_available=lf_links.collect_schema().names(),

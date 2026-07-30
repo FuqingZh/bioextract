@@ -9,13 +9,12 @@ from typing import TextIO, TypedDict
 
 import polars as pl
 
-from bioextract._shared import RowWriter, create_tsv_writer, validate_required_cols
+from bioextract._shared import RowWriter, create_tsv_writer
 
 from .constant import (
     COLS_EGGNOG_XREF,
     COLS_IDMAPPING_SELECTED,
     COLS_SUBCELLULAR_LOCATION,
-    REQUIRED_COLS_MAPPING,
     SCHEMA_EGGNOG_XREF,
     SCHEMA_MAPPING,
     SCHEMA_SUBCELLULAR_LOCATION,
@@ -83,11 +82,15 @@ def filter_taxids(lf: pl.LazyFrame, taxids: tuple[str, ...]) -> pl.LazyFrame:
 
 def validate_mapping_schema(lf: pl.LazyFrame) -> None:
     schema = lf.collect_schema()
-    validate_required_cols(
-        cols_available=schema.names(),
-        cols_required=REQUIRED_COLS_MAPPING,
-        context="UniProt idmapping selected mapping",
-    )
+    expected_names = set(SCHEMA_MAPPING)
+    if set(schema.names()) != expected_names or any(
+        schema[name] != pl.String for name in expected_names
+    ):
+        raise ValueError(
+            "UniProt idmapping selected mapping schema mismatch: "
+            f"observed={schema}, expected_columns={sorted(expected_names)}, "
+            "expected_type=String"
+        )
 
 
 def has_hive_parquet_candidates(dir_mapping: Path) -> bool:

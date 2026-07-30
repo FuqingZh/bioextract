@@ -79,8 +79,10 @@ result = db.write_duckdb(
 )
 ```
 
-Both inputs must be under the same `<version>/raw/` directory, and the
-directory version must match the `INTERPRO` release declared in XML.
+The arguments declare the two logical source roles. Paths and basenames do not
+carry release identity. The official `INTERPRO` release declared in XML is
+published as `release_version`, and mapping-to-XML relationships are validated
+from content.
 
 ## Output Contract
 

@@ -41,6 +41,9 @@ when a domain does not yet have a dedicated architecture document.
 
 ## Plans And History
 
+The completed [UniProtKB Domain Access Plan](implementation-plan/20260730-uniprot-knowledgebase-domain-access.md)
+records the Swiss-Prot DuckDB boundary and version-contract convergence.
+
 The completed
 [KEGG Metabolic Domain Access Plan](implementation-plan/20260730-kegg-metabolic-domain-access.md)
 records the compound, reaction, enzyme, module, cross-reference, publication,

@@ -23,11 +23,14 @@ class TidySource:
     """Describe one source file recorded in publication provenance.
 
     Attributes:
+        logical_name: Required role name that identifies this source within the
+            publication independently of its path or basename.
         path: Source file whose path and byte size are recorded.
         media_type: Stable media-type label for the source format.
         sha256: Optional precomputed source digest.
     """
 
+    logical_name: str
     path: Path
     media_type: str
     sha256: str | None = None
@@ -59,19 +62,28 @@ class TidyDataset:
     Attributes:
         frames: Lazy frames keyed by the names referenced from `assets`.
         source: One source or an ordered tuple of sources for provenance.
-        schema_version: Version of the resource-specific output schema.
-        build_id_prefix: Stable resource identity prefix.
+        resource_schema_version: Version of the resource-specific output schema.
+        source_schema_profile: Required bioextract-owned, content-validated
+            parser profile.
+        build_id_prefix: Human-readable build/execution label prefix. It never
+            supplies resource, release, or schema identity.
         assets: Ordered output specifications for frames to persist.
         resource_name: Stable database resource name for embedded provenance.
         release_version: Optional official source release identifier.
+        release_version_source: Optional `caller` or `official_metadata`
+            provenance for `release_version`.
+        source_schema_version: Optional upstream-declared input schema label.
 
     Examples:
         Bind one in-memory frame to a parquet asset:
 
         >>> dataset = TidyDataset(
         ...     frames={"term": pl.DataFrame({"id": ["T1"]}).lazy()},
-        ...     source=TidySource(Path("data/source.tsv"), "text/tab-separated-values"),
-        ...     schema_version="example-v1",
+        ...     source=TidySource(
+        ...         "source", Path("data/source.tsv"), "text/tab-separated-values"
+        ...     ),
+        ...     resource_schema_version="example-v1",
+        ...     source_schema_profile="example-source-v1",
         ...     build_id_prefix="example",
         ...     assets=(TidyAsset("term.parquet", "canonical", "term"),),
         ... )
@@ -81,11 +93,14 @@ class TidyDataset:
 
     frames: Mapping[str, pl.LazyFrame]
     source: TidySource | tuple[TidySource, ...]
-    schema_version: str
+    resource_schema_version: str
+    source_schema_profile: str
     build_id_prefix: str
     assets: tuple[TidyAsset, ...]
     resource_name: str | None = None
     release_version: str | None = None
+    release_version_source: str | None = None
+    source_schema_version: str | None = None
 
     def write_parquet(
         self,
@@ -100,15 +115,18 @@ class TidyDataset:
             >>> from tempfile import TemporaryDirectory
             >>> dataset = TidyDataset(
             ...     frames={"term": pl.DataFrame({"id": ["T1"]}).lazy()},
-            ...     source=TidySource(Path("data/source.tsv"), "text/plain"),
-            ...     schema_version="example-v1",
+            ...     source=TidySource(
+            ...         "source", Path("data/source.tsv"), "text/plain"
+            ...     ),
+            ...     resource_schema_version="example-v1",
+            ...     source_schema_profile="example-source-v1",
             ...     build_id_prefix="example",
             ...     assets=(TidyAsset("term.parquet", "canonical", "term"),),
             ... )
             >>> with TemporaryDirectory() as dir_out:
             ...     dataset.write_parquet(
             ...         Path(dir_out) / "example.parquet"
-            ...     ).schema_version
+            ...     ).resource_schema_version
             'example-v1'
         """
         if len(self.assets) != 1:
@@ -121,9 +139,12 @@ class TidyDataset:
             self.frames[asset.frame_name],
             path,
             resource_name=self.resource_name or self.build_id_prefix,
-            schema_version=self.schema_version,
+            resource_schema_version=self.resource_schema_version,
+            source_schema_profile=self.source_schema_profile,
+            source_schema_version=self.source_schema_version,
             sources=self._source_records,
             release_version=self.release_version,
+            release_version_source=self.release_version_source,
             if_exists=if_exists,
             normalize_columns=not preserve_source_headers,
         )
@@ -142,8 +163,11 @@ class TidyDataset:
             >>> from tempfile import TemporaryDirectory
             >>> dataset = TidyDataset(
             ...     frames={"term": pl.DataFrame({"id": ["T1"]}).lazy()},
-            ...     source=TidySource(Path("data/source.tsv"), "text/plain"),
-            ...     schema_version="example-v1",
+            ...     source=TidySource(
+            ...         "source", Path("data/source.tsv"), "text/plain"
+            ...     ),
+            ...     resource_schema_version="example-v1",
+            ...     source_schema_profile="example-source-v1",
             ...     build_id_prefix="example",
             ...     assets=(TidyAsset("term.parquet", "canonical", "term"),),
             ... )
@@ -167,9 +191,12 @@ class TidyDataset:
             relations,
             path,
             resource_name=self.resource_name or self.build_id_prefix,
-            schema_version=self.schema_version,
+            resource_schema_version=self.resource_schema_version,
+            source_schema_profile=self.source_schema_profile,
+            source_schema_version=self.source_schema_version,
             sources=self._source_records,
             release_version=self.release_version,
+            release_version_source=self.release_version_source,
             if_exists=if_exists,
         )
 
@@ -181,15 +208,26 @@ class TidyDataset:
 
     @property
     def _source_records(self) -> tuple[SourceFileRecord, ...]:
-        return tuple(
-            SourceFileRecord(
-                logical_name=source.path.name,
-                path=source.path,
-                media_type=source.media_type,
-                sha256=source.sha256,
+        records: list[SourceFileRecord] = []
+        logical_names: set[str] = set()
+        for source in self._sources:
+            logical_name = source.logical_name.strip()
+            if not logical_name:
+                raise ValueError("TidySource.logical_name must be non-empty")
+            if logical_name in logical_names:
+                raise ValueError(
+                    "TidySource.logical_name values must be unique after normalization"
+                )
+            logical_names.add(logical_name)
+            records.append(
+                SourceFileRecord(
+                    logical_name=logical_name,
+                    path=source.path,
+                    media_type=source.media_type,
+                    sha256=source.sha256,
+                )
             )
-            for source in self._sources
-        )
+        return tuple(records)
 
 
 def calculate_file_sha256(file_path: Path) -> str:
