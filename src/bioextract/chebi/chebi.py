@@ -7,7 +7,7 @@ import shutil
 import tarfile
 import tempfile
 import zipfile
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -27,7 +27,7 @@ from ._canonical import ChEBIIntegrityError, build_canonical_relations
 from ._query import (
     ChEBICapabilityError,
     ChEBICompoundSelection,
-    _ChEBIPublication,
+    _ChEBIPublication,  # pyright: ignore[reportPrivateUsage]  # sibling publication type
     create_group_selection,
     create_selection,
     open_chebi_publication,
@@ -63,7 +63,7 @@ _TABLE_ROLES = {
 
 @dataclass(frozen=True, slots=True)
 class _ChEBISnapshot:
-    table_sources: Mapping[str, Path] = field(default_factory=dict)
+    table_sources: Mapping[str, Path] = field(default_factory=dict[str, Path])
     release_source: Path | None = None
     file_obo: Path | None = None
     file_sdf: Path | None = None
@@ -552,7 +552,7 @@ def _read_obo_frames(file_obo: Path) -> dict[str, pl.DataFrame]:
 @contextmanager
 def _prepared_table_sources(
     snapshot: _ChEBISnapshot,
-) -> Iterator[tuple[dict[str, Path], list[SourceFileRecord]]]:
+) -> Generator[tuple[dict[str, Path], list[SourceFileRecord]]]:
     with tempfile.TemporaryDirectory(prefix="bioextract-chebi-") as dir_tmp_value:
         dir_tmp = Path(dir_tmp_value)
         if snapshot.release_source is not None:
@@ -718,7 +718,7 @@ def _require_tar_member(
 
 
 @contextmanager
-def _open_ontology_text(path: Path) -> Iterator[TextIO]:
+def _open_ontology_text(path: Path) -> Generator[TextIO]:
     if _is_gzip(path):
         with gzip.open(path, "rt", encoding="utf-8", errors="replace") as handle:
             yield handle
@@ -843,7 +843,7 @@ def _media_type(path: Path) -> str:
 
 
 def _scope(snapshot: _ChEBISnapshot, has_tables: bool) -> str:
-    components = []
+    components: list[str] = []
     if has_tables:
         components.append("tables")
     if snapshot.file_obo is not None:

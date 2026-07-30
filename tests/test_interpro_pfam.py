@@ -82,11 +82,15 @@ def test_write_pfam_duckdb_emits_compact_relations(tmp_path: Path) -> None:
 
     assert result.tables == ("protein_term", "term", "term_xref")
     with duckdb.connect(str(path), read_only=True) as connection:
-        df_protein_term = pl.read_database(
+        df_protein_term = pl.read_database(  # pyright: ignore[reportUnknownMemberType]  # Polars-DuckDB boundary
             "SELECT * FROM protein_term", connection
         ).sort("uniprot_id", "pfam_id")
-        df_term = pl.read_database("SELECT * FROM term", connection)
-        df_term_xref = pl.read_database("SELECT * FROM term_xref", connection)
+        df_term = pl.read_database(  # pyright: ignore[reportUnknownMemberType]  # Polars-DuckDB boundary
+            "SELECT * FROM term", connection
+        )
+        df_term_xref = pl.read_database(  # pyright: ignore[reportUnknownMemberType]  # Polars-DuckDB boundary
+            "SELECT * FROM term_xref", connection
+        )
     assert df_protein_term.schema == {
         "uniprot_id": pl.String,
         "pfam_id": pl.String,

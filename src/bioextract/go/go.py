@@ -25,7 +25,10 @@ from .ontology.parse import (
     scan_obo_term_records,
     validate_go_id,
 )
-from .ontology.tidy import _build_tidy_frames, extract_subcell_frame
+from .ontology.tidy import (
+    _build_tidy_frames,  # pyright: ignore[reportPrivateUsage]  # owned ontology helper
+    extract_subcell_frame,
+)
 
 __all__ = [
     "GODatabase",

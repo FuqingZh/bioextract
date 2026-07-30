@@ -37,7 +37,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _write_aliases(file_aliases: Path, *, num_proteins: int) -> list[str]:
-    protein_ids = []
+    protein_ids: list[str] = []
     with file_aliases.open("w", encoding="utf-8") as handle:
         handle.write("#string_protein_id\talias\tsource\n")
         for idx in range(num_proteins):

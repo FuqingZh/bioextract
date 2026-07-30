@@ -607,7 +607,7 @@ class ReactomeSelection:
         """
         if self._df_mapping is None:
             self._df_mapping = extract_mapping_frame(
-                self.dataset._mapping_frame(),
+                self.dataset._mapping_frame(),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
                 self._df_input_ids,
                 cols_group_id=self._col_group_id,
             )

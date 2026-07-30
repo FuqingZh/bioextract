@@ -109,7 +109,7 @@ def generate_xref_data_by_cols(go_id: str, xrefs: list[str]) -> XrefColumnBuffer
 # #endregion
 ################################################################################
 # #region FrameBuilders
-def _build_tidy_frames(
+def _build_tidy_frames(  # pyright: ignore[reportUnusedFunction]  # consumed by owning GO facade
     records: Iterable[TermRecord],
     *,
     subset_definitions: Iterable[SubsetDefinitionRecord] = (),

@@ -38,11 +38,11 @@ class _SubcellularLocationEntry(TypedDict):
 
 @dataclass(slots=True)
 class _UniProtDatRecord:
-    accessions: list[str] = field(default_factory=list)
+    accessions: list[str] = field(default_factory=list[str])
     entry_name: str | None = None
     gene_name: str | None = None
     protein_name: str | None = None
-    subcellular_location_comments: list[str] = field(default_factory=list)
+    subcellular_location_comments: list[str] = field(default_factory=list[str])
 
 
 def normalize_taxids(taxids: tuple[str | int, ...]) -> tuple[str, ...]:

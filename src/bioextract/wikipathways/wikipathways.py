@@ -437,8 +437,8 @@ class WikiPathwaysSelection:
     def _lazy_mapping(self) -> pl.LazyFrame:
         if self._lf_mapping is None:
             self._lf_mapping = extract_mapping_frame(
-                self.dataset._lazy_frame("pathway"),
-                self.dataset._lazy_frame("term2gene"),
+                self.dataset._lazy_frame("pathway"),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+                self.dataset._lazy_frame("term2gene"),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
                 self._df_input_ids,
                 cols_group_id=self._col_group_id,
             )

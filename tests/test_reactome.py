@@ -241,7 +241,7 @@ def test_relation_only_snapshot_supports_unscoped_relations(
 
 
 def test_from_files_rejects_missing_files(tmp_path: Path) -> None:
-    file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
+    _file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
 
     with pytest.raises(ValueError, match="At least one Reactome input file"):
         ReactomeDatabase.from_files()
