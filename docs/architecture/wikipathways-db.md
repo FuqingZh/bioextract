@@ -1,4 +1,4 @@
-# WikiPathwaysDb Architecture
+# WikiPathwaysDatabase Architecture
 
 Version: v1.0
 Date: 2026-07-14
@@ -6,7 +6,7 @@ Status: current
 
 ## Goal
 
-`bioextract.wikipathways.WikiPathwaysDb` provides path-first access to local
+`bioextract.wikipathways.WikiPathwaysDatabase` provides path-first access to local
 WikiPathways GMT snapshots. The first version is a local enrichment-input layer:
 it reads species-specific GMT files and emits pathway metadata plus
 `term2gene`/`term2name` frames.
@@ -56,9 +56,9 @@ Glutathione metabolism%WikiPathways_20260510%WP100%Homo sapiens	https://www.wiki
 ## Public API
 
 ```python
-from bioextract.wikipathways import WikiPathwaysDb
+from bioextract.wikipathways import WikiPathwaysDatabase
 
-db = WikiPathwaysDb.from_gmt(
+db = WikiPathwaysDatabase.from_gmt(
     "wikipathways-20260510-gmt-Homo_sapiens.gmt",
     species="Homo sapiens",
 )
@@ -69,7 +69,7 @@ df_term2name = db.extract_term2name()
 
 selection = db.select_ids(["2687", "2678", "MISSING"])
 df_mapping = selection.extract_mapping()
-df_unmapped = selection.extract_unmapped_input_ids()
+df_unmapped = selection.extract_unmatched_ids()
 ```
 
 Grouped selections mirror the STRINGdb and Reactome style:
@@ -126,14 +126,13 @@ Url
 
 Grouped mapping prepends `GroupId`.
 
-## Tidy Dataset
+## Publication
 
-`build_tidy()` emits flat parquet assets:
+`write_duckdb(path)` publishes related pathway and membership relations:
 
 ```text
-pathway.parquet
-term2gene.parquet
-term2name.parquet
+pathway
+pathway_gene
 ```
 
 Schema version:
@@ -142,8 +141,9 @@ Schema version:
 wikipathways-gmt-v0.1
 ```
 
-No `canonical/` or `derived/` subdirectories are written. Asset `kind` is kept
-only in `manifest.json` metadata.
+Source identity, table roles, and row counts are stored in `_bioextract`.
+`term2name` is not duplicated because the canonical `pathway` relation already
+owns pathway names.
 
 ## Species Filtering
 

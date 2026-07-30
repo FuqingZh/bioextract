@@ -31,8 +31,8 @@ def write_frame_assets(
     entries_manifest: list[dict[str, object]] = []
     for path_rel, kind, frame_name in ASSET_SPECS:
         frame = frames[frame_name]
-        file_out = dir_out / path_rel
-        frame.lazy().sink_parquet(file_out)
+        path = dir_out / path_rel
+        frame.lazy().sink_parquet(path)
         entries_manifest.append(
             {
                 "path": path_rel,

@@ -1,149 +1,115 @@
-# Tidy Dataset Contract
+# Materialized Dataset Contract
 
 Version: v1.0
-Date: 2026-07-14
+Date: 2026-07-29
 Status: current
 
-## Goal
+## Purpose
 
-`bioextract._tidy` defines the shared write contract for resource snapshots
-that emit parquet artifacts plus an optional manifest.
+This contract defines how `bioextract` publishes validated local snapshots. It
+is subordinate to the repository-wide
+[Domain Access Architecture](20260729-v1.0-domain-access-architecture.md):
+materialization is an execution strategy, not the product purpose.
 
-This document is the authority for:
+## Output unit
 
-- `TidyDataset`
-- `TidyAsset`
-- `TidyReportAsset`
-- `TidyManifestAsset`
-- `TidyWriteReport`
-- `manifest.json` asset metadata shape
+The biological relation structure determines the container:
 
-It does not define any resource-specific biological schema.
+- one independently useful analytical relation: one Parquet file;
+- multiple related relations normally queried together: one DuckDB file;
+- an already efficient official query format: direct access unless
+  materialization has an identified benefit.
 
-## Current Contract
+A partial capability of a multi-relation resource retains the same DuckDB
+container. Missing inputs produce absent tables, not a different packaging
+model and not misleading empty observations.
 
-`TidyDataset` is a lazy-write boundary:
-
-- `frames` must be `pl.LazyFrame`
-- `write()` persists frames with `sink_parquet()`
-- manifest writing is optional
-- asset hashing is optional
-
-The implemented public shape is:
+Canonical writers are:
 
 ```python
-report = dataset.write(
-    dir_out,
-    should_write_manifest=True,
-    should_hash_assets=False,
-)
+dataset.write_parquet(path)
+dataset.write_duckdb(path, table_names=...)
 ```
 
-## Asset Types
+Every writer requires `path`. The library does not infer a semantic
+filename.
 
-Report assets are dataclasses:
+## Naming
 
-```python
-TidyReportAsset(
-    path="mapping.parquet",
-    kind="canonical",
-    is_optional=False,
-)
-```
+Tables, views, and generated fields use singular lowercase `snake_case` and do
+not contain hyphens.
 
-Manifest assets are also dataclasses:
+Fields use a source-first rule:
 
-```python
-TidyManifestAsset(
-    path="mapping.parquet",
-    kind="canonical",
-    sha256=None,
-    is_optional=False,
-)
-```
+- one-to-one columns copied from an official two-dimensional table retain the
+  official header;
+- fields parsed from OBO, RDF, XML, SDF, headerless inputs, joins, prefix
+  decomposition, or other derivations use stable `snake_case`;
+- source and normalized duplicate columns are not both published;
+- empty, duplicate, or case-insensitively conflicting headers receive the
+  smallest deterministic query-safe mapping;
+- every necessary mapping is recorded in provenance.
 
-`TidyWriteReport.assets` returns `tuple[TidyReportAsset, ...]`.
+An upstream official header change is therefore a schema change, not silently
+hidden by a broad normalization layer.
 
-`manifest.json` remains JSON-like and serializable. Manifest asset dataclasses
-are converted with `asdict()` at the write boundary.
+## Parquet provenance
 
-## Output Contract
+Parquet footer key-value metadata carries:
 
-All tidy writers emit flat outputs by default:
+- `bioextract.metadata_schema_version`;
+- `bioextract.resource_name`;
+- `bioextract.schema_version`;
+- `bioextract.package_version`;
+- `bioextract.generated_at`;
+- `bioextract.sources`;
+- optional `bioextract.scope`;
+- `bioextract.column_mapping`.
+
+No sidecar file is required. A Parquet publication is complete and
+machine-identifiable as one file.
+
+## DuckDB provenance
+
+Biological relations live in `main`. The `_bioextract` schema is an
+application-owned internal provenance namespace, not a DuckDB or SQL reserved
+name:
 
 ```text
-out/
-  <asset>.parquet
-  manifest.json
+main.<domain_table>
+
+_bioextract.metadata
+_bioextract.source_file
+_bioextract.table_info
+_bioextract.column_mapping
 ```
 
-There is no default `canonical/` or `derived/` subdirectory split.
+`metadata` stores resource identity, resource schema version, metadata schema
+version, scope, package version, and generation time. `source_file` stores
+logical source name, display path, bytes, media type, and optional SHA-256.
+`table_info` stores table name, semantic role, and row count.
+`column_mapping` always exists and is empty when source headers required no
+mapping.
 
-The manifest contains:
+The namespace contains no biological facts. `information_schema` is not used
+because it is the SQL system catalog.
 
-- `build_id`
-- `schema_version`
-- `generated_at`
-- `sources`
-- `assets`
+## Lazy and atomic write boundary
 
-Each manifest asset contains:
+Lazy relations remain `pl.LazyFrame` until publication. Parquet output uses
+Polars `sink_parquet()`; the public method remains `write_parquet()` because it
+also owns validation, provenance, staging, and commit.
 
-- `path`
-- `kind`
-- `sha256`
-- `is_optional`
+DuckDB publication streams each lazy relation through a short-lived staging
+Parquet, loads it column-wise, writes metadata, checks the database, closes the
+connection, and atomically replaces the destination. Transfer Parquet files
+are implementation details and never publication artifacts.
 
-`row_count` is intentionally no longer part of the manifest contract.
+`if_exists="fail"` is the default. `"replace"` preserves the previous target
+until a complete new staging file is ready.
 
-## Hashing Policy
+## Publication boundary
 
-`should_hash_assets=False` is the default for large-resource practicality.
-
-When hashing is disabled:
-
-- manifest asset `sha256` is `null`
-- source file metadata still records `path`, `bytes`, and `media_type`
-
-When hashing is enabled:
-
-- each written parquet asset receives a SHA256 digest
-
-Resource writers may also expose opt-in source hashing. A calculated source
-digest is emitted as `sources[].sha256`; when source hashing is disabled, that
-key is omitted rather than written as `null`.
-
-The default avoids a second full-file read for large artifacts such as
-UniProt, InterPro, and eggNOG outputs.
-
-## Lazy Boundary Rule
-
-The shared direction is:
-
-- construction should stay path-first
-- raw table scanning should stay lazy whenever the source format allows it
-- `write_tidy()` should not materialize full DataFrames only to write parquet
-
-Small non-tabular parsers remain allowed to do eager parse work when the source
-format does not map cleanly to `scan_*()` APIs. Examples include:
-
-- GO OBO stanza parsing
-- WikiPathways GMT header parsing
-- UniProt `.dat` flat-file record parsing
-
-For those formats, the expectation is still:
-
-- keep eager parsing tightly scoped to the format boundary
-- convert to lazy frames as early as practical after parsing
-
-## Resource-Specific Exceptions
-
-Some resources keep custom `write_tidy()` implementations because they need
-staging or streaming policy beyond the generic writer:
-
-- `UniprotDb.write_tidy()` stages output before publish and monitors resources
-- `InterProDb.write_tidy()` writes a single canonical parquet directly from a
-  lazy join plan
-- `EggnogDb.write_tidy()` expands SQLite into a temporary TSV before lazy scan
-
-These implementations should still conform to the same external tidy contract.
+`TidyDataset` has no directory writer and resources expose no `write_tidy()`
+compatibility surface. Publications always use an explicit single-file
+`write_parquet(path)` or `write_duckdb(path)` destination.

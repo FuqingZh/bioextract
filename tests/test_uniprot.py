@@ -6,9 +6,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-import bioextract.uniprot.uniprot as uniprot_module
-from bioextract._tidy import TidyReportAsset
-from bioextract.uniprot import UniprotDb, UniprotResourceLimits
+from bioextract.uniprot import UniProtDatabase
 from bioextract.uniprot.constant import (
     COLS_IDMAPPING_SELECTED,
     COLS_SUBCELLULAR_LOCATION,
@@ -166,7 +164,7 @@ def test_extract_mapping_filters_taxids_from_raw_gzip(tmp_path: Path) -> None:
     file_in = write_idmapping_fixture(tmp_path)
 
     df_mapping = (
-        UniprotDb.from_files(file_idmapping_selected=file_in)
+        UniProtDatabase.from_files(id_mapping=file_in)
         .with_taxids("9606")
         .extract_mapping()
     )
@@ -181,9 +179,9 @@ def test_extract_mapping_filters_taxids_from_raw_gzip(tmp_path: Path) -> None:
 def test_extract_eggnog_xref_from_dat_gzip(tmp_path: Path) -> None:
     file_dat = write_uniprot_dat_fixture(tmp_path)
 
-    df_xref = UniprotDb.from_dat(
-        file_dat=file_dat,
-        source_db="sprot",
+    df_xref = UniProtDatabase.from_dat(
+        path=file_dat,
+        source_database="sprot",
     ).extract_eggnog_xref()
 
     assert df_xref.to_dicts() == [
@@ -232,7 +230,7 @@ def test_extract_eggnog_xref_from_dat_gzip(tmp_path: Path) -> None:
 
 def test_select_eggnog_xref_ids_filters_accessions(tmp_path: Path) -> None:
     file_dat = write_uniprot_dat_fixture(tmp_path, should_gzip=False)
-    db = UniprotDb.from_dat(file_dat=file_dat, source_db="sprot")
+    db = UniProtDatabase.from_dat(path=file_dat, source_database="sprot")
 
     df_xref = db.select_eggnog_xref_ids(["Q11111", "MISSING"])
 
@@ -358,9 +356,9 @@ def test_read_subcellular_location_frame_from_plain_dat(tmp_path: Path) -> None:
 def test_extract_subcellular_location_from_dat_handle(tmp_path: Path) -> None:
     file_dat = write_uniprot_subcellular_dat_fixture(tmp_path)
 
-    df_subcellular = UniprotDb.from_dat(
-        file_dat=file_dat,
-        source_db="sprot",
+    df_subcellular = UniProtDatabase.from_dat(
+        path=file_dat,
+        source_database="sprot",
     ).extract_subcellular_location()
 
     assert df_subcellular.columns == COLS_SUBCELLULAR_LOCATION
@@ -370,74 +368,78 @@ def test_extract_subcellular_location_from_dat_handle(tmp_path: Path) -> None:
     ) == ["P12345", "Q9Y243"]
 
 
-def test_write_subcellular_location_tidy_writes_data_parquet_and_manifest(
+def test_write_subcellular_location_parquet_writes_data_without_sidecar(
     tmp_path: Path,
 ) -> None:
     file_dat = write_uniprot_subcellular_dat_fixture(tmp_path)
-    db = UniprotDb.from_dat(file_dat=file_dat, source_db="sprot")
+    db = UniProtDatabase.from_dat(path=file_dat, source_database="sprot")
 
-    report = db.write_subcellular_location_tidy(
-        tmp_path / "subcellular_location",
-        should_write_manifest=True,
-    )
+    path = tmp_path / "subcellular_location.parquet"
+    result = db.write_subcellular_location_parquet(path)
 
-    assert report.manifest is not None
-    assert report.manifest["schema_version"] == "uniprot-subcellular-location-v0.1"
-    assert [asset.path for asset in report.assets] == ["data.parquet"]
-    df_written = pl.read_parquet(tmp_path / "subcellular_location" / "data.parquet")
-    assert df_written.columns == COLS_SUBCELLULAR_LOCATION
+    assert result.path == path
+    assert not (tmp_path / "manifest.json").exists()
+    df_written = pl.read_parquet(path)
+    assert df_written.columns == [
+        "uniprot_id",
+        "primary_uniprot_id",
+        "uniprot_entry_name",
+        "gene_name",
+        "protein_name",
+        "subcellular_location",
+        "subcellular_location_note",
+        "evidence_code",
+        "evidence_source",
+        "evidence_id",
+        "source_db",
+    ]
     assert df_written.height == 5
 
 
-def test_write_eggnog_xref_tidy_writes_mapping_parquet_and_manifest(
+def test_write_eggnog_xref_parquet_writes_mapping_without_sidecar(
     tmp_path: Path,
 ) -> None:
     file_dat = write_uniprot_dat_fixture(tmp_path)
-    db = UniprotDb.from_dat(file_dat=file_dat, source_db="sprot")
+    db = UniProtDatabase.from_dat(path=file_dat, source_database="sprot")
 
-    report = db.write_eggnog_xref_tidy(
-        tmp_path / "eggnog-xref",
-        should_write_manifest=True,
-    )
+    path = tmp_path / "eggnog_xref.parquet"
+    result = db.write_eggnog_xref_parquet(path)
 
-    assert report.manifest is not None
-    assert report.manifest["schema_version"] == "uniprot-eggnog-xref-v0.1"
-    assert [asset.path for asset in report.assets] == ["mapping.parquet"]
-    assert pl.read_parquet(tmp_path / "eggnog-xref" / "mapping.parquet").height == 5
+    assert result.path == path
+    assert not (tmp_path / "manifest.json").exists()
+    assert pl.read_parquet(path).height == 5
 
 
 def test_uniprot_dat_and_idmapping_methods_are_separated(tmp_path: Path) -> None:
     file_dat = write_uniprot_dat_fixture(tmp_path)
-    db_dat = UniprotDb.from_dat(file_dat=file_dat, source_db="sprot")
+    db_dat = UniProtDatabase.from_dat(path=file_dat, source_database="sprot")
 
     with pytest.raises(ValueError, match="idmapping"):
         db_dat.extract_mapping()
 
     file_idmapping = write_idmapping_fixture(tmp_path)
-    db_idmapping = UniprotDb.from_files(file_idmapping_selected=file_idmapping)
+    db_idmapping = UniProtDatabase.from_files(id_mapping=file_idmapping)
     with pytest.raises(ValueError, match="eggNOG"):
         db_idmapping.extract_eggnog_xref()
     with pytest.raises(ValueError, match="subcellular"):
         db_idmapping.extract_subcellular_location()
 
 
-def test_write_tidy_writes_single_parquet_by_default(tmp_path: Path) -> None:
+def test_write_parquet_writes_single_file_by_default(tmp_path: Path) -> None:
     file_in = write_idmapping_fixture(tmp_path)
-    dir_out = tmp_path / "tidy"
+    path = tmp_path / "uniprot.parquet"
 
-    report = (
-        UniprotDb.from_files(file_idmapping_selected=file_in)
+    result = (
+        UniProtDatabase.from_files(id_mapping=file_in)
         .with_taxids("9606", "10090")
-        .write_tidy(dir_out, should_write_manifest=True)
+        .write_parquet(path)
     )
 
-    assert report.manifest is not None
-    assert report.manifest["schema_version"] == "uniprot-idmapping-selected-v0.1"
-    assert report.assets == (TidyReportAsset(path="mapping.parquet", kind="canonical"),)
-    assert (dir_out / "mapping.parquet").is_file()
+    assert result.path == path
+    assert not (tmp_path / "manifest.json").exists()
 
     df_hsa = (
-        UniprotDb.from_files(file_idmapping_selected=dir_out / "mapping.parquet")
+        UniProtDatabase.from_files(id_mapping=path)
         .with_taxids("9606")
         .extract_mapping()
     )
@@ -450,7 +452,7 @@ def test_hive_dataset_allows_manifest_and_nested_non_parquet_files(
 ) -> None:
     file_in = write_idmapping_fixture(tmp_path)
     df_fixture = (
-        UniprotDb.from_files(file_idmapping_selected=file_in)
+        UniProtDatabase.from_files(id_mapping=file_in)
         .with_taxids("9606")
         .extract_mapping()
     )
@@ -462,7 +464,7 @@ def test_hive_dataset_allows_manifest_and_nested_non_parquet_files(
     (dir_taxid / "note.txt").write_text("metadata", encoding="utf-8")
 
     df_mapping = (
-        UniprotDb.from_files(file_idmapping_selected=dir_out)
+        UniProtDatabase.from_files(id_mapping=dir_out)
         .with_taxids("9606")
         .extract_mapping()
     )
@@ -471,218 +473,39 @@ def test_hive_dataset_allows_manifest_and_nested_non_parquet_files(
     assert df_mapping["TaxId"].unique().to_list() == ["9606"]
 
 
-def test_write_tidy_all_requires_explicit_flag_and_writes_single_parquet(
-    tmp_path: Path,
-) -> None:
+def test_write_parquet_all_requires_explicit_flag(tmp_path: Path) -> None:
     file_in = write_idmapping_fixture(tmp_path)
-    db = UniprotDb.from_files(file_idmapping_selected=file_in)
+    db = UniProtDatabase.from_files(id_mapping=file_in)
 
-    with pytest.raises(ValueError, match="should_allow_all=True"):
-        db.write_tidy(tmp_path / "blocked")
+    with pytest.raises(ValueError, match="allow_all_taxa=True"):
+        db.write_parquet(tmp_path / "blocked.parquet")
 
-    report = db.write_tidy(tmp_path / "all", should_allow_all=True)
-
-    assert report.assets == (TidyReportAsset(path="mapping.parquet", kind="canonical"),)
-    assert (tmp_path / "all" / "mapping.parquet").is_file()
+    result = db.write_parquet(tmp_path / "all.parquet", allow_all_taxa=True)
+    assert result.path == tmp_path / "all.parquet"
 
 
 def test_single_taxid_can_write_single_parquet_and_read_it(tmp_path: Path) -> None:
     file_in = write_idmapping_fixture(tmp_path, should_gzip=False)
-    file_out = tmp_path / "single"
+    path = tmp_path / "single.parquet"
 
-    UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
-        "9606"
-    ).write_tidy(file_out)
+    UniProtDatabase.from_files(id_mapping=file_in).with_taxids("9606").write_parquet(
+        path
+    )
 
-    df_mapping = UniprotDb.from_files(
-        file_idmapping_selected=file_out / "mapping.parquet"
-    ).extract_mapping()
+    df_mapping = UniProtDatabase.from_files(id_mapping=path).extract_mapping()
     assert df_mapping.height == 2
     assert df_mapping["TaxId"].unique().to_list() == ["9606"]
 
 
-def test_write_tidy_applies_existing_output_policy(
-    tmp_path: Path,
-) -> None:
+def test_write_parquet_preserves_existing_output_by_default(tmp_path: Path) -> None:
     file_in = write_idmapping_fixture(tmp_path)
-    dir_out = tmp_path / "tidy"
-    dir_out.mkdir()
-    (dir_out / "old.txt").write_text("old", encoding="utf-8")
-    db = UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids("9606")
+    path = tmp_path / "uniprot.parquet"
+    path.write_bytes(b"existing")
+    db = UniProtDatabase.from_files(id_mapping=file_in).with_taxids("9606")
 
-    with pytest.raises(FileExistsError, match="not empty"):
-        db.write_tidy(dir_out)
-
-    report_skip = db.write_tidy(dir_out, policy_existing="skip")
-
-    assert (dir_out / "old.txt").read_text(encoding="utf-8") == "old"
-    assert report_skip.assets == (
-        TidyReportAsset(path="mapping.parquet", kind="canonical"),
-    )
-
-    db.write_tidy(dir_out, policy_existing="overwrite")
-
-    assert not (dir_out / "old.txt").exists()
-    assert sorted(
-        path.relative_to(dir_out).as_posix() for path in dir_out.rglob("*.parquet")
-    ) == [
-        "mapping.parquet",
-    ]
-
-
-def test_write_tidy_rejects_invalid_existing_output_policy(tmp_path: Path) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
-
-    with pytest.raises(ValueError, match="policy_existing"):
-        UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
-            "9606"
-        ).write_tidy(tmp_path / "tidy", policy_existing="replace")  # type: ignore[arg-type]
-
-
-def test_write_tidy_skip_can_return_existing_manifest(tmp_path: Path) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
-    dir_out = tmp_path / "tidy"
-    db = UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids("9606")
-
-    db.write_tidy(dir_out, should_write_manifest=True)
-    report_skip = db.write_tidy(
-        dir_out,
-        policy_existing="skip",
-        should_write_manifest=True,
-    )
-
-    assert report_skip.manifest is not None
-    assert report_skip.manifest["schema_version"] == "uniprot-idmapping-selected-v0.1"
-    assert [asset.path for asset in report_skip.assets] == [
-        asset["path"] for asset in report_skip.manifest["assets"]
-    ]
-
-
-def test_write_tidy_accepts_zstd_compression_level(tmp_path: Path) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
-
-    UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
-        "9606"
-    ).write_tidy(tmp_path / "tidy", level_compression=1)
-
-    assert (tmp_path / "tidy" / "mapping.parquet").is_file()
-
-
-def test_write_tidy_rejects_all_taxid_ceph_without_local_tmp(tmp_path: Path) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
-    db = UniprotDb.from_files(file_idmapping_selected=file_in)
-
-    with pytest.raises(ValueError, match="explicit local dir_tmp"):
-        db.write_tidy("/cephfs_data/example/uniprot/tidy", should_allow_all=True)
-
-    with pytest.raises(ValueError, match="must not be under /cephfs_data"):
-        db.write_tidy(
-            "/cephfs_data/example/uniprot/tidy",
-            should_allow_all=True,
-            dir_tmp="/cephfs_data/tmp",
-        )
-
-
-def test_write_tidy_uses_explicit_tmp_and_publishes_output(tmp_path: Path) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
-    dir_tmp = tmp_path / "scratch"
-    dir_out = tmp_path / "tidy"
-
-    UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
-        "9606"
-    ).write_tidy(dir_out, dir_tmp=dir_tmp)
-
-    assert (dir_out / "mapping.parquet").is_file()
-    assert sorted(path.name for path in dir_tmp.iterdir()) == []
-
-
-def test_write_tidy_resource_monitor_stops_on_rss(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
-
-    monkeypatch.setattr(
-        uniprot_module,
-        "_sample_process_resources",
-        lambda: uniprot_module._ResourceSample(
-            size_rss_mb=2,
-            size_threads=1,
-            count_d_state_threads=0,
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="RSS stop threshold"):
-        UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
-            "9606"
-        ).write_tidy(tmp_path / "tidy", size_rss_stop_gb=0.001)
-
-
-def test_write_tidy_resource_monitor_stops_on_threads(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
-
-    monkeypatch.setattr(
-        uniprot_module,
-        "_sample_process_resources",
-        lambda: uniprot_module._ResourceSample(
-            size_rss_mb=1,
-            size_threads=3,
-            count_d_state_threads=0,
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="thread stop threshold"):
-        UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
-            "9606"
-        ).write_tidy(tmp_path / "tidy", size_threads_stop=2)
-
-
-def test_write_tidy_resource_monitor_stops_on_repeated_d_state(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
-
-    monkeypatch.setattr(
-        uniprot_module,
-        "_sample_process_resources",
-        lambda: uniprot_module._ResourceSample(
-            size_rss_mb=1,
-            size_threads=1,
-            count_d_state_threads=1,
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="D-state"):
-        UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
-            "9606"
-        ).write_tidy(tmp_path / "tidy", count_d_state_stop=2)
-
-
-def test_write_tidy_can_disable_resource_monitor(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    file_in = write_idmapping_fixture(tmp_path)
-
-    monkeypatch.setattr(
-        uniprot_module,
-        "_sample_process_resources",
-        lambda: uniprot_module._ResourceSample(
-            size_rss_mb=10_000,
-            size_threads=10_000,
-            count_d_state_threads=10_000,
-        ),
-    )
-
-    UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids(
-        "9606"
-    ).write_tidy(tmp_path / "tidy", should_monitor_resources=False)
-
-    assert (tmp_path / "tidy" / "mapping.parquet").is_file()
+    with pytest.raises(FileExistsError):
+        db.write_parquet(path)
+    assert path.read_bytes() == b"existing"
 
 
 def test_validate_schema_rejects_bad_parquet(tmp_path: Path) -> None:
@@ -690,41 +513,35 @@ def test_validate_schema_rejects_bad_parquet(tmp_path: Path) -> None:
     pl.DataFrame({"UniProtId": ["P04637"]}).write_parquet(file_bad)
 
     with pytest.raises(ValueError, match="missing required columns"):
-        UniprotDb.from_files(file_idmapping_selected=file_bad).validate_schema()
+        UniProtDatabase.from_files(id_mapping=file_bad).validate_schema()
 
 
 def test_from_files_rejects_missing_unsupported_and_empty_hive(
     tmp_path: Path,
 ) -> None:
     with pytest.raises(FileNotFoundError):
-        UniprotDb.from_files(file_idmapping_selected=tmp_path / "missing.tab.gz")
+        UniProtDatabase.from_files(id_mapping=tmp_path / "missing.tab.gz")
 
     file_unsupported = tmp_path / "mapping.txt"
     file_unsupported.write_text("", encoding="utf-8")
     with pytest.raises(ValueError, match="Unsupported UniProt"):
-        UniprotDb.from_files(file_idmapping_selected=file_unsupported)
+        UniProtDatabase.from_files(id_mapping=file_unsupported)
 
     dir_empty = tmp_path / "empty"
     dir_empty.mkdir()
     with pytest.raises(ValueError, match="contains no parquet"):
-        UniprotDb.from_files(file_idmapping_selected=dir_empty)
+        UniProtDatabase.from_files(id_mapping=dir_empty)
 
     dir_no_parquet = tmp_path / "no_parquet"
     (dir_no_parquet / "TaxId=9606").mkdir(parents=True)
     (dir_no_parquet / "manifest.json").write_text("{}", encoding="utf-8")
     (dir_no_parquet / "TaxId=9606" / "note.txt").write_text("x", encoding="utf-8")
     with pytest.raises(ValueError, match="contains no parquet"):
-        UniprotDb.from_files(file_idmapping_selected=dir_no_parquet)
+        UniProtDatabase.from_files(id_mapping=dir_no_parquet)
 
 
-def test_resource_limits_and_taxid_validation(tmp_path: Path) -> None:
+def test_taxid_validation(tmp_path: Path) -> None:
     file_in = write_idmapping_fixture(tmp_path)
 
-    with pytest.raises(ValueError, match="size limit"):
-        UniprotDb.from_files(
-            file_idmapping_selected=file_in,
-            limits=UniprotResourceLimits(file_idmapping_selected_bytes_max=1),
-        )
-
     with pytest.raises(ValueError, match="TaxId values"):
-        UniprotDb.from_files(file_idmapping_selected=file_in).with_taxids("9606", "")
+        UniProtDatabase.from_files(id_mapping=file_in).with_taxids("9606", "")

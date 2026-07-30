@@ -14,9 +14,9 @@ from bioextract._shared import RowWriter, create_tsv_writer
 
 from .constant import (
     COLS_MAPPING,
-    KIND_INPUT_ID_VALUES,
+    NAMESPACE_VALUES,
     SCHEMA_MAPPING,
-    EggnogInputIdKind,
+    EggnogNamespace,
 )
 
 
@@ -67,9 +67,9 @@ def write_mapping_tsv(
     file_eggnog_db: Path,
     dir_tmp: Path | None,
     df_cog_fun: pl.DataFrame,
-    file_out: Path,
+    path: Path,
 ) -> None:
-    file_out.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     map_cog_fun = {
         row["CogCategory"]: (row["CogClass"], row["CogName"])
         for row in df_cog_fun.iter_rows(named=True)
@@ -77,7 +77,7 @@ def write_mapping_tsv(
     with (
         open_sqlite_path(file_eggnog_db, dir_tmp=dir_tmp) as file_sqlite,
         sqlite3.connect(file_sqlite) as conn,
-        file_out.open("w", encoding="utf-8", newline="") as handle,
+        path.open("w", encoding="utf-8", newline="") as handle,
     ):
         writer = create_tsv_writer(handle)
         writer.writerow(COLS_MAPPING)
@@ -127,13 +127,13 @@ def select_mapping_frame(
     file_eggnog_db: Path,
     dir_tmp: Path | None,
     df_input_ids: pl.DataFrame,
-    kind_input_id: EggnogInputIdKind,
+    namespace: EggnogNamespace,
     cols_group_id: tuple[str, ...],
     df_cog_fun: pl.DataFrame,
 ) -> pl.DataFrame:
-    validate_kind_input_id(kind_input_id)
+    validate_namespace(namespace)
     if df_input_ids.height == 0:
-        cols_out = list(cols_group_id) + ["InputId", "KindInputId"] + COLS_MAPPING
+        cols_out = list(cols_group_id) + ["InputId", "InputNamespace"] + COLS_MAPPING
         return pl.DataFrame(schema=dict.fromkeys(cols_out, pl.String))
 
     input_ids = df_input_ids.get_column("InputId").unique().sort().to_list()
@@ -147,7 +147,7 @@ def select_mapping_frame(
     return extract_mapping_frame(
         df_mapping,
         df_input_ids,
-        kind_input_id=kind_input_id,
+        namespace=namespace,
         cols_group_id=cols_group_id,
     )
 
@@ -339,12 +339,12 @@ def extract_mapping_frame(
     df_mapping: pl.DataFrame,
     df_input_ids: pl.DataFrame,
     *,
-    kind_input_id: EggnogInputIdKind,
+    namespace: EggnogNamespace,
     cols_group_id: tuple[str, ...],
 ) -> pl.DataFrame:
-    validate_kind_input_id(kind_input_id)
+    validate_namespace(namespace)
     cols_group = list(cols_group_id)
-    cols_out = cols_group + ["InputId", "KindInputId"] + COLS_MAPPING
+    cols_out = cols_group + ["InputId", "InputNamespace"] + COLS_MAPPING
     return (
         df_input_ids.join(
             df_mapping,
@@ -354,7 +354,7 @@ def extract_mapping_frame(
         )
         .with_columns(
             pl.col("InputId").alias("EggnogProteinId"),
-            pl.lit(kind_input_id).alias("KindInputId"),
+            pl.lit(namespace).alias("InputNamespace"),
         )
         .select(cols_out)
         .unique()
@@ -362,7 +362,7 @@ def extract_mapping_frame(
     )
 
 
-def extract_unmapped_input_ids_frame(
+def extract_unmatched_ids_frame(
     df_input_ids: pl.DataFrame,
     df_mapping: pl.DataFrame,
     *,
@@ -377,11 +377,11 @@ def extract_unmapped_input_ids_frame(
     )
 
 
-def validate_kind_input_id(kind_input_id: str) -> None:
-    if kind_input_id not in KIND_INPUT_ID_VALUES:
+def validate_namespace(namespace: str) -> None:
+    if namespace not in NAMESPACE_VALUES:
         raise ValueError(
-            "kind_input_id must be one of: "
-            f"{', '.join(KIND_INPUT_ID_VALUES)}; got {kind_input_id!r}"
+            "namespace must be one of: "
+            f"{', '.join(NAMESPACE_VALUES)}; got {namespace!r}"
         )
 
 

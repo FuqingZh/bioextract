@@ -1,10 +1,13 @@
-import json
+import gzip
+import tarfile
+import zipfile
 from pathlib import Path
 
+import duckdb
 import polars as pl
+import pytest
 
-from bioextract.go import GoDb, GoSubsetId
-from bioextract.go.ontology import run_tidy_go_ontology
+from bioextract.go import GODatabase, GoSubsetId
 
 
 def write_minimal_obo(file_in: Path) -> None:
@@ -72,12 +75,44 @@ is_a: GO:0005575 ! cellular_component
     )
 
 
-def test_go_db_build_tidy_exposes_frames_and_write_contract(tmp_path: Path) -> None:
+@pytest.mark.parametrize("container", ["plain", "gzip", "zip", "tar", "directory"])
+def test_go_obo_container_is_detected_internally(
+    tmp_path: Path,
+    container: str,
+) -> None:
+    file_plain = tmp_path / "go.obo"
+    write_minimal_obo(file_plain)
+    source = tmp_path / f"go-{container}.snapshot"
+    if container == "plain":
+        source = file_plain
+    elif container == "gzip":
+        with (
+            file_plain.open("rb") as handle_in,
+            gzip.open(source, "wb") as handle_out,
+        ):
+            handle_out.write(handle_in.read())
+    elif container == "zip":
+        with zipfile.ZipFile(source, "w") as archive:
+            archive.write(file_plain, arcname="ontology/go.obo")
+    elif container == "tar":
+        with tarfile.open(source, "w") as archive:
+            archive.add(file_plain, arcname="ontology/go.obo")
+    else:
+        source = tmp_path / "release"
+        nested = source / "ontology"
+        nested.mkdir(parents=True)
+        file_plain.replace(nested / "go.obo")
+
+    tidy = GODatabase.from_obo(source).build_tidy()
+    assert tidy.frames["term"].select(pl.len()).collect().item() == 6
+
+
+def test_go_db_build_tidy_exposes_frames_and_writes_duckdb(tmp_path: Path) -> None:
     file_in = tmp_path / "go-basic.obo"
-    dir_out = tmp_path / "tidy"
+    path = tmp_path / "go.duckdb"
     write_minimal_obo(file_in)
 
-    tidy = GoDb.from_obo(file_in).build_tidy()
+    tidy = GODatabase.from_obo(file_in).build_tidy()
 
     assert set(tidy.frames) == {
         "term",
@@ -95,26 +130,11 @@ def test_go_db_build_tidy_exposes_frames_and_write_contract(tmp_path: Path) -> N
     assert tidy.frames["subset_membership"].select(pl.len()).collect().item() == 7
     assert tidy.frames["subset_definition"].select(pl.len()).collect().item() == 2
 
-    report = tidy.write(dir_out)
-
-    assert report.dir_out == dir_out
-    assert report.manifest is None
-    assert len(report.assets) == 9
-    assert (dir_out / "term.parquet").exists()
-    assert (dir_out / "subset_membership.parquet").exists()
-    assert (dir_out / "ancestor_all.parquet").exists()
-    assert not (dir_out / "manifest.json").exists()
-
-    report_manifest = tidy.write(dir_out / "with_manifest", should_write_manifest=True)
-    assert report_manifest.manifest is not None
-    assert report_manifest.manifest["schema_version"] == "go-obo-tidy-v0.2"
-    data_manifest = json.loads(
-        (dir_out / "with_manifest" / "manifest.json").read_text("utf-8")
-    )
-    assert data_manifest["sources"][0]["path"] == file_in.as_posix()
-    assert data_manifest["sources"][0]["media_type"] == "text/obo"
-
-    df_term = pl.read_parquet(dir_out / "term.parquet")
+    result = GODatabase.from_obo(file_in).write_duckdb(path)
+    assert "term_relation" in result.tables
+    assert not (tmp_path / "manifest.json").exists()
+    with duckdb.connect(str(path), read_only=True) as connection:
+        df_term = pl.read_database("SELECT * FROM term", connection)
     row_child = (
         df_term.filter(pl.col("go_id") == "GO:0000002")
         .select("term_name", "definition", "is_obsolete")
@@ -127,23 +147,11 @@ def test_go_db_build_tidy_exposes_frames_and_write_contract(tmp_path: Path) -> N
     }
 
 
-def test_legacy_go_tidy_runner_still_writes_contract(tmp_path: Path) -> None:
-    file_in = tmp_path / "go-basic.obo"
-    dir_out = tmp_path / "legacy"
-    write_minimal_obo(file_in)
-
-    run_tidy_go_ontology(file_in=file_in, dir_out=dir_out)
-
-    assert not (dir_out / "manifest.json").exists()
-    assert pl.read_parquet(dir_out / "term.parquet").height == 6
-    assert pl.read_parquet(dir_out / "subset_membership.parquet").height == 7
-
-
 def test_go_db_lists_subsets(tmp_path: Path) -> None:
     file_in = tmp_path / "go-basic.obo"
     write_minimal_obo(file_in)
 
-    df_subsets = GoDb.from_obo(file_in).list_subsets()
+    df_subsets = GODatabase.from_obo(file_in).list_subsets()
 
     assert df_subsets.to_dicts() == [
         {
@@ -162,7 +170,7 @@ def test_go_db_lists_subsets(tmp_path: Path) -> None:
 def test_go_db_selects_terms_by_namespace_subset_and_alt_id(tmp_path: Path) -> None:
     file_in = tmp_path / "go-basic.obo"
     write_minimal_obo(file_in)
-    db = GoDb.from_obo(file_in)
+    db = GODatabase.from_obo(file_in)
 
     df_cellular_generic = db.select_terms(
         namespace="cellular_component",
@@ -192,7 +200,7 @@ def test_go_db_select_terms_keeps_one_row_per_term_for_subset(tmp_path: Path) ->
     file_in = tmp_path / "go-basic.obo"
     write_minimal_obo(file_in)
 
-    df_terms = GoDb.from_obo(file_in).select_terms(subset_id="goslim_generic")
+    df_terms = GODatabase.from_obo(file_in).select_terms(subset_id="goslim_generic")
 
     assert df_terms["go_id"].to_list() == [
         "GO:0000001",
@@ -207,7 +215,7 @@ def test_go_db_extracts_subcell_from_cellular_component(tmp_path: Path) -> None:
     file_in = tmp_path / "go-basic.obo"
     write_minimal_obo(file_in)
 
-    df_subcell = GoDb.from_obo(file_in).extract_subcell()
+    df_subcell = GODatabase.from_obo(file_in).extract_subcell()
 
     assert df_subcell.to_dicts() == [
         {
@@ -229,7 +237,7 @@ def test_go_db_extracts_subcell_from_cellular_component(tmp_path: Path) -> None:
         },
     ]
 
-    df_subcell_with_obsolete = GoDb.from_obo(file_in).extract_subcell(
+    df_subcell_with_obsolete = GODatabase.from_obo(file_in).extract_subcell(
         include_obsolete=True
     )
     assert df_subcell_with_obsolete["go_id"].to_list() == [
@@ -241,10 +249,10 @@ def test_go_db_extracts_subcell_from_cellular_component(tmp_path: Path) -> None:
 
 def test_go_db_writes_subcell_parquet(tmp_path: Path) -> None:
     file_in = tmp_path / "go-basic.obo"
-    file_out = tmp_path / "subcell.parquet"
+    path = tmp_path / "subcell.parquet"
     write_minimal_obo(file_in)
 
-    path_written = GoDb.from_obo(file_in).write_subcell(file_out)
+    path_written = GODatabase.from_obo(file_in).write_subcell(path)
 
-    assert path_written == file_out
-    assert pl.read_parquet(file_out).height == 2
+    assert path_written == path
+    assert pl.read_parquet(path).height == 2

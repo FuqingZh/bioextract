@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from bioextract.reactome import ReactomeDb, ReactomeResourceLimits
+from bioextract.reactome import ReactomeDatabase
 
 
 def write_reactome_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -54,10 +54,10 @@ def test_extract_mapping_and_unmapped_single_selection(tmp_path: Path) -> None:
     file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
 
     selection = (
-        ReactomeDb.from_files(
-            file_uniprot2reactome=file_mapping,
-            file_pathways=file_pathways,
-            file_relations=file_relations,
+        ReactomeDatabase.from_files(
+            uniprot_mapping=file_mapping,
+            pathways=file_pathways,
+            relations=file_relations,
         )
         .with_species("Homo sapiens")
         .select_ids([" sp|P04637|P53_HUMAN ", "Q9Y243", "MISSING", ""])
@@ -92,15 +92,15 @@ def test_extract_mapping_and_unmapped_single_selection(tmp_path: Path) -> None:
             "ReactomeUrl": "https://reactome.org/PathwayBrowser/#/R-HSA-6798695",
         },
     ]
-    assert selection.extract_unmapped_input_ids().to_dicts() == [{"InputId": "MISSING"}]
+    assert selection.extract_unmatched_ids().to_dicts() == [{"InputId": "MISSING"}]
 
 
 def test_grouped_selection_preserves_groups(tmp_path: Path) -> None:
     file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
-    db = ReactomeDb.from_files(
-        file_uniprot2reactome=file_mapping,
-        file_pathways=file_pathways,
-        file_relations=file_relations,
+    db = ReactomeDatabase.from_files(
+        uniprot_mapping=file_mapping,
+        pathways=file_pathways,
+        relations=file_relations,
     ).with_species("Homo sapiens")
 
     selection = db.select_groups(
@@ -122,7 +122,7 @@ def test_grouped_selection_preserves_groups(tmp_path: Path) -> None:
         "ReactomeUrl",
     ]
     assert df_mapping.filter(df_mapping["InputId"] == "P04637").height == 4
-    assert selection.extract_unmapped_input_ids().to_dicts() == [
+    assert selection.extract_unmatched_ids().to_dicts() == [
         {"GroupId": "TumorA", "InputId": "MISSING"}
     ]
 
@@ -131,10 +131,10 @@ def test_extract_enrichment_inputs_and_relations_are_species_scoped(
     tmp_path: Path,
 ) -> None:
     file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
-    db = ReactomeDb.from_files(
-        file_uniprot2reactome=file_mapping,
-        file_pathways=file_pathways,
-        file_relations=file_relations,
+    db = ReactomeDatabase.from_files(
+        uniprot_mapping=file_mapping,
+        pathways=file_pathways,
+        relations=file_relations,
     ).with_species("Homo sapiens")
 
     assert db.extract_term2gene().to_dicts() == [
@@ -171,12 +171,12 @@ def test_extract_enrichment_inputs_and_relations_are_species_scoped(
     ]
 
 
-def test_build_tidy_writes_flat_parquet_and_manifest(tmp_path: Path) -> None:
+def test_build_tidy_writes_duckdb(tmp_path: Path) -> None:
     file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
-    db = ReactomeDb.from_files(
-        file_uniprot2reactome=file_mapping,
-        file_pathways=file_pathways,
-        file_relations=file_relations,
+    db = ReactomeDatabase.from_files(
+        uniprot_mapping=file_mapping,
+        pathways=file_pathways,
+        relations=file_relations,
     )
 
     tidy = db.build_tidy()
@@ -187,25 +187,16 @@ def test_build_tidy_writes_flat_parquet_and_manifest(tmp_path: Path) -> None:
         "term2gene",
         "term2name",
     }
-    report = tidy.write(tmp_path / "out", should_write_manifest=True)
-
-    assert report.manifest is not None
-    assert report.manifest["schema_version"] == "reactome-mapping-v0.1"
-    assert len(report.manifest["sources"]) == 3
-    assert sorted(asset.path for asset in report.assets) == [
-        "mapping.parquet",
-        "pathway.parquet",
-        "relation.parquet",
-        "term2gene.parquet",
-        "term2name.parquet",
-    ]
+    result = db.write_duckdb(tmp_path / "reactome.duckdb")
+    assert result.tables == ("protein_pathway", "pathway", "pathway_relation")
+    assert not (tmp_path / "manifest.json").exists()
 
 
 def test_mapping_only_snapshot_supports_annotation_and_term2gene(
     tmp_path: Path,
 ) -> None:
     file_mapping, _, _ = write_reactome_fixture(tmp_path)
-    db = ReactomeDb.from_files(file_uniprot2reactome=file_mapping).with_species(
+    db = ReactomeDatabase.from_files(uniprot_mapping=file_mapping).with_species(
         "Homo sapiens"
     )
 
@@ -214,13 +205,8 @@ def test_mapping_only_snapshot_supports_annotation_and_term2gene(
 
     tidy = db.build_tidy()
     assert set(tidy.frames) == {"mapping", "term2gene"}
-    report = tidy.write(tmp_path / "mapping-only", should_write_manifest=True)
-    assert report.manifest is not None
-    assert len(report.manifest["sources"]) == 1
-    assert sorted(asset.path for asset in report.assets) == [
-        "mapping.parquet",
-        "term2gene.parquet",
-    ]
+    result = db.write_duckdb(tmp_path / "reactome_mapping.duckdb")
+    assert result.tables == ("protein_pathway",)
 
     with pytest.raises(ValueError, match="pathways file"):
         db.extract_term2name()
@@ -230,7 +216,9 @@ def test_mapping_only_snapshot_supports_annotation_and_term2gene(
 
 def test_pathway_only_snapshot_supports_term2name(tmp_path: Path) -> None:
     _, file_pathways, _ = write_reactome_fixture(tmp_path)
-    db = ReactomeDb.from_files(file_pathways=file_pathways).with_species("Homo sapiens")
+    db = ReactomeDatabase.from_files(pathways=file_pathways).with_species(
+        "Homo sapiens"
+    )
 
     assert db.extract_term2name().height == 3
     assert set(db.build_tidy().frames) == {"pathway", "term2name"}
@@ -243,7 +231,7 @@ def test_relation_only_snapshot_supports_unscoped_relations(
     tmp_path: Path,
 ) -> None:
     _, _, file_relations = write_reactome_fixture(tmp_path)
-    db = ReactomeDb.from_files(file_relations=file_relations)
+    db = ReactomeDatabase.from_files(relations=file_relations)
 
     assert db.extract_pathway_relations().height == 3
     assert set(db.build_tidy().frames) == {"relation"}
@@ -252,39 +240,15 @@ def test_relation_only_snapshot_supports_unscoped_relations(
         db.with_species("Homo sapiens").extract_pathway_relations()
 
 
-def test_from_files_rejects_missing_or_oversized_files(tmp_path: Path) -> None:
+def test_from_files_rejects_missing_files(tmp_path: Path) -> None:
     file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
 
     with pytest.raises(ValueError, match="At least one Reactome input file"):
-        ReactomeDb.from_files()
+        ReactomeDatabase.from_files()
 
     with pytest.raises(FileNotFoundError):
-        ReactomeDb.from_files(
-            file_uniprot2reactome=tmp_path / "missing.txt",
-            file_pathways=file_pathways,
-            file_relations=file_relations,
+        ReactomeDatabase.from_files(
+            uniprot_mapping=tmp_path / "missing.txt",
+            pathways=file_pathways,
+            relations=file_relations,
         )
-
-    with pytest.raises(ValueError, match="size limit"):
-        ReactomeDb.from_files(
-            file_uniprot2reactome=file_mapping,
-            file_pathways=file_pathways,
-            file_relations=file_relations,
-            limits=ReactomeResourceLimits(file_uniprot2reactome_bytes_max=1),
-        )
-
-
-def test_selection_limits_are_enforced(tmp_path: Path) -> None:
-    file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
-    db = ReactomeDb.from_files(
-        file_uniprot2reactome=file_mapping,
-        file_pathways=file_pathways,
-        file_relations=file_relations,
-        limits=ReactomeResourceLimits(num_input_ids_max=1, num_groups_max=1),
-    )
-
-    with pytest.raises(ValueError, match="Normalized input ID count"):
-        db.select_ids(["P04637", "Q9Y243"])
-
-    with pytest.raises(ValueError, match="Group count"):
-        db.select_groups({"A": ["P04637"], "B": ["Q9Y243"]})

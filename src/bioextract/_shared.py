@@ -2,7 +2,6 @@ import csv
 import re
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol, TextIO
 
 import polars as pl
@@ -47,56 +46,6 @@ def normalize_input_id(value: str) -> str:
     if (match_pipe := RE_UNIPROT_PIPE.match(value)) is not None:
         return match_pipe.group(1).strip()
     return value
-
-
-def validate_file_size(
-    *,
-    file_path: Path,
-    size_max: int | None,
-    label: str,
-) -> None:
-    """Enforce an inclusive upper bound on a file's on-disk byte size.
-
-    Args:
-        file_path: Existing file to inspect.
-        size_max: Maximum allowed byte size, or `None` to disable the check.
-        label: Resource label included in a caller-visible error.
-
-    Raises:
-        ValueError: If the file is larger than `size_max`.
-    """
-    if size_max is None:
-        return
-    file_size = file_path.stat().st_size
-    if file_size > size_max:
-        raise ValueError(
-            f"{label} exceeds configured size limit: "
-            f"path={file_path}, size_bytes={file_size}, limit_bytes={size_max}"
-        )
-
-
-def validate_count_limit(
-    *,
-    count: int,
-    limit_max: int | None,
-    label: str,
-) -> None:
-    """Enforce an inclusive upper bound on a normalized item count.
-
-    Args:
-        count: Count produced by the calling normalization boundary.
-        limit_max: Maximum allowed count, or `None` to disable the check.
-        label: Count label included in a caller-visible error.
-
-    Raises:
-        ValueError: If `count` is greater than `limit_max`.
-    """
-    if limit_max is None:
-        return
-    if count > limit_max:
-        raise ValueError(
-            f"{label} exceeds configured limit: count={count}, limit={limit_max}"
-        )
 
 
 def validate_group_ids(group_ids: list[str]) -> None:
@@ -152,7 +101,7 @@ def create_input_id_frame(
 
 
 def create_group_input_frames(
-    group_to_ids: Mapping[str, Iterable[str]],
+    ids_by_group: Mapping[str, Iterable[str]],
     *,
     schema_groups: SchemaDict,
     schema_group_input_ids: SchemaDict,
@@ -164,7 +113,7 @@ def create_group_input_frames(
     with no retained IDs remain present in the group registry.
 
     Args:
-        group_to_ids: Mapping of raw group labels to raw identifiers.
+        ids_by_group: Mapping of raw group labels to raw identifiers.
         schema_groups: Output schema containing `GroupId`.
         schema_group_input_ids: Output schema containing `GroupId` and
             `InputId`.
@@ -179,7 +128,7 @@ def create_group_input_frames(
     group_ids_col: list[str] = []
     input_ids_col: list[str] = []
 
-    for group_id_raw, ids in group_to_ids.items():
+    for group_id_raw, ids in ids_by_group.items():
         group_id = str(group_id_raw).strip()
         group_ids_normalized.append(group_id)
         for input_id in ids:

@@ -9,8 +9,8 @@ SCHEMA_VERSION = "interpro-mapping-v0.1"
 MEDIA_TYPE_XML_GZIP = "application/gzip+xml"
 MEDIA_TYPE_TSV_GZIP = "application/gzip+tab-separated-values"
 
-KIND_INPUT_ID_VALUES = ("uniprot",)
-InterProInputIdKind = Literal["uniprot"]
+NAMESPACE_VALUES = ("uniprot",)
+InterProNamespace = Literal["uniprot"]
 InterProTidyConfig = Literal["mapping", "pfam"]
 
 COLS_MAPPING = [

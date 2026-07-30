@@ -166,7 +166,7 @@ def create_edges_lazy_frame(
     lf_links: pl.LazyFrame,
     lf_string_ids_a: pl.LazyFrame,
     lf_string_ids_b: pl.LazyFrame,
-    thr_score_min: int,
+    min_combined_score: int,
     cols_join_left_a: str | list[str],
     cols_join_right_a: str | list[str],
     cols_join_left_b: str | list[str],
@@ -184,7 +184,7 @@ def create_edges_lazy_frame(
         .drop_nulls(["StringIdA", "StringIdB", "Score"])
         .filter(
             pl.col("StringIdA").ne(pl.col("StringIdB"))
-            & pl.col("Score").ge(int(thr_score_min))
+            & pl.col("Score").ge(int(min_combined_score))
         )
         .join(
             lf_string_ids_a,

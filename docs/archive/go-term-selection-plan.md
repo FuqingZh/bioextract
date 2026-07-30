@@ -6,11 +6,11 @@ Status: superseded by [GO and KEGG Tidy Architecture](../architecture/go-kegg-ti
 
 ## Goal
 
-Add a term-selection layer to `GoDb` that works for both full GO OBO snapshots
+Add a term-selection layer to `GODatabase` that works for both full GO OBO snapshots
 and GO subset OBO snapshots such as `goslim_generic.obo`.
 
 The design treats GO slim as OBO subset data, not as a separate database type.
-`GoDb.from_obo()` remains the single constructor for GO OBO files. Selection
+`GODatabase.from_obo()` remains the single constructor for GO OBO files. Selection
 methods expose stable views over the parsed snapshot.
 
 ## Scope
@@ -71,7 +71,7 @@ The GO tidy schema version must be bumped when these frames are added.
 
 ## Public API
 
-Add `GoDb.select_terms()` as the main user-facing query:
+Add `GODatabase.select_terms()` as the main user-facing query:
 
 ```python
 from typing import Literal
@@ -89,7 +89,7 @@ def select_terms(
     namespace: GoNamespace | None = None,
     subset_id: str | GoSubsetId | None = None,
     include_obsolete: bool = False,
-    should_resolve_alt_ids: bool = True,
+    resolve_alt_ids: bool = True,
 ) -> pl.DataFrame:
     ...
 ```
@@ -106,7 +106,7 @@ db.select_terms(subset_id=GoSubsetId.GOSLIM_GENERIC)
 db.select_terms(subset_id="goslim_generic")
 ```
 
-Add `GoDb.list_subsets()`:
+Add `GODatabase.list_subsets()`:
 
 ```python
 def list_subsets(self) -> pl.DataFrame:
@@ -153,7 +153,7 @@ subset_id
 Do not expand all subset memberships by default. Full subset membership remains
 available through `build_tidy().frames["subset_membership"]`.
 
-When `should_resolve_alt_ids=True`, input alternate GO IDs should resolve to
+When `resolve_alt_ids=True`, input alternate GO IDs should resolve to
 primary GO IDs through `alt_id`. Include `input_go_id` when `term_ids` is
 provided so callers can see canonicalization.
 
@@ -175,11 +175,11 @@ select_terms(namespace="cellular_component")
 It may rename `term_name` to `subcell_name`, but `select_terms()` itself should
 keep ontology-level names.
 
-Do not add `kind_db` to `GoDb.from_obo()`. Full GO OBO and GO subset OBO files
+Do not add `kind_db` to `GODatabase.from_obo()`. Full GO OBO and GO subset OBO files
 share the same format. Their differences belong in metadata and query
 parameters, not in constructor branching.
 
-Do not add `select_ids()` or `select_groups()` to OBO-only `GoDb`. In this
+Do not add `select_ids()` or `select_groups()` to OBO-only `GODatabase`. In this
 repository those names should remain reserved for selection by biological input
 IDs against mapping resources. GO can grow those methods later only after an
 annotation source such as GAF, GPAD, or another gene/protein-to-GO mapping is
@@ -196,8 +196,8 @@ introduced.
    canonical namespace representation.
 6. Add `GoSubsetId` common constants for high-use subset IDs such as
    `goslim_generic`, while still accepting arbitrary strings.
-7. Add `GoDb.select_terms()` with cached tidy-frame reuse.
-8. Add `GoDb.list_subsets()`.
+7. Add `GODatabase.select_terms()` with cached tidy-frame reuse.
+8. Add `GODatabase.list_subsets()`.
 9. Rework `extract_subcell()` to call or mirror `select_terms()` behavior.
 10. Update README and GO architecture docs after tests define the final output
     contract.
@@ -212,7 +212,7 @@ Add focused tests covering:
 - `list_subsets()` returns subset definitions and term counts
 - terms with multiple subset memberships still appear once in `select_terms()`
 - obsolete terms are excluded by default and included when requested
-- alternate GO IDs resolve to primary GO IDs when `should_resolve_alt_ids=True`
+- alternate GO IDs resolve to primary GO IDs when `resolve_alt_ids=True`
 - `extract_subcell()` remains compatible with existing output expectations
 
 Use a compact synthetic OBO fixture for unit tests, then validate against the

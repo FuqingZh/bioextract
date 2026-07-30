@@ -1,7 +1,5 @@
-from .spec import StringResourceLimits
-from .stringdb import StringDb
+from .stringdb import STRINGDatabase
 
 __all__ = [
-    "StringDb",
-    "StringResourceLimits",
+    "STRINGDatabase",
 ]

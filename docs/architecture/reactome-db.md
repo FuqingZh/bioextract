@@ -1,12 +1,12 @@
-# ReactomeDb Architecture
+# ReactomeDatabase Architecture
 
 Version: v1.0
-Date: 2026-07-14
+Date: 2026-07-30
 Status: current
 
 ## Goal
 
-`bioextract.reactome.ReactomeDb` provides path-first access to local Reactome
+`bioextract.reactome.ReactomeDatabase` provides path-first access to local Reactome
 mapping snapshots. It supports annotation lookup and
 standard enrichment inputs from Reactome open-data files without calling the
 Reactome web services at runtime.
@@ -19,7 +19,8 @@ The implemented MVP covers:
 - species-scoped extraction
 - single-query and grouped protein selections
 - `term2gene` and `term2name` frames for ORA and GSEA callers
-- optional tidy parquet writing through the shared `TidyDataset` contract
+- canonical single-DuckDB publication through the shared materialized-dataset
+  contract
 - composable input files, so annotation-only and metadata-only use cases do
   not need unrelated raw files
 
@@ -74,12 +75,12 @@ largest current input is `UniProt2Reactome.txt`, about 43 MB and 322,435 rows.
 ## Public API
 
 ```python
-from bioextract.reactome import ReactomeDb
+from bioextract.reactome import ReactomeDatabase
 
-db = ReactomeDb.from_files(
-    file_uniprot2reactome="UniProt2Reactome.txt",
-    file_pathways="ReactomePathways.txt",
-    file_relations="ReactomePathwaysRelation.txt",
+db = ReactomeDatabase.from_files(
+    uniprot_mapping="UniProt2Reactome.txt",
+    pathways="ReactomePathways.txt",
+    relations="ReactomePathwaysRelation.txt",
 )
 
 selection = (
@@ -89,7 +90,7 @@ selection = (
 )
 
 df_mapping = selection.extract_mapping()
-df_unmapped = selection.extract_unmapped_input_ids()
+df_unmapped = selection.extract_unmatched_ids()
 
 df_term2gene = db.with_species("Homo sapiens").extract_term2gene()
 df_term2name = db.with_species("Homo sapiens").extract_term2name()
@@ -113,15 +114,15 @@ df_group_mapping = (
 
 ## Data Flow
 
-`ReactomeDb.from_files()` accepts any non-empty combination of the three raw
-files, validates provided file existence and configured size limits, then stores
-paths only. Parsing happens when a frame is first needed.
+`ReactomeDatabase.from_files()` accepts any non-empty combination of the three
+raw files, validates provided file existence, then stores paths only. Parsing
+happens when a frame is first needed.
 
 Capability dependencies are explicit:
 
 ```text
 extract_mapping              -> UniProt2Reactome.txt
-extract_unmapped_input_ids   -> UniProt2Reactome.txt
+extract_unmatched_ids   -> UniProt2Reactome.txt
 extract_term2gene            -> UniProt2Reactome.txt
 extract_term2name            -> ReactomePathways.txt
 extract_pathway_relations    -> ReactomePathwaysRelation.txt
@@ -180,7 +181,7 @@ Species
 ReactomeUrl
 ```
 
-`extract_unmapped_input_ids()` returns:
+`extract_unmatched_ids()` returns:
 
 ```text
 InputId
@@ -218,23 +219,22 @@ ChildReactomePathwayId
 When species-scoped, relations should be limited to edges where both parent and
 child exist in the species-scoped pathway metadata.
 
-## Tidy Dataset
+## Materialized Dataset
 
-`build_tidy()` should be optional but useful for resource publication and
-snapshot inspection. With all files present it should produce:
+`build_tidy()` is optional but useful for resource publication and snapshot
+inspection. Its internal frames are:
 
 ```text
-mapping.parquet
-pathway.parquet
-relation.parquet
-term2gene.parquet
-term2name.parquet
+mapping
+pathway
+relation
+term2gene
+term2name
 ```
 
-With a partial snapshot, it should emit only frames that can be derived from the
-provided files. For example, a mapping-only snapshot emits `mapping.parquet` and
-`term2gene.parquet`; a pathways-only snapshot emits `pathway.parquet` and
-`term2name.parquet`.
+With a partial snapshot, it builds only frames derivable from the provided
+files. `term2gene` and `term2name` remain convenient in-memory enrichment
+projections.
 
 Suggested schema version:
 
@@ -242,21 +242,32 @@ Suggested schema version:
 reactome-mapping-v0.1
 ```
 
-Like GO and KEGG, the tidy writer should use flat output paths and optional
-`manifest.json` through `TidyDataset.write()`.
+Canonical publication uses `write_duckdb(path)`. `protein_pathway`,
+`pathway`, and `pathway_relation` stay together; duplicate enrichment
+projections are not stored. Provenance and row counts live in `_bioextract`.
+
+The verified v96 publication is:
+
+```text
+reactome/mapping/v96/tidy/reactome.duckdb
+```
+
+It contains 322,435 `protein_pathway` rows, 23,498 `pathway` rows, and
+23,612 `pathway_relation` rows. The prior multi-Parquet
+`tidy/reactome/` directory is a preserved migration artifact, not the
+recommended publication shape.
 
 ## Why Not reactome2py
 
 `reactome2py` is useful for online Reactome API calls. It is not a replacement
 for this layer because `bioextract` needs deterministic local resource access,
 offline operation, and snapshot-specific outputs. A future caller may offer a
-separate online integration, but `ReactomeDb` should stay local-file-first.
+separate online integration, but `ReactomeDatabase` should stay local-file-first.
 
 ## Implementation Notes
 
-- Keep `ReactomeDb` under `src/bioextract/reactome/`.
-- Export only `ReactomeDb`, `ReactomeResourceLimits`, and `ReactomeTidyDataset`
-  from the package root.
+- Keep `ReactomeDatabase` under `src/bioextract/reactome/`.
+- Export only `ReactomeDatabase`; abbreviated aliases are not supported.
 - Keep parsing helpers module-level and prefix them with `read_`, `filter_`, or
   `extract_` according to their behavior.
 - Do not introduce pandas or network dependencies.

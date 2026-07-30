@@ -4,9 +4,8 @@ import gzip
 from pathlib import Path
 
 import polars as pl
-import pytest
 
-from bioextract.interpro import InterProDb
+from bioextract.interpro import InterProDatabase
 
 
 def write_interpro_fixture(tmp_path: Path) -> dict[str, Path]:
@@ -49,9 +48,9 @@ def write_interpro_fixture(tmp_path: Path) -> dict[str, Path]:
 
 def test_extract_mapping_uses_xml_metadata_when_available(tmp_path: Path) -> None:
     files = write_interpro_fixture(tmp_path)
-    db = InterProDb.from_mapping_files(
-        file_protein2ipr=files["protein2ipr"],
-        file_interpro_xml=files["xml"],
+    db = InterProDatabase.from_mapping_files(
+        protein_to_interpro=files["protein2ipr"],
+        interpro_xml=files["xml"],
     )
 
     assert db.extract_mapping().to_dicts() == [
@@ -90,12 +89,11 @@ def test_extract_mapping_uses_xml_metadata_when_available(tmp_path: Path) -> Non
 
 def test_xml_metadata_is_optional(tmp_path: Path) -> None:
     files = write_interpro_fixture(tmp_path)
-    db = InterProDb.from_mapping_files(file_protein2ipr=files["protein2ipr"])
+    db = InterProDatabase.from_mapping_files(protein_to_interpro=files["protein2ipr"])
 
     row = (
         db.select_ids(
             ["P12345"],
-            kind_input_id="uniprot",
         )
         .extract_mapping()
         .row(0, named=True)
@@ -107,121 +105,75 @@ def test_xml_metadata_is_optional(tmp_path: Path) -> None:
 
 def test_select_ids_streams_subset_and_reports_unmapped(tmp_path: Path) -> None:
     files = write_interpro_fixture(tmp_path)
-    db = InterProDb.from_mapping_files(
-        file_protein2ipr=files["protein2ipr"],
-        file_interpro_xml=files["xml"],
+    db = InterProDatabase.from_mapping_files(
+        protein_to_interpro=files["protein2ipr"],
+        interpro_xml=files["xml"],
     )
 
     selection = db.select_ids(
         ["sp|P12345|TEST_HUMAN", "MISSING"],
-        kind_input_id="uniprot",
     )
 
     assert selection.extract_mapping().select(
         "InputId",
-        "KindInputId",
+        "InputNamespace",
         "UniProtId",
         "InterProId",
         "MemberDb",
     ).to_dicts() == [
         {
             "InputId": "P12345",
-            "KindInputId": "uniprot",
+            "InputNamespace": "uniprot",
             "UniProtId": "P12345",
             "InterProId": "IPR000001",
             "MemberDb": "PFAM",
         },
         {
             "InputId": "P12345",
-            "KindInputId": "uniprot",
+            "InputNamespace": "uniprot",
             "UniProtId": "P12345",
             "InterProId": "IPR000001",
             "MemberDb": "SMART",
         },
     ]
-    assert selection.extract_unmapped_input_ids().to_dicts() == [{"InputId": "MISSING"}]
+    assert selection.extract_unmatched_ids().to_dicts() == [{"InputId": "MISSING"}]
 
 
 def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     files = write_interpro_fixture(tmp_path)
-    db = InterProDb.from_mapping_files(
-        file_protein2ipr=files["protein2ipr"],
-        file_interpro_xml=files["xml"],
+    db = InterProDatabase.from_mapping_files(
+        protein_to_interpro=files["protein2ipr"],
+        interpro_xml=files["xml"],
     )
 
     grouped = db.select_groups(
         {"up": ["P12345"], "down": ["MISSING"]},
-        kind_input_id="uniprot",
     )
 
     assert grouped.extract_mapping().columns[:3] == [
         "GroupId",
         "InputId",
-        "KindInputId",
+        "InputNamespace",
     ]
     assert grouped.extract_mapping().select("GroupId", "MemberDb").to_dicts() == [
         {"GroupId": "up", "MemberDb": "PFAM"},
         {"GroupId": "up", "MemberDb": "SMART"},
     ]
-    assert grouped.extract_unmapped_input_ids().to_dicts() == [
+    assert grouped.extract_unmatched_ids().to_dicts() == [
         {"GroupId": "down", "InputId": "MISSING"}
     ]
 
 
-def test_build_tidy_writes_mapping_parquet_and_manifest(tmp_path: Path) -> None:
+def test_write_parquet_writes_mapping_without_sidecar(tmp_path: Path) -> None:
     files = write_interpro_fixture(tmp_path)
-    db = InterProDb.from_mapping_files(
-        file_protein2ipr=files["protein2ipr"],
-        file_interpro_xml=files["xml"],
+    db = InterProDatabase.from_mapping_files(
+        protein_to_interpro=files["protein2ipr"],
+        interpro_xml=files["xml"],
     )
 
-    report = db.write_tidy(tmp_path / "out", should_write_manifest=True)
+    path = tmp_path / "interpro.parquet"
+    result = db.write_parquet(path)
 
-    assert report.manifest is not None
-    assert set(report.manifest) == {
-        "assets",
-        "build_id",
-        "generated_at",
-        "schema_version",
-        "sources",
-    }
-    assert report.manifest["schema_version"] == "interpro-mapping-v0.1"
-    assert report.manifest["build_id"].startswith("interpro-mapping-")
-    assert all(
-        set(source) == {"bytes", "media_type", "path"}
-        for source in report.manifest["sources"]
-    )
-    assert all(
-        set(asset) == {"is_optional", "kind", "path", "sha256"}
-        for asset in report.manifest["assets"]
-    )
-    assert [asset.path for asset in report.assets] == ["mapping.parquet"]
-    assert pl.read_parquet(tmp_path / "out" / "mapping.parquet").height == 3
-
-
-def test_write_tidy_can_hash_mapping_sources(tmp_path: Path) -> None:
-    files = write_interpro_fixture(tmp_path)
-    db = InterProDb.from_mapping_files(
-        file_protein2ipr=files["protein2ipr"],
-        file_interpro_xml=files["xml"],
-    )
-
-    report = db.write_tidy(
-        tmp_path / "out",
-        should_write_manifest=True,
-        should_hash_sources=True,
-    )
-
-    assert report.manifest is not None
-    assert all(
-        isinstance(sha256 := source.get("sha256"), str) and len(sha256) == 64
-        for source in report.manifest["sources"]
-    )
-
-
-def test_validates_kind_input_id(tmp_path: Path) -> None:
-    files = write_interpro_fixture(tmp_path)
-    db = InterProDb.from_mapping_files(file_protein2ipr=files["protein2ipr"])
-
-    with pytest.raises(ValueError, match="kind_input_id"):
-        db.select_ids(["P12345"], kind_input_id="geneid")  # type: ignore[arg-type]
+    assert result.path == path
+    assert not (tmp_path / "manifest.json").exists()
+    assert pl.read_parquet(path).height == 3

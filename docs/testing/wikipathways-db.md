@@ -1,4 +1,4 @@
-# WikiPathwaysDb Test Standard
+# WikiPathwaysDatabase Test Standard
 
 Version: v1.0
 Date: 2026-07-14
@@ -6,7 +6,7 @@ Status: current
 
 ## Scope
 
-The WikiPathwaysDb tests verify GMT parsing, metadata extraction,
+The WikiPathwaysDatabase tests verify GMT parsing, metadata extraction,
 species filtering, enrichment input extraction, single and grouped selections,
 tidy writing, and error handling.
 
@@ -36,10 +36,10 @@ Mouse pathway%WikiPathways_20260510%WP1%Mus musculus	https://www.wikipathways.or
   pathway IDs.
 - `select_ids()` trims input IDs and drops blanks.
 - `extract_mapping()` returns selected Entrez IDs joined to pathway metadata.
-- `extract_unmapped_input_ids()` reports IDs not present in the GMT gene sets.
+- `extract_unmatched_ids()` reports IDs not present in the GMT gene sets.
 - `select_groups()` preserves `GroupId`.
-- `build_tidy().write()` writes flat parquet files and optional manifest.
-- Resource count limits are enforced.
+- `write_duckdb()` writes pathway and pathway-gene relations in one file.
+- `_bioextract` contains source and row-count provenance.
 
 ## Real-Data Smoke
 

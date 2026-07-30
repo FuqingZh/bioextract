@@ -2,7 +2,7 @@
 
 Version: v1.0
 Date: 2026-06-17
-Status: superseded by [UniprotDb Architecture](../architecture/uniprot-db.md)
+Status: superseded by [UniProtDatabase Architecture](../architecture/uniprot-db.md)
 
 ## Goal
 
@@ -39,7 +39,7 @@ Subcellular Location2GO.
 
 ## Existing Context
 
-`UniprotDb.from_dat()` already accepts UniProtKB `.dat` and `.dat.gz` files.
+`UniProtDatabase.from_dat()` already accepts UniProtKB `.dat` and `.dat.gz` files.
 The current flat-file implementation is narrow: it extracts `DR   eggNOG;`
 records into a UniProt-to-eggNOG xref table.
 
@@ -51,9 +51,9 @@ extraction. It should not change the existing `idmapping_selected` behavior.
 Add a DataFrame extraction method:
 
 ```python
-db = UniprotDb.from_dat(
-    file_dat="uniprot_sprot.dat.gz",
-    source_db="sprot",
+db = UniProtDatabase.from_dat(
+    path="uniprot_sprot.dat.gz",
+    source_database="sprot",
 )
 
 df_subcell = db.extract_subcellular_location()
@@ -257,7 +257,7 @@ Depends on:
 
 ### Chain 2: Public API And Tidy Writer
 
-Purpose: expose the extractor through `UniprotDb`.
+Purpose: expose the extractor through `UniProtDatabase`.
 
 Tasks:
 
@@ -270,7 +270,7 @@ Tasks:
 
 Output:
 
-- public API on `UniprotDb`
+- public API on `UniProtDatabase`
 - tidy writer emitting `subcellular_location/data.parquet`
 
 Depends on:

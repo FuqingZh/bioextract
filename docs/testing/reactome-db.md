@@ -1,12 +1,12 @@
-# ReactomeDb Test Standard
+# ReactomeDatabase Test Standard
 
 Version: v1.0
-Date: 2026-07-14
+Date: 2026-07-30
 Status: current
 
 ## Scope
 
-The ReactomeDb test suite verifies local raw-file parsing,
+The ReactomeDatabase test suite verifies local raw-file parsing,
 selection behavior, species scoping, enrichment input extraction, relation
 filtering, tidy writing, and error handling.
 
@@ -52,7 +52,6 @@ R-MMU-000001	R-MMU-1257604
   snapshots.
 - `from_files()` rejects a call with no files.
 - `from_files()` rejects missing provided files.
-- `from_files()` rejects files over configured byte limits.
 - Missing-file failures happen at the feature boundary. For example,
   `extract_term2name()` without pathways raises a targeted `ValueError`.
 
@@ -68,7 +67,7 @@ R-MMU-000001	R-MMU-1257604
 - `select_ids([" P04637 ", "", "MISSING"])` trims input IDs and drops blanks.
 - `extract_mapping()` returns only selected IDs.
 - Duplicate raw mappings are deduplicated by UniProt and pathway ID.
-- `extract_unmapped_input_ids()` reports `MISSING`.
+- `extract_unmatched_ids()` reports `MISSING`.
 - Empty selection returns empty mapping and unmapped frames with stable columns.
 
 ### Grouped Selection
@@ -100,11 +99,10 @@ R-MMU-000001	R-MMU-1257604
 
 - `build_tidy().frames` contains `mapping`, `pathway`, `relation`,
   `term2gene`, and `term2name`.
-- `write_tidy(dir_out)` writes flat parquet files.
-- `should_write_manifest=True` writes `manifest.json`.
-- Manifest schema version is `reactome-mapping-v0.1`.
-- Partial snapshots write only the derivable tidy assets and list only provided
-  raw sources in the manifest.
+- `write_duckdb(path)` writes canonical relations to one database.
+- `_bioextract.table_info` agrees with every physical table row count.
+- Partial snapshots write only derivable relations and list only provided
+  source files.
 
 ## Real-Data Smoke
 
@@ -127,26 +125,30 @@ The smoke test should verify:
 - files read without missing columns
 - Homo sapiens `term2gene` and `term2name` are non-empty
 - relation filtering completes
-- optional tidy writing succeeds under `/tmp`
+- DuckDB publication succeeds under `/tmp`
+- the formal v96 publication has 322,435 `protein_pathway`, 23,498 `pathway`,
+  and 23,612 `pathway_relation` rows
+- metadata schema v2 has all five `_bioextract` tables and reports
+  `validation_status=passed`
 
 Example command:
 
 ```bash
 PYTHONPATH=src .venv/bin/python - <<'PY'
 from pathlib import Path
-from bioextract.reactome import ReactomeDb
+from bioextract.reactome import ReactomeDatabase
 
 base = Path("/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/reactome/mapping/v96/raw")
-db = ReactomeDb.from_files(
-    file_uniprot2reactome=base / "UniProt2Reactome.txt",
-    file_pathways=base / "ReactomePathways.txt",
-    file_relations=base / "ReactomePathwaysRelation.txt",
+db = ReactomeDatabase.from_files(
+    uniprot_mapping=base / "UniProt2Reactome.txt",
+    pathways=base / "ReactomePathways.txt",
+    relations=base / "ReactomePathwaysRelation.txt",
 )
 view = db.with_species("Homo sapiens")
 assert view.extract_term2gene().height > 0
 assert view.extract_term2name().height > 0
 assert view.extract_pathway_relations().height > 0
-view.build_tidy().write("/tmp/bioextract-reactome-v96", should_write_manifest=True)
+view.write_duckdb("/tmp/reactome.duckdb")
 PY
 ```
 

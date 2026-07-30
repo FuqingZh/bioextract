@@ -10,8 +10,8 @@ MEDIA_TYPE_SQLITE_GZIP = "application/gzip+sqlite3"
 MEDIA_TYPE_SQLITE = "application/vnd.sqlite3"
 MEDIA_TYPE_TSV = "text/tab-separated-values"
 
-KIND_INPUT_ID_VALUES = ("eggnog_protein",)
-EggnogInputIdKind = Literal["eggnog_protein"]
+NAMESPACE_VALUES = ("eggnog_protein",)
+EggnogNamespace = Literal["eggnog_protein"]
 
 COLS_MAPPING = [
     "EggnogProteinId",

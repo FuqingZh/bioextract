@@ -1,4 +1,4 @@
-# EggnogDb Test Standard
+# EggNOGDatabase Test Standard
 
 Version: v1.0
 Date: 2026-07-14
@@ -6,7 +6,7 @@ Status: current
 
 ## Scope
 
-The EggnogDb test standard covers:
+The EggNOGDatabase test standard covers:
 
 - lightweight construction
 - COG function lookup parsing
@@ -26,12 +26,12 @@ It does not cover:
 
 - `from_files()` accepts SQLite and gzip-wrapped SQLite inputs.
 - `extract_mapping()` expands OGs and COG categories correctly.
-- `select_ids(..., kind_input_id="eggnog_protein")` returns filtered rows.
-- `select_groups(..., kind_input_id="eggnog_protein")` preserves `GroupId`.
+- `select_ids(..., namespace="eggnog_protein")` returns filtered rows.
+- `select_groups(..., namespace="eggnog_protein")` preserves `GroupId`.
 - unmapped IDs are reported correctly.
-- `write_tidy()` writes canonical `mapping.parquet`.
+- `write_parquet(path)` writes canonical mapping output with provenance.
 - gzip SQLite snapshots are decompressed under `dir_tmp`.
-- invalid `kind_input_id` raises targeted `ValueError`.
+- invalid `namespace` raises targeted `ValueError`.
 
 ## Real-Data Validation
 

@@ -11,11 +11,8 @@ from polars._typing import SchemaDict
 from bioextract._shared import (
     create_group_input_frames,
     create_input_id_frame,
-    validate_count_limit,
-    validate_file_size,
     validate_required_cols,
 )
-from bioextract.stringdb.spec import StringResourceLimits
 
 from .constant import (
     DEFAULT_SOURCE_RANK_MAP,
@@ -28,7 +25,7 @@ from .constant import (
     SCHEMA_LINKS,
     SCHEMA_PROTEIN_MAP,
     SCHEMA_UNMAPPED,
-    StringDbVersion,
+    StringDatabaseVersion,
 )
 from .util import (
     create_edges_lazy_frame,
@@ -40,13 +37,13 @@ from .util import (
 )
 
 __all__ = [
-    "StringDb",
+    "STRINGDatabase",
 ]
 
 
 @dataclass(frozen=True, slots=True)
 class _StringSnapshot:
-    version: StringDbVersion
+    version: StringDatabaseVersion
     file_aliases: Path | None = None
     file_links: Path | None = None
 
@@ -59,13 +56,13 @@ class _StringAliasInfo:
 
 
 @dataclass(slots=True)
-class StringDb:
+class STRINGDatabase:
     """Path-first access to a local STRING snapshot.
 
-    `StringDb` is the public entrypoint for extracting STRING mappings and
+    `STRINGDatabase` is the public entrypoint for extracting STRING mappings and
     interaction edges from local `protein.aliases` and `protein.links` files.
-    It keeps dataset-level configuration such as source-rank policy, supported
-    STRING version, and fail-fast resource limits.
+    It keeps dataset-level configuration such as source-rank policy and the
+    supported STRING version.
 
     Construct instances with :meth:`from_files` and then choose one of two
     query styles:
@@ -79,13 +76,13 @@ class StringDb:
     Examples:
         Create one snapshot handle and run a single query:
 
-        >>> db = StringDb.from_files(
-        ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
-        ...     file_links="fixtures/string/9606.protein.links.v12.0.txt.gz",
+        >>> db = STRINGDatabase.from_files(
+        ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
+        ...     links="fixtures/string/9606.protein.links.v12.0.txt.gz",
         ... )
         >>> (
         ...     db.select_ids(["TP53", "EGFR"])
-        ...     .with_score_min(400)
+        ...     .with_min_combined_score(400)
         ...     .extract_edges()
         ...     .to_dicts()
         ... )
@@ -94,36 +91,31 @@ class StringDb:
 
     snapshot: _StringSnapshot
     source_rank_map: Mapping[str, int]
-    limits: StringResourceLimits = field(default_factory=StringResourceLimits)
     _alias_schema_cached: _StringAliasInfo | None = field(
         default=None, init=False, repr=False
     )
 
     DEFAULT_SOURCE_RANK_MAP = DEFAULT_SOURCE_RANK_MAP
-    DEFAULT_RESOURCE_LIMITS = StringResourceLimits()
 
     @classmethod
     def from_files(
         cls,
-        file_aliases: os.PathLike[str] | None = None,
-        file_links: os.PathLike[str] | None = None,
+        aliases: os.PathLike[str] | None = None,
+        links: os.PathLike[str] | None = None,
         *,
-        source_rank_map: Mapping[str, int] = DEFAULT_SOURCE_RANK_MAP,
-        limits: StringResourceLimits | None = None,
-        version: StringDbVersion = "v12.0",
-    ) -> StringDb:
+        rank_by_source: Mapping[str, int] = DEFAULT_SOURCE_RANK_MAP,
+        version: StringDatabaseVersion = "v12.0",
+    ) -> STRINGDatabase:
         """Create a dataset handle from local STRING aliases and links files.
 
         Args:
-            file_aliases: Path to a local STRING `protein.aliases` text or gzip
+            aliases: Path to a local STRING `protein.aliases` text or gzip
                 file.
-            file_links: Path to a local STRING `protein.links` text or gzip
+            links: Path to a local STRING `protein.links` text or gzip
                 file.
-            source_rank_map: Source-priority mapping used to break ties when the
+            rank_by_source: Source-priority mapping used to break ties when the
                 same input ID maps to the same STRING ID through multiple alias
                 sources.
-            limits: Dataset-level resource limits. When omitted, default
-                fail-fast limits are used.
             version: Declared STRING schema version used for CSV schema
                 overrides and column validation.
 
@@ -132,15 +124,14 @@ class StringDb:
 
         Raises:
             FileNotFoundError: If either input file does not exist.
-            ValueError: If the requested version is unsupported or a configured
-                file-size limit is exceeded.
+            ValueError: If the requested version is unsupported.
 
         Examples:
             Open a STRING v12 fixture snapshot:
 
-            >>> db = StringDb.from_files(
-            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
-            ...     file_links="fixtures/string/9606.protein.links.v12.0.txt.gz",
+            >>> db = STRINGDatabase.from_files(
+            ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
+            ...     links="fixtures/string/9606.protein.links.v12.0.txt.gz",
             ... )
             >>> (
             ...     db.select_ids(["TP53"])
@@ -153,29 +144,19 @@ class StringDb:
         if version not in SCHEMA_ALIASES or version not in SCHEMA_LINKS:
             raise ValueError(f"Unsupported STRING version: {version}")
 
-        limits_resolved = StringResourceLimits() if limits is None else limits
-
+        file_aliases = aliases
+        file_links = links
         if file_aliases is not None:
             file_aliases = Path(file_aliases)
             if not file_aliases.exists():
                 raise FileNotFoundError(
                     f"STRING aliases file not found: {file_aliases}"
                 )
-            validate_file_size(
-                file_path=file_aliases,
-                size_max=limits_resolved.file_aliases_bytes_max,
-                label="STRING aliases file",
-            )
 
         if file_links is not None:
             file_links = Path(file_links)
             if not file_links.exists():
                 raise FileNotFoundError(f"STRING links file not found: {file_links}")
-            validate_file_size(
-                file_path=file_links,
-                size_max=limits_resolved.file_links_bytes_max,
-                label="STRING links file",
-            )
 
         return cls(
             snapshot=_StringSnapshot(
@@ -183,8 +164,7 @@ class StringDb:
                 file_aliases=file_aliases,
                 file_links=file_links,
             ),
-            source_rank_map=dict(source_rank_map),
-            limits=limits_resolved,
+            source_rank_map=dict(rank_by_source),
         )
 
     def select_ids(self, ids: Iterable[str]) -> StringSelection:
@@ -206,38 +186,29 @@ class StringDb:
             A `StringSelection` in single-query mode. The returned selection
             can extract mapping, unmapped IDs, and edges.
 
-        Raises:
-            ValueError: If the normalized input-ID count exceeds the configured
-                dataset limits.
-
         Examples:
             Normalize an input ID and retain an unmapped alias:
 
-            >>> db = StringDb.from_files(
-            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
+            >>> db = STRINGDatabase.from_files(
+            ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
             ... )
             >>> selection = db.select_ids([" TP53 ", "MISSING"])
             >>> selection.extract_string_mapping()["InputId"].to_list()
             ['TP53']
-            >>> selection.extract_unmapped_input_ids().to_dicts()
+            >>> selection.extract_unmatched_ids().to_dicts()
             [{'InputId': 'MISSING'}]
         """
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
-        validate_count_limit(
-            count=df_input_ids.height,
-            limit_max=self.limits.num_input_ids_max,
-            label="Normalized input ID count",
-        )
         return StringSelection(
             dataset=self,
             _df_input_ids=df_input_ids,
             _df_groups=None,
-            thr_score_min=0,
+            min_combined_score=0,
         )
 
     def select_groups(
         self,
-        group_to_ids: Mapping[str, Iterable[str]],
+        ids_by_group: Mapping[str, Iterable[str]],
     ) -> StringSelection:
         """Create a grouped selection from multiple input-ID sets.
 
@@ -248,7 +219,7 @@ class StringDb:
         outputs.
 
         Args:
-            group_to_ids: Mapping from group label to iterable of input
+            ids_by_group: Mapping from group label to iterable of input
                 identifiers.
 
         Returns:
@@ -257,15 +228,13 @@ class StringDb:
 
         Raises:
             ValueError: If any normalized `GroupId` is empty, if normalized
-                `GroupId` values are duplicated, if the number of groups
-                exceeds the configured limit, or if the total normalized
-                input-ID count exceeds the configured limit.
+                `GroupId` values are duplicated.
 
         Examples:
             Keep each mapping in its original comparison:
 
-            >>> db = StringDb.from_files(
-            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
+            >>> db = STRINGDatabase.from_files(
+            ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
             ... )
             >>> (
             ...     db.select_groups({"up": ["TP53"], "down": ["EGFR"]})
@@ -276,25 +245,15 @@ class StringDb:
             [{'GroupId': 'down', 'InputId': 'EGFR'}, {'GroupId': 'up', 'InputId': 'TP53'}]
         """
         grp_in_frames = create_group_input_frames(
-            group_to_ids,
+            ids_by_group,
             schema_groups=SCHEMA_GROUPS,
             schema_group_input_ids=SCHEMA_GROUP_INPUT_IDS,
-        )
-        validate_count_limit(
-            count=grp_in_frames.df_groups.height,
-            limit_max=self.limits.num_groups_max,
-            label="Group count",
-        )
-        validate_count_limit(
-            count=grp_in_frames.df_input_ids.height,
-            limit_max=self.limits.num_input_ids_max,
-            label="Normalized input ID count",
         )
         return StringSelection(
             dataset=self,
             _df_groups=grp_in_frames.df_groups,
             _df_input_ids=grp_in_frames.df_input_ids,
-            thr_score_min=0,
+            min_combined_score=0,
         )
 
     @property
@@ -342,19 +301,19 @@ class StringDb:
 class StringSelection:
     """Selection handle for both single and grouped STRING queries.
 
-    `StringSelection` is returned by :meth:`StringDb.select_ids` and
-    :meth:`StringDb.select_groups`. Its output schemas depend on mode:
+    `StringSelection` is returned by :meth:`STRINGDatabase.select_ids` and
+    :meth:`STRINGDatabase.select_groups`. Its output schemas depend on mode:
 
-    - selections created by :meth:`StringDb.select_ids` return single-query
+    - selections created by :meth:`STRINGDatabase.select_ids` return single-query
       tables without `GroupId`
-    - selections created by :meth:`StringDb.select_groups` return grouped flat
+    - selections created by :meth:`STRINGDatabase.select_groups` return grouped flat
       tables with leading `GroupId`
 
     Examples:
         Use a returned selection to resolve an input alias:
 
-        >>> db = StringDb.from_files(
-        ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
+        >>> db = STRINGDatabase.from_files(
+        ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
         ... )
         >>> selection = db.select_ids(["TP53"])
         >>> (
@@ -365,10 +324,10 @@ class StringSelection:
         [{'InputId': 'TP53', 'StringId': '9606.ENSP0001'}]
     """
 
-    dataset: StringDb
+    dataset: STRINGDatabase
     _df_input_ids: pl.DataFrame = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
-    thr_score_min: int = 0
+    min_combined_score: int = 0
     _df_protein_map: pl.DataFrame | None = field(default=None, repr=False)
     _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
     _df_string_ids: pl.DataFrame | None = field(default=None, repr=False)
@@ -379,12 +338,12 @@ class StringSelection:
         """Report whether this selection carries `GroupId` through outputs.
 
         Returns:
-            `True` when the selection was created by :meth:`StringDb.select_groups`;
+            `True` when the selection was created by :meth:`STRINGDatabase.select_groups`;
             otherwise `False`.
 
         Examples:
-            >>> db = StringDb.from_files(
-            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
+            >>> db = STRINGDatabase.from_files(
+            ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
             ... )
             >>> db.select_groups({"up": ["TP53"]}).is_grouped
             True
@@ -411,14 +370,14 @@ class StringSelection:
         """Return the expected schema for the edges table output."""
         return SCHEMA_GROUP_EDGES if self.is_grouped else SCHEMA_EDGES
 
-    def with_score_min(self, thr_score_min: int) -> StringSelection:
+    def with_min_combined_score(self, min_combined_score: int) -> StringSelection:
         """Create a new selection with a different minimum STRING score.
 
         Cached mapping-related frames are reused. Edge-related caches are not
         reused because the score threshold changes the edge result.
 
         Args:
-            thr_score_min: Minimum `combined_score` required for retained
+            min_combined_score: Minimum `combined_score` required for retained
                 STRING edges.
 
         Returns:
@@ -428,26 +387,26 @@ class StringSelection:
         Examples:
             Remove an edge whose combined score is below 700:
 
-            >>> db = StringDb.from_files(
-            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
-            ...     file_links="fixtures/string/9606.protein.links.v12.0.txt.gz",
+            >>> db = STRINGDatabase.from_files(
+            ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
+            ...     links="fixtures/string/9606.protein.links.v12.0.txt.gz",
             ... )
             >>> selection = db.select_ids(["TP53", "EGFR", "CDK2"])
             >>> (
-            ...     selection.with_score_min(400)
+            ...     selection.with_min_combined_score(400)
             ...     .extract_edges()["Score"]
             ...     .sort()
             ...     .to_list()
             ... )
             [450, 700]
-            >>> selection.with_score_min(700).extract_edges()["Score"].to_list()
+            >>> selection.with_min_combined_score(700).extract_edges()["Score"].to_list()
             [700]
         """
         return StringSelection(
             dataset=self.dataset,
             _df_input_ids=self._df_input_ids,
             _df_groups=self._df_groups,
-            thr_score_min=int(thr_score_min),
+            min_combined_score=int(min_combined_score),
             _df_protein_map=self._df_protein_map,
             _df_unmapped=self._df_unmapped,
             _df_string_ids=self._df_string_ids,
@@ -469,8 +428,8 @@ class StringSelection:
         Examples:
             Resolve a gene name and report the chosen alias source:
 
-            >>> db = StringDb.from_files(
-            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
+            >>> db = STRINGDatabase.from_files(
+            ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
             ... )
             >>> db.select_ids(["TP53"]).extract_string_mapping().to_dicts()
             [{'InputId': 'TP53', 'StringId': '9606.ENSP0001', 'MapSource': 'UniProt_GN_Name'}]
@@ -508,7 +467,7 @@ class StringSelection:
 
         return self._df_protein_map
 
-    def extract_unmapped_input_ids(self) -> pl.DataFrame:
+    def extract_unmatched_ids(self) -> pl.DataFrame:
         """Extract normalized input IDs that were not mapped to STRING IDs.
 
         Returns:
@@ -523,10 +482,10 @@ class StringSelection:
         Examples:
             Report an identifier absent from the aliases fixture:
 
-            >>> db = StringDb.from_files(
-            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
+            >>> db = STRINGDatabase.from_files(
+            ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
             ... )
-            >>> db.select_ids(["MISSING"]).extract_unmapped_input_ids().to_dicts()
+            >>> db.select_ids(["MISSING"]).extract_unmatched_ids().to_dicts()
             [{'InputId': 'MISSING'}]
         """
         if self._df_unmapped is None:
@@ -560,9 +519,9 @@ class StringSelection:
         Examples:
             Extract the induced edge and its combined score:
 
-            >>> db = StringDb.from_files(
-            ...     file_aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
-            ...     file_links="fixtures/string/9606.protein.links.v12.0.txt.gz",
+            >>> db = STRINGDatabase.from_files(
+            ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
+            ...     links="fixtures/string/9606.protein.links.v12.0.txt.gz",
             ... )
             >>> db.select_ids(["TP53", "EGFR"]).extract_edges().to_dicts()
             [{'StringIdA': '9606.ENSP0001', 'StringIdB': '9606.ENSP0002', 'Score': 700}]
@@ -591,7 +550,7 @@ class StringSelection:
                 lf_links=lf_links,
                 lf_string_ids_a=lf_string_ids.rename({"StringId": "StringIdA"}),
                 lf_string_ids_b=lf_string_ids.rename({"StringId": "StringIdB"}),
-                thr_score_min=self.thr_score_min,
+                min_combined_score=self.min_combined_score,
                 cols_join_left_a="StringIdA",
                 cols_join_right_a="StringIdA",
                 cols_join_left_b=col_group_id + ["StringIdB"],

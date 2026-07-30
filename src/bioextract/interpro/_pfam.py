@@ -68,7 +68,7 @@ def build_pfam_tidy_dataset(
     *,
     file_protein2ipr: Path,
     file_interpro_xml: Path,
-    should_hash_sources: bool = False,
+    include_source_hashes: bool = False,
 ) -> TidyDataset:
     """Build compact Pfam assets from one validated InterPro snapshot.
 
@@ -77,7 +77,7 @@ def build_pfam_tidy_dataset(
             source.
         file_interpro_xml: Exact `<version>/raw/interpro.xml.gz` metadata source
             from the same snapshot.
-        should_hash_sources: Whether to calculate source SHA-256 values for a
+        include_source_hashes: Whether to calculate source SHA-256 values for a
             later manifest write.
 
     Returns:
@@ -168,10 +168,11 @@ def build_pfam_tidy_dataset(
             file_protein2ipr: calculate_file_sha256(file_protein2ipr),
             file_interpro_xml: calculate_file_sha256(file_interpro_xml),
         }
-        if should_hash_sources
+        if include_source_hashes
         else {}
     )
     return TidyDataset(
+        resource_name="interpro",
         frames=frames,
         source=(
             TidySource(

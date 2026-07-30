@@ -1,7 +1,13 @@
+import gzip
+import io
+import tarfile
+import zipfile
 from collections import defaultdict
 from collections.abc import Iterator
+from contextlib import contextmanager
 from itertools import chain
 from pathlib import Path
+from typing import TextIO
 
 from .constant import RE_DEFINITION, RE_GO_ID, RE_SYNONYM
 from .model import (
@@ -190,7 +196,7 @@ def scan_obo_term_records(file_in: Path) -> Iterator[TermRecord]:
     current_stanza_kind: str | None = None
     block: dict[str, list[str]] = defaultdict(list)
 
-    with file_in.open("r", encoding="utf-8") as handle:
+    with _open_obo_text(file_in) as handle:
         for raw_line in chain(handle, ["\n"]):  # Treat EOF as a final blank line.
             line_stripped = raw_line.rstrip("\n").strip()
             is_blank_line = not line_stripped
@@ -229,7 +235,7 @@ def read_obo_term_records(file_in: Path) -> list[TermRecord]:
 
 def read_obo_subset_definitions(file_in: Path) -> list[SubsetDefinitionRecord]:
     definitions: list[SubsetDefinitionRecord] = []
-    with file_in.open("r", encoding="utf-8") as handle:
+    with _open_obo_text(file_in) as handle:
         for raw_line in handle:
             line_stripped = raw_line.rstrip("\n").strip()
             if line_stripped.startswith("["):
@@ -242,6 +248,76 @@ def read_obo_subset_definitions(file_in: Path) -> list[SubsetDefinitionRecord]:
             if definition is not None:
                 definitions.append(definition)
     return definitions
+
+
+@contextmanager
+def _open_obo_text(file_in: Path) -> Iterator[TextIO]:
+    if _is_gzip(file_in):
+        with gzip.open(
+            file_in,
+            "rt",
+            encoding="utf-8",
+            errors="replace",
+        ) as handle:
+            yield handle
+        return
+    if zipfile.is_zipfile(file_in):
+        with zipfile.ZipFile(file_in) as archive:
+            member_name = _select_obo_member(
+                member.filename for member in archive.infolist() if not member.is_dir()
+            )
+            with (
+                archive.open(member_name) as raw,
+                io.TextIOWrapper(
+                    raw,
+                    encoding="utf-8",
+                    errors="replace",
+                ) as handle,
+            ):
+                yield handle
+        return
+    if tarfile.is_tarfile(file_in):
+        with tarfile.open(file_in, mode="r:*") as archive:
+            members = {
+                member.name: member
+                for member in archive.getmembers()
+                if member.isfile()
+            }
+            member_name = _select_obo_member(iter(members))
+            raw = archive.extractfile(members[member_name])
+            if raw is None:
+                raise ValueError(f"Cannot read GO archive member: {member_name}")
+            with (
+                raw,
+                io.TextIOWrapper(
+                    raw,
+                    encoding="utf-8",
+                    errors="replace",
+                ) as handle,
+            ):
+                yield handle
+        return
+    with file_in.open("r", encoding="utf-8", errors="replace") as handle:
+        yield handle
+
+
+def _select_obo_member(member_names: Iterator[str]) -> str:
+    candidates = [
+        member_name
+        for member_name in member_names
+        if Path(member_name).name.lower().endswith(".obo")
+    ]
+    if len(candidates) != 1:
+        raise ValueError(
+            "GO ontology archive must contain exactly one .obo member; "
+            f"found {len(candidates)}"
+        )
+    return candidates[0]
+
+
+def _is_gzip(file_in: Path) -> bool:
+    with file_in.open("rb") as handle:
+        return handle.read(2) == b"\x1f\x8b"
 
 
 # #endregion
