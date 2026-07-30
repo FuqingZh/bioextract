@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal, cast, overload
 
+import duckdb
 import polars as pl
 
-from bioextract._publication import ParquetWriteResult
+from bioextract._publication import DuckDBWriteResult, ParquetWriteResult
 from bioextract._shared import (
     create_group_input_frames,
     create_input_id_frame,
@@ -49,9 +51,35 @@ from .mapping.util import (
     read_gene_pathway_frame,
     validate_namespace,
 )
+from .metabolic import (
+    KEGGMetabolicCapabilityError,
+    KEGGMetabolicNamespace,
+    KEGGMetabolicSelection,
+    MetabolicPublication,
+    MetabolicSnapshot,
+    validate_selection_namespace,
+)
+from .metabolic import (
+    evaluate_modules as evaluate_metabolic_modules,
+)
+from .metabolic import (
+    from_metabolic_files as create_metabolic_snapshot,
+)
+from .metabolic import (
+    from_metabolic_release as discover_metabolic_snapshot,
+)
+from .metabolic import (
+    open_publication as open_metabolic_publication,
+)
+from .metabolic import (
+    write_duckdb as write_metabolic_duckdb,
+)
 
 __all__ = [
     "KEGGDatabase",
+    "KEGGMetabolicCapabilityError",
+    "KEGGMetabolicNamespace",
+    "KEGGMetabolicSelection",
     "KeggTidyDataset",
 ]
 
@@ -59,6 +87,8 @@ __all__ = [
 class _KeggSnapshotKind(StrEnum):
     BRITE_JSON = "brite_json"
     MAPPING_FILES = "mapping_files"
+    METABOLIC_FILES = "metabolic_files"
+    METABOLIC_PUBLICATION = "metabolic_publication"
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +101,7 @@ class _KeggSnapshot:
     organism_code: str | None = None
     file_gene_list: Path | None = None
     file_conv_ncbi_geneid: Path | None = None
+    metabolic: MetabolicSnapshot | None = None
 
 
 KeggTidyDataset = TidyDataset
@@ -80,11 +111,9 @@ KeggTidyDataset = TidyDataset
 class KEGGDatabase:
     """Path-first access to a local KEGG resource snapshot.
 
-    A handle represents either a BRITE JSON hierarchy or one organism's KEGG
-    mapping files. BRITE handles expose the pathway tidy dataset; mapping
-    handles expose the canonical gene mapping, ID selections, and mapping tidy
-    dataset. Operations from the other snapshot mode fail explicitly instead
-    of interpreting files heuristically.
+    A handle represents a BRITE hierarchy, an organism mapping, or a metabolic
+    source/publication. Metabolic handles stream official flat records into a
+    relational DuckDB and expose reaction-centered domain selections.
 
     Examples:
         Build a BRITE pathway snapshot:
@@ -109,6 +138,115 @@ class KEGGDatabase:
 
     snapshot: _KeggSnapshot
     _df_mapping: pl.DataFrame | None = field(default=None, init=False, repr=False)
+    _metabolic_publication: MetabolicPublication | None = field(
+        default=None, init=False, repr=False
+    )
+
+    @classmethod
+    def from_metabolic_release(cls, source: os.PathLike[str] | str) -> KEGGDatabase:
+        """Discover a complete local KEGG metabolic release.
+
+        ``source`` may be the release directory, its ``raw`` directory, or a
+        zip/tar archive containing the layout. No network access is performed.
+
+        Examples:
+            >>> db = KEGGDatabase.from_metabolic_release(  # doctest: +SKIP
+            ...     "kegg/metabolic/2026-07"
+            ... )
+            >>> db.snapshot.kind.value  # doctest: +SKIP
+            'metabolic_files'
+        """
+        return cls(
+            snapshot=_KeggSnapshot(
+                kind=_KeggSnapshotKind.METABOLIC_FILES,
+                metabolic=discover_metabolic_snapshot(source),
+            )
+        )
+
+    @classmethod
+    def from_metabolic_files(
+        cls,
+        *,
+        compound_list: os.PathLike[str] | str | None = None,
+        compound_entries: (
+            os.PathLike[str] | str | Sequence[os.PathLike[str] | str] | None
+        ) = None,
+        reaction_list: os.PathLike[str] | str | None = None,
+        reaction_entries: (
+            os.PathLike[str] | str | Sequence[os.PathLike[str] | str] | None
+        ) = None,
+        enzyme_list: os.PathLike[str] | str | None = None,
+        enzyme_entries: (
+            os.PathLike[str] | str | Sequence[os.PathLike[str] | str] | None
+        ) = None,
+        module_list: os.PathLike[str] | str | None = None,
+        module_entries: (
+            os.PathLike[str] | str | Sequence[os.PathLike[str] | str] | None
+        ) = None,
+        compound_pubchem: os.PathLike[str] | str | None = None,
+        compound_reaction: os.PathLike[str] | str | None = None,
+        reaction_enzyme: os.PathLike[str] | str | None = None,
+        reaction_ko: os.PathLike[str] | str | None = None,
+        reaction_module: os.PathLike[str] | str | None = None,
+        reaction_pathway: os.PathLike[str] | str | None = None,
+        module_pathway: os.PathLike[str] | str | None = None,
+        release_version: str | None = None,
+    ) -> KEGGDatabase:
+        """Create a partial or complete metabolic handle from explicit roles.
+
+        Entry collections may be a directory, one batch, or a sequence of
+        batches. Missing roles become absent publication capabilities.
+
+        Examples:
+            >>> db = KEGGDatabase.from_metabolic_files(  # doctest: +SKIP
+            ...     reaction_entries="reaction/",
+            ...     reaction_ko="reaction_ko.tsv",
+            ...     release_version="2026-07",
+            ... )
+            >>> db.snapshot.kind.value  # doctest: +SKIP
+            'metabolic_files'
+        """
+        return cls(
+            snapshot=_KeggSnapshot(
+                kind=_KeggSnapshotKind.METABOLIC_FILES,
+                metabolic=create_metabolic_snapshot(
+                    compound_list=compound_list,
+                    compound_entries=compound_entries,
+                    reaction_list=reaction_list,
+                    reaction_entries=reaction_entries,
+                    enzyme_list=enzyme_list,
+                    enzyme_entries=enzyme_entries,
+                    module_list=module_list,
+                    module_entries=module_entries,
+                    compound_pubchem=compound_pubchem,
+                    compound_reaction=compound_reaction,
+                    reaction_enzyme=reaction_enzyme,
+                    reaction_ko=reaction_ko,
+                    reaction_module=reaction_module,
+                    reaction_pathway=reaction_pathway,
+                    module_pathway=module_pathway,
+                    release_version=release_version,
+                ),
+            )
+        )
+
+    @classmethod
+    def from_duckdb(cls, path: os.PathLike[str] | str) -> KEGGDatabase:
+        """Open a validated KEGG metabolic publication for read-only access.
+
+        Examples:
+            >>> db = KEGGDatabase.from_duckdb("kegg.duckdb")  # doctest: +SKIP
+            >>> db.snapshot.kind.value  # doctest: +SKIP
+            'metabolic_publication'
+            >>> with db.connect() as connection:  # doctest: +SKIP
+            ...     count = connection.sql("SELECT count(*) FROM reaction").fetchone()[0]
+        """
+        publication = open_metabolic_publication(Path(path))
+        result = cls(
+            snapshot=_KeggSnapshot(kind=_KeggSnapshotKind.METABOLIC_PUBLICATION)
+        )
+        result._metabolic_publication = publication
+        return result
 
     @classmethod
     def from_brite_json(
@@ -279,20 +417,41 @@ class KEGGDatabase:
             )
         return self._df_mapping
 
+    @overload
+    def select_ids(
+        self,
+        ids: Iterable[str],
+        *,
+        namespace: KEGGMetabolicNamespace,
+        include_obsolete: bool = False,
+    ) -> KEGGMetabolicSelection: ...
+
+    @overload
     def select_ids(
         self,
         ids: Iterable[str],
         *,
         namespace: KEGGNamespace,
-    ) -> KeggSelection:
+        include_obsolete: bool = False,
+    ) -> KeggSelection: ...
+
+    def select_ids(
+        self,
+        ids: Iterable[str],
+        *,
+        namespace: KEGGNamespace | KEGGMetabolicNamespace,
+        include_obsolete: bool = False,
+    ) -> KeggSelection | KEGGMetabolicSelection:
         """Create a KEGG mapping selection for one set of input IDs.
 
         Args:
-            ids: UniProt, NCBI Gene, or KEGG gene IDs. Empty values are removed,
-                duplicates are folded, and pipe-style UniProt IDs are reduced
-                to their accession.
-            namespace: Namespace used to join the normalized IDs. Supported
-                values are ``uniprot``, ``ncbi_gene``, and ``kegg_gene``.
+            ids: Identifiers in the declared mapping or metabolic namespace.
+            namespace: Mapping namespaces are ``uniprot``, ``ncbi_gene``, and
+                ``kegg_gene``. Metabolic namespaces are validated against the
+                relations actually present in the opened publication.
+            include_obsolete: For metabolic EC selection, permit exact
+                historical deleted/transferred entries instead of applying
+                the default accepted-entry policy.
 
         Returns:
             A selection that can materialize matched rows and unmapped IDs.
@@ -317,29 +476,62 @@ class KEGGDatabase:
             ... ).unique().to_dicts()
             [{'InputId': 'P12345', 'KeggGeneId': 'hsa:1'}]
         """
+        if self.snapshot.kind == _KeggSnapshotKind.METABOLIC_PUBLICATION:
+            publication = self._require_metabolic_publication()
+            metabolic_namespace = cast("KEGGMetabolicNamespace", namespace)
+            validate_selection_namespace(publication, metabolic_namespace)
+            return KEGGMetabolicSelection(
+                publication,
+                tuple((None, str(value)) for value in ids),
+                metabolic_namespace,
+                include_obsolete,
+            )
         self._require_mapping_snapshot("select KEGG IDs")
-        validate_namespace(namespace)
+        mapping_namespace = cast("KEGGNamespace", namespace)
+        validate_namespace(mapping_namespace)
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
         return KeggSelection(
             dataset=self,
             _df_input_ids=df_input_ids,
             _df_groups=None,
-            namespace=namespace,
+            namespace=mapping_namespace,
         )
 
+    @overload
+    def select_groups(
+        self,
+        ids_by_group: Mapping[str, Iterable[str]],
+        *,
+        namespace: KEGGMetabolicNamespace,
+        include_obsolete: bool = False,
+    ) -> KEGGMetabolicSelection: ...
+
+    @overload
     def select_groups(
         self,
         ids_by_group: Mapping[str, Iterable[str]],
         *,
         namespace: KEGGNamespace,
-    ) -> KeggSelection:
+        include_obsolete: bool = False,
+    ) -> KeggSelection: ...
+
+    def select_groups(
+        self,
+        ids_by_group: Mapping[str, Iterable[str]],
+        *,
+        namespace: KEGGNamespace | KEGGMetabolicNamespace,
+        include_obsolete: bool = False,
+    ) -> KeggSelection | KEGGMetabolicSelection:
         """Create a KEGG mapping selection for named input-ID groups.
 
         Args:
             ids_by_group: Mapping from group name to IDs in one shared namespace.
                 Group names and IDs are normalized before limits are checked.
-            namespace: Namespace used to join the normalized IDs. Supported
-                values are ``uniprot``, ``ncbi_gene``, and ``kegg_gene``.
+            namespace: Shared mapping or metabolic namespace. Metabolic
+                namespaces are validated against the opened publication's
+                actual relation inventory.
+            include_obsolete: Apply the metabolic EC historical-entry policy
+                independently within every group.
 
         Returns:
             A selection whose matched and unmapped outputs retain ``GroupId``.
@@ -365,8 +557,24 @@ class KEGGDatabase:
             ... ).unique().to_dicts()
             [{'GroupId': 'up', 'InputId': 'P12345'}]
         """
+        if self.snapshot.kind == _KeggSnapshotKind.METABOLIC_PUBLICATION:
+            publication = self._require_metabolic_publication()
+            metabolic_namespace = cast("KEGGMetabolicNamespace", namespace)
+            validate_selection_namespace(publication, metabolic_namespace)
+            inputs = tuple(
+                (str(group), str(value))
+                for group, values in ids_by_group.items()
+                for value in values
+            )
+            return KEGGMetabolicSelection(
+                publication,
+                inputs,
+                metabolic_namespace,
+                include_obsolete,
+            )
         self._require_mapping_snapshot("select grouped KEGG IDs")
-        validate_namespace(namespace)
+        mapping_namespace = cast("KEGGNamespace", namespace)
+        validate_namespace(mapping_namespace)
         grp_in_frames = create_group_input_frames(
             ids_by_group,
             schema_groups=SCHEMA_GROUPS,
@@ -376,7 +584,7 @@ class KEGGDatabase:
             dataset=self,
             _df_input_ids=grp_in_frames.df_input_ids,
             _df_groups=grp_in_frames.df_groups,
-            namespace=namespace,
+            namespace=mapping_namespace,
         )
 
     def build_tidy(self) -> KeggTidyDataset:
@@ -455,6 +663,67 @@ class KEGGDatabase:
             True
         """
         return self.build_tidy().write_parquet(path, if_exists=if_exists)
+
+    def write_duckdb(
+        self,
+        path: os.PathLike[str] | str,
+        *,
+        if_exists: Literal["fail", "replace"] = "fail",
+        include_source_hashes: bool = False,
+    ) -> DuckDBWriteResult:
+        """Atomically publish a KEGG metabolic snapshot as DuckDB.
+
+        Examples:
+            >>> result = db.write_duckdb("kegg.duckdb")  # doctest: +SKIP
+            >>> result.path.name  # doctest: +SKIP
+            'kegg.duckdb'
+        """
+        if self.snapshot.kind != _KeggSnapshotKind.METABOLIC_FILES:
+            raise KEGGMetabolicCapabilityError(
+                "write_duckdb() requires a KEGG metabolic source handle"
+            )
+        snapshot = self.snapshot.metabolic
+        if snapshot is None:
+            raise KEGGMetabolicCapabilityError("KEGG metabolic sources are missing")
+        return write_metabolic_duckdb(
+            snapshot,
+            Path(path),
+            if_exists=if_exists,
+            include_source_hashes=include_source_hashes,
+        )
+
+    def connect(self) -> duckdb.DuckDBPyConnection:
+        """Return a new caller-owned native read-only DuckDB connection.
+
+        Examples:
+            >>> with db.connect() as connection:  # doctest: +SKIP
+            ...     count = connection.sql("SELECT count(*) FROM reaction").fetchone()[0]
+            >>> count >= 0  # doctest: +SKIP
+            True
+        """
+        publication = self._require_metabolic_publication()
+        return duckdb.connect(str(publication.path), read_only=True)
+
+    def evaluate_modules(self, ko_ids: Iterable[str]) -> pl.DataFrame:
+        """Evaluate exact KEGG module top-level blocks for the supplied KOs.
+
+        The result reports required and satisfied block counts, exact
+        completeness, and one-based missing block indexes.
+
+        Examples:
+            >>> result = db.evaluate_modules(["K00844", "K12407"])  # doctest: +SKIP
+            >>> result.columns  # doctest: +SKIP
+            ['ModuleId', 'RequiredBlockCount', 'SatisfiedBlockCount', 'IsComplete', 'MissingBlockIndexes']
+        """
+        return evaluate_metabolic_modules(self._require_metabolic_publication(), ko_ids)
+
+    def _require_metabolic_publication(self) -> MetabolicPublication:
+        if self._metabolic_publication is None:
+            raise KEGGMetabolicCapabilityError(
+                "KEGG metabolic selection requires a publication-backed handle; "
+                "write a DuckDB and reopen it with KEGGDatabase.from_duckdb()"
+            )
+        return self._metabolic_publication
 
     def _mapping_tidy_sources(self) -> tuple[TidySource, ...]:
         sources = [

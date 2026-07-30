@@ -30,7 +30,7 @@ when a domain does not yet have a dedicated architecture document.
 | ChEBI and ChemOnt | [ChEBIDatabase](architecture/chebi-db.md) | [ChEBIDatabase](testing/chebi-db.md) | — |
 | GO ontology and KEGG BRITE | [GO and KEGG Tidy](architecture/go-kegg-tidy.md) | [GO and KEGG Tidy](testing/go-kegg-tidy.md) | — |
 | KEGG organism mapping | [KEGG Mapping DB](architecture/kegg-mapping-db.md) | [KEGG Mapping DB](testing/kegg-mapping-db.md) | — |
-| KEGG metabolic | Existing KEGG contracts plus the proposed [KEGG Metabolic Domain Access Plan](implementation-plan/20260730-kegg-metabolic-domain-access.md) | Planned in the proposal | — |
+| KEGG metabolic | [KEGG Metabolic Database](architecture/kegg-metabolic-db.md) | [KEGG Metabolic Database](testing/kegg-metabolic-db.md) | [2026-07 baseline](benchmarks/20260730-kegg-metabolic-2026-07-benchmark.md) |
 | Reactome | [ReactomeDatabase](architecture/reactome-db.md) | [ReactomeDatabase](testing/reactome-db.md) | — |
 | WikiPathways | [WikiPathwaysDatabase](architecture/wikipathways-db.md) | [WikiPathwaysDatabase](testing/wikipathways-db.md) | — |
 | eggNOG | [EggNOGDatabase](architecture/eggnog-db.md) | [EggNOGDatabase](testing/eggnog-db.md) | [5.0.2 baseline](benchmarks/20260608-v1.0-eggnog-5.0.2-benchmark.md) |
@@ -41,10 +41,10 @@ when a domain does not yet have a dedicated architecture document.
 
 ## Plans And History
 
-The proposed
+The completed
 [KEGG Metabolic Domain Access Plan](implementation-plan/20260730-kegg-metabolic-domain-access.md)
-defines the next unimplemented KEGG compound, reaction, enzyme, module, and
-cross-reference publication boundary.
+records the compound, reaction, enzyme, module, cross-reference, publication,
+and reaction-centered selection boundary.
 
 The completed
 [ChEBI Domain Access And Publication Plan](implementation-plan/20260729-chebi-domain-access.md)

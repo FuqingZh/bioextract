@@ -170,6 +170,34 @@ KEGGDatabase.from_brite_json("br08901.json").write_parquet(
 When multiple KEGG products share a directory, use the smallest useful
 qualifier, such as `kegg_gene_annotation.parquet`.
 
+A compound/reaction/enzyme/module snapshot is a multi-relation metabolic
+publication:
+
+```python
+database = KEGGDatabase.from_metabolic_release("kegg/metabolic/2026-07")
+database.write_duckdb("out/kegg.duckdb")
+
+published = KEGGDatabase.from_duckdb("out/kegg.duckdb")
+selection = published.select_ids(["CHEBI:15377"], namespace="chebi")
+
+df_reactions = selection.extract_reactions()
+df_pathways = selection.extract_pathway_memberships()
+df_unmatched = selection.extract_unmatched_ids()
+
+with published.connect() as connection:
+    relation = connection.sql(
+        """
+        SELECT reaction_id, count(*) AS participant_count
+        FROM reaction_participant
+        GROUP BY reaction_id
+        """
+    )
+```
+
+The domain API supplies reaction-centered traversal and input lineage.
+`connect()` exposes the same validated publication as caller-owned, native
+read-only DuckDB SQL.
+
 ## Reactome and WikiPathways
 
 Pathway entities and membership relations are published together:

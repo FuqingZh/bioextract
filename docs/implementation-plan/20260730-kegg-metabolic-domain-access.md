@@ -1,7 +1,7 @@
 # KEGG Metabolic Domain Access Plan
 
 Date: 2026-07-30
-Status: proposed
+Status: completed
 Authority:
 [Domain Access Architecture](../architecture/20260729-v1.0-domain-access-architecture.md)
 and [Materialized Dataset Contract](../architecture/tidy-dataset-contract.md)
@@ -544,3 +544,28 @@ independent Parquet files obsolete.
 KEGG access and redistribution terms remain the caller's responsibility.
 `bioextract` consumes caller-supplied local files and performs no network
 requests.
+
+## Completion Record
+
+Completed locally on 2026-07-30. The implementation uses exact and
+archive-safe release-layout discovery, streaming NDJSON relation spools, the
+shared metadata-v2 DuckDB publication lifecycle, capability-to-inventory
+validation, validated read-only reopening, reaction-centered PascalCase
+extractors, transferred/obsolete EC semantics, and recursive exact module
+block evaluation with cycle detection. Focused KEGG tests and `pdm run check`
+pass.
+
+The real 2026-07 CephFS layout resolved the expected four lists, four
+entry-batch collections, and seven global relations with batch counts
+1,962/1,246/835/58. The formal publication was atomically written to
+`kegg/metabolic/2026-07/tidy/kegg.duckdb`: 25 canonical tables, 444,929 rows,
+17,313,792 bytes, metadata schema v2, and two persisted
+`foreign_key_violation` warnings for absent compound participant `C23109`.
+Publication with 4,112 source SHA-256 values took 2:08.57 wall-clock time and
+peaked at 1,476,904 KiB RSS.
+
+Acceptance covered all nine identifier namespaces, grouped unmatched-ID
+isolation, all-module evaluation, read-only native SQL, and direct shared-ID
+joins to the ChEBI and Rhea publications. The reproducible inventory, probes,
+and warm-query observations are recorded in the
+[2026-07 benchmark](../benchmarks/20260730-kegg-metabolic-2026-07-benchmark.md).

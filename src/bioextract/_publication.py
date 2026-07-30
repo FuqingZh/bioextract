@@ -136,6 +136,7 @@ def write_duckdb_publication(
     if_exists: str = "fail",
     column_mappings: Sequence[tuple[str, str, str, str]] = (),
     validation_issues: Sequence[ValidationIssue] = (),
+    extra_metadata: Mapping[str, str] | None = None,
 ) -> DuckDBWriteResult:
     """Atomically publish related lazy frames as one provenance-aware DuckDB."""
     if not relations:
@@ -182,16 +183,25 @@ def write_duckdb_publication(
                             f"Cannot count published table: {relation.table_name}"
                         )
                     row_counts[relation.table_name] = int(count_row[0])
+                metadata = _publication_metadata(
+                    resource_name=resource_name,
+                    schema_version=schema_version,
+                    sources=sources,
+                    scope=scope,
+                    release_version=release_version,
+                    validation_issue_count=len(validation_issues),
+                )
+                extra = {} if extra_metadata is None else dict(extra_metadata)
+                reserved = sorted(set(metadata) & set(extra))
+                if reserved:
+                    raise ValueError(
+                        "extra_metadata cannot replace canonical publication "
+                        f"metadata keys: {reserved}"
+                    )
+                metadata.update(extra)
                 _write_duckdb_metadata(
                     connection,
-                    metadata=_publication_metadata(
-                        resource_name=resource_name,
-                        schema_version=schema_version,
-                        sources=sources,
-                        scope=scope,
-                        release_version=release_version,
-                        validation_issue_count=len(validation_issues),
-                    ),
+                    metadata=metadata,
                     sources=sources,
                     relations=relations,
                     row_counts=row_counts,
