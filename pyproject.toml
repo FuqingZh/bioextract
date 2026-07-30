@@ -41,8 +41,10 @@ distribution = true
 
 [tool.pdm.scripts]
 format = "ruff format ."
+format-check = "ruff format --check ."
 lint = "ruff check ."
 lint-fix = "ruff check --fix ."
 typecheck = "pyright"
 test = {cmd = "pytest", env = {PYTHONPATH = "src"}}
+check = {composite = ["format-check", "lint", "typecheck", "test"]}
 precommit = {composite = ["format", "lint-fix", "typecheck", "test"]}
