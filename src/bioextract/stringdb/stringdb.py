@@ -434,7 +434,7 @@ class StringSelection:
             >>> db.select_ids(["TP53"]).extract_string_mapping().to_dicts()
             [{'InputId': 'TP53', 'StringId': '9606.ENSP0001', 'MapSource': 'UniProt_GN_Name'}]
         """
-        if self.dataset._alias_schema is None:
+        if self.dataset._alias_schema is None:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
             raise ValueError("Cannot extract STRING mapping without aliases file")
 
         if self._df_protein_map is not None:
@@ -445,7 +445,7 @@ class StringSelection:
             return self._df_protein_map
 
         lf_aliases = scan_aliases(
-            self.dataset._alias_schema.file_alias,
+            self.dataset._alias_schema.file_alias,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
             version=self.dataset.snapshot.version,
         )
         lf_input_ids = self._df_input_ids.lazy()
@@ -455,8 +455,8 @@ class StringSelection:
                 lf_aliases=lf_aliases,
                 lf_input_ids=lf_input_ids,
                 source_rank_map=self.dataset.source_rank_map,
-                col_string_id_aliases=self.dataset._alias_schema.col_string_id,
-                has_source_aliases=self.dataset._alias_schema.has_source,
+                col_string_id_aliases=self.dataset._alias_schema.col_string_id,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+                has_source_aliases=self.dataset._alias_schema.has_source,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
                 cols_partition=col_group_id + ["InputId", "StringId"],
                 cols_sort_prefix=col_group_id + ["InputId", "StringId"],
                 cols_select_out=col_group_id + ["InputId", "StringId", "MapSource"],

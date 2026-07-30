@@ -3,6 +3,8 @@ from __future__ import annotations
 import doctest
 import inspect
 from collections.abc import Iterator
+from types import FunctionType
+from typing import Protocol, cast
 
 import pytest
 
@@ -60,6 +62,14 @@ PUBLIC_FUNCTIONS = (("kegg.brite.build_tidy_frames", build_kegg_tidy_frames),)
 EXPECTED_PUBLIC_TARGET_COUNT = 142
 
 
+class _FunctionDescriptor(Protocol):
+    __func__: FunctionType
+
+
+class _FunctionProperty(Protocol):
+    fget: FunctionType | None
+
+
 def iter_public_docstring_targets() -> Iterator[tuple[str, object, str | None]]:
     for cls in PUBLIC_CLASSES:
         yield cls.__name__, cls, None
@@ -68,9 +78,9 @@ def iter_public_docstring_targets() -> Iterator[tuple[str, object, str | None]]:
                 continue
             member = raw_member
             if isinstance(member, (classmethod, staticmethod)):
-                member = member.__func__
+                member = cast(_FunctionDescriptor, member).__func__
             elif isinstance(member, property):
-                member = member.fget
+                member = cast(_FunctionProperty, member).fget
             if not inspect.isfunction(member):
                 continue
             yield (

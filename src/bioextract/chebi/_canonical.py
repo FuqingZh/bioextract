@@ -6,7 +6,7 @@ import re
 import tarfile
 import zipfile
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Generator, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -593,7 +593,7 @@ def _empty_structure_frame() -> pl.DataFrame:
 
 
 @contextmanager
-def _open_text(path: Path, *, preferred_suffix: str) -> Iterator[TextIO]:
+def _open_text(path: Path, *, preferred_suffix: str) -> Generator[TextIO]:
     with path.open("rb") as probe:
         magic = probe.read(4)
     if magic.startswith(b"\x1f\x8b"):

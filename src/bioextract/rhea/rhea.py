@@ -15,7 +15,7 @@ import duckdb
 from ._query import (
     RheaCapabilityError,
     RheaReactionSelection,
-    _RheaPublication,
+    _RheaPublication,  # pyright: ignore[reportPrivateUsage]  # sibling publication type
     create_group_selection,
     create_selection,
     open_rhea_publication,
@@ -68,7 +68,7 @@ class RheaWriteResult:
 @dataclass(frozen=True, slots=True)
 class _RheaSnapshot:
     scope: str
-    sources: Mapping[str, Path] = field(default_factory=dict)
+    sources: Mapping[str, Path] = field(default_factory=dict[str, Path])
     release_source: Path | None = None
 
 

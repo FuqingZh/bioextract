@@ -443,7 +443,7 @@ class ChEBICompoundSelection:
         cached = self._candidate_cache
         if cached is not None:
             return cached.clone()
-        publication = self.database._require_publication()
+        publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         with duckdb.connect(str(publication.path), read_only=True) as connection:
             _create_input_table(connection, self._input_rows)
             if self.namespace == "chebi":
@@ -520,7 +520,7 @@ class ChEBICompoundSelection:
         return frame.clone()
 
     def _invalid_target_inputs(self) -> set[tuple[str | None, str]]:
-        publication = self.database._require_publication()
+        publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         with duckdb.connect(str(publication.path), read_only=True) as connection:
             metadata_tables = {
                 row[0]
@@ -549,7 +549,7 @@ class ChEBICompoundSelection:
 
     def _extract_joined(self, query: str) -> pl.DataFrame:
         matches = self.extract_matches()
-        publication = self.database._require_publication()
+        publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         with duckdb.connect(str(publication.path), read_only=True) as connection:
             _create_selected_table(connection, matches, grouped=self._is_grouped)
             cursor = connection.execute(query)
@@ -564,7 +564,7 @@ class ChEBICompoundSelection:
         return self._finalize(frame)
 
     def _require_tables(self, required: set[str], operation: str) -> None:
-        publication = self.database._require_publication()
+        publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         missing = sorted(required - set(publication.tables))
         if missing:
             raise ChEBICapabilityError(
@@ -754,7 +754,7 @@ def _selection(
     include_obsolete: bool,
     grouped: bool,
 ) -> ChEBICompoundSelection:
-    publication = database._require_publication()
+    publication = database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
     normalized_namespace = str(namespace).strip().lower()
     if normalized_namespace not in publication.namespaces:
         available = ", ".join(sorted(publication.namespaces))

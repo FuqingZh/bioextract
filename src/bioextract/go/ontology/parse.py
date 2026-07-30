@@ -3,7 +3,7 @@ import io
 import tarfile
 import zipfile
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from itertools import chain
 from pathlib import Path
@@ -251,7 +251,7 @@ def read_obo_subset_definitions(file_in: Path) -> list[SubsetDefinitionRecord]:
 
 
 @contextmanager
-def _open_obo_text(file_in: Path) -> Iterator[TextIO]:
+def _open_obo_text(file_in: Path) -> Generator[TextIO]:
     if _is_gzip(file_in):
         with gzip.open(
             file_in,

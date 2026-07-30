@@ -19,6 +19,7 @@ build-backend = "pdm.backend"
 
 [dependency-groups]
 dev = [
+    "numpy>=2.5.1",
     "pytest>=9.0.2",
     "ruff>=0.15.14",
     "pyright>=1.1.411",
@@ -55,7 +56,7 @@ extraPaths = ["src"]
 venvPath = "."
 venv = ".venv"
 pythonVersion = "3.13"
-typeCheckingMode = "standard"
+typeCheckingMode = "strict"
 
 [tool.pdm]
 distribution = true

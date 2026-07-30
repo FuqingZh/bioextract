@@ -179,7 +179,7 @@ class RheaReactionSelection:
             ... ).columns
             ['RheaId', 'Direction', 'Equation']
         """
-        publication = self.database._require_publication()
+        publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         _require_tables(publication, {"reaction"}, operation="extract reactions")
         has_smiles = "reaction_smiles" in publication.tables
         smiles_expression = (
@@ -223,7 +223,7 @@ class RheaReactionSelection:
             ... ).columns
             ['Side', 'DirectionalRole', 'ChEBIId']
         """
-        publication = self.database._require_publication()
+        publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         _require_tables(
             publication,
             {"reaction_participant", "compound"},
@@ -278,7 +278,7 @@ class RheaReactionSelection:
             ... ).columns
             ['ReferenceDatabase', 'ReferenceId']
         """
-        publication = self.database._require_publication()
+        publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         has_xref = "reaction_xref" in publication.tables
         has_uniprot = "reaction_uniprot" in publication.tables
         if not has_xref and not has_uniprot:
@@ -350,7 +350,7 @@ class RheaReactionSelection:
             ... ).columns
             ['RheaId', 'PubMedId']
         """
-        publication = self.database._require_publication()
+        publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         _require_tables(
             publication,
             {"reaction_publication"},
@@ -382,7 +382,7 @@ class RheaReactionSelection:
             ... ).columns
             ['FromReactionId', 'ToReactionId', 'RelationType']
         """
-        publication = self.database._require_publication()
+        publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         _require_tables(
             publication,
             {"reaction_relationship"},
@@ -433,7 +433,7 @@ class RheaReactionSelection:
         )
 
     def _query_matches(self) -> pl.DataFrame:
-        publication = self.database._require_publication()
+        publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         _require_tables(
             publication,
             set(_NAMESPACE_CAPABILITIES[self.namespace]),
@@ -494,7 +494,7 @@ class RheaReactionSelection:
         *,
         schema: SchemaDict,
     ) -> pl.DataFrame:
-        publication = self.database._require_publication()
+        publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         matches = self.extract_matches()
         with _connect(publication) as connection:
             _create_selected_table(connection, matches, grouped=self._is_grouped)
@@ -669,7 +669,7 @@ def create_selection(
     namespace: RheaNamespace,
     include_obsolete: bool,
 ) -> RheaReactionSelection:
-    publication = database._require_publication()
+    publication = database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
     normalized_namespace = _validate_namespace(namespace)
     _require_tables(
         publication,
@@ -696,7 +696,7 @@ def create_group_selection(
     namespace: RheaNamespace,
     include_obsolete: bool,
 ) -> RheaReactionSelection:
-    publication = database._require_publication()
+    publication = database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
     normalized_namespace = _validate_namespace(namespace)
     _require_tables(
         publication,

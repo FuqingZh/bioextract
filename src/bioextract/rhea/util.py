@@ -33,11 +33,11 @@ class RdfReaction:
     comment: str | None = None
     is_balanced: bool | None = None
     is_transport: bool | None = None
-    side_ids: list[str] = field(default_factory=list)
-    substrate_side_ids: list[str] = field(default_factory=list)
-    product_side_ids: list[str] = field(default_factory=list)
-    bidirectional_side_ids: list[str] = field(default_factory=list)
-    citations: set[str] = field(default_factory=set)
+    side_ids: list[str] = field(default_factory=list[str])
+    substrate_side_ids: list[str] = field(default_factory=list[str])
+    product_side_ids: list[str] = field(default_factory=list[str])
+    bidirectional_side_ids: list[str] = field(default_factory=list[str])
+    citations: set[str] = field(default_factory=set[str])
 
 
 @dataclass(slots=True)
@@ -74,8 +74,8 @@ class RdfCompound:
     underlying_chebi_id: int | None = None
     polymerization_index: str | None = None
     position: str | None = None
-    types: set[str] = field(default_factory=set)
-    reactive_part_ids: set[str] = field(default_factory=set)
+    types: set[str] = field(default_factory=set[str])
+    reactive_part_ids: set[str] = field(default_factory=set[str])
 
 
 @dataclass(frozen=True, slots=True)

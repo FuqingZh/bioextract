@@ -134,7 +134,9 @@ def test_go_db_build_tidy_exposes_frames_and_writes_duckdb(tmp_path: Path) -> No
     assert "term_relation" in result.tables
     assert not (tmp_path / "manifest.json").exists()
     with duckdb.connect(str(path), read_only=True) as connection:
-        df_term = pl.read_database("SELECT * FROM term", connection)
+        df_term = pl.read_database(  # pyright: ignore[reportUnknownMemberType]  # Polars-DuckDB boundary
+            "SELECT * FROM term", connection
+        )
     row_child = (
         df_term.filter(pl.col("go_id") == "GO:0000002")
         .select("term_name", "definition", "is_obsolete")

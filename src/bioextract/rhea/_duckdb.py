@@ -321,7 +321,9 @@ def _load_rdf(connection: duckdb.DuckDBPyConnection, file_rdf: Path) -> None:
         )
         """
     )
-    participant_rows = []
+    participant_rows: list[
+        tuple[str, str, int, str, str | None, str, float | None, str | None]
+    ] = []
     for membership in snapshot.memberships:
         side = snapshot.sides[membership.side_id]
         participant = snapshot.participants.get(membership.participant_id)
