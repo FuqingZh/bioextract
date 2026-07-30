@@ -18,17 +18,25 @@ from bioextract._tidy import TidyAsset, TidyDataset, TidySource, TidyWriteReport
 
 from .brite.constant import (
     ASSET_SPECS as BRITE_ASSET_SPECS,
+)
+from .brite.constant import (
     MEDIA_TYPE_JSON,
+)
+from .brite.constant import (
     SCHEMA_VERSION as BRITE_SCHEMA_VERSION,
 )
 from .brite.tidy import build_tidy_frames as build_brite_tidy_frames
 from .mapping.constant import (
     ASSET_SPECS as MAPPING_ASSET_SPECS,
-    KeggInputIdKind,
+)
+from .mapping.constant import (
     MEDIA_TYPE_TSV,
     SCHEMA_GROUP_INPUT_IDS,
     SCHEMA_GROUPS,
     SCHEMA_UNMAPPED,
+    KeggInputIdKind,
+)
+from .mapping.constant import (
     SCHEMA_VERSION as MAPPING_SCHEMA_VERSION,
 )
 from .mapping.util import (

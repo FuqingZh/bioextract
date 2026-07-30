@@ -5,7 +5,6 @@ import pytest
 
 from bioextract._shared import create_group_input_frames
 
-
 SCHEMA_GROUPS = {"GroupId": pl.String}
 SCHEMA_GROUP_INPUT_IDS = {"GroupId": pl.String, "InputId": pl.String}
 

@@ -20,8 +20,14 @@ from .spec import OmniPathResourceLimits
 from .util import (
     extract_enzsub_frame,
     extract_interactions_frame,
+)
+from .util import (
     has_any_enzsub_modification as has_any_enzsub_modification_in_file,
+)
+from .util import (
     has_any_enzsub_relation as has_any_enzsub_relation_in_file,
+)
+from .util import (
     has_any_interaction_relation as has_any_interaction_relation_in_file,
 )
 
@@ -72,7 +78,7 @@ class OmniPathDb:
         file_enzsub: os.PathLike[str] | str | None = None,
         file_interactions: os.PathLike[str] | str | None = None,
         limits: OmniPathResourceLimits | None = None,
-    ) -> "OmniPathDb":
+    ) -> OmniPathDb:
         """Create a dataset handle from local OmniPath files.
 
         Args:

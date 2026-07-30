@@ -103,10 +103,9 @@ def select_mapping_frame(
         cols_out = list(cols_group_id) + ["InputId", "KindInputId"] + COLS_MAPPING
         return pl.DataFrame(
             schema={
-                **{
-                    col: pl.String
-                    for col in list(cols_group_id) + ["InputId", "KindInputId"]
-                },
+                **dict.fromkeys(
+                    list(cols_group_id) + ["InputId", "KindInputId"], pl.String
+                ),
                 **SCHEMA_MAPPING,
             }
         ).select(cols_out)
@@ -193,7 +192,7 @@ def read_interpro_xml_frames(file_interpro_xml: Path | None) -> dict[str, pl.Dat
     entries: list[dict[str, str | None]] = []
     members: list[dict[str, str]] = []
     with gzip.open(file_interpro_xml, "rb") as handle:
-        for event, elem in ET.iterparse(handle, events=("end",)):
+        for _event, elem in ET.iterparse(handle, events=("end",)):
             if elem.tag != "interpro":
                 continue
             interpro_id = elem.attrib.get("id")
