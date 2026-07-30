@@ -6,9 +6,9 @@ Status: current
 
 ## Goal
 
-`bioextract` owns local resource snapshot access. The GO and KEGG tidy layer
-turns raw local snapshots into stable Polars frames and optional parquet
-artifacts. Manifest writing is optional.
+`bioextract` owns local resource snapshot access. GO exposes a multi-relation
+ontology and publishes it as DuckDB. A KEGG BRITE or mapping product is an
+independent relation and publishes as Parquet.
 
 The implemented MVP covers:
 
@@ -17,8 +17,8 @@ The implemented MVP covers:
 - GO term selection by ID, namespace, and subset membership
 - KEGG BRITE JSON to pathway tidy tables
 - in-memory use through `build_tidy().frames`
-- persisted use through `build_tidy().write(dir_out)`
-- optional manifest use through `build_tidy().write(dir_out, should_write_manifest=True)`
+- persisted GO use through `write_duckdb(path)`
+- persisted KEGG use through `write_parquet(path)`
 
 The MVP intentionally does not cover:
 
@@ -30,35 +30,33 @@ The MVP intentionally does not cover:
 ## Public API
 
 ```python
-from bioextract.go import GoDb
-from bioextract.kegg import KeggDb
+from bioextract.go import GODatabase
+from bioextract.kegg import KEGGDatabase
 
-go = GoDb.from_obo("go-basic.obo")
+go = GODatabase.from_obo("go-basic.obo")
 go_tidy = go.build_tidy()
 df_terms = go_tidy.frames["term"]
 df_subsets = go.list_subsets()
 df_goslim_generic = go.select_terms(
     subset_id="goslim_generic",
 )
-go_report = go_tidy.write("out/go-basic")
-go_report_with_manifest = go_tidy.write(
-    "out/go-basic-archive",
-    should_write_manifest=True,
-)
+go_result = go.write_duckdb("out/go.duckdb")
 
-kegg_tidy = KeggDb.from_brite_json("br08901.json").build_tidy()
+kegg_tidy = KEGGDatabase.from_brite_json("br08901.json").build_tidy()
 df_pathway = kegg_tidy.frames["pathway"]
-kegg_report = kegg_tidy.write("out/br08901")
+kegg_result = KEGGDatabase.from_brite_json("br08901.json").write_parquet(
+    "out/kegg.parquet"
+)
 ```
 
-`write_tidy(dir_out)` is available as a convenience wrapper around
-`build_tidy().write(dir_out)`.
+Legacy directory writers remain only for migration. New callers use the
+single-file writers above.
 
 ## Data Flow
 
-`GoDb` and `KeggDb` are path-first resource handles. They validate file
-existence and configured size limits during construction, but they do not parse
-the raw resource until `build_tidy()`.
+`GODatabase` and `KEGGDatabase` are path-first resource handles. They validate
+file existence during construction, but they do not parse the raw resource
+until a read, selection, or write operation requires it.
 
 GO OBO parsing is stanza-streamed through `scan_obo_term_records()`. The tidy
 builder consumes records once into column buffers, then materializes Polars
@@ -76,45 +74,25 @@ additional dependency such as `ijson`; that is out of scope for this MVP.
 
 ## Output Contract
 
-GO ontology tidy output:
+GO ontology DuckDB tables:
 
 ```text
-term.parquet
-edge.parquet
-synonym.parquet
-xref.parquet
-alt_id.parquet
-subset_membership.parquet
-subset_definition.parquet
-ancestor_all.parquet
-depth.parquet
+term
+term_relation
+term_synonym
+term_xref
+term_alternate_id
+subset_membership
+subset_definition
+term_ancestor
+term_depth
 ```
 
-KEGG BRITE tidy output:
+KEGG BRITE output:
 
 ```text
-pathway.parquet
+kegg.parquet
 ```
 
-When `should_write_manifest=True`, `manifest.json` is also written. The manifest
-contains:
-
-- `build_id`
-- `schema_version`
-- `generated_at`
-- `sources`
-- `assets`
-
-Each asset entry contains:
-
-- `path`
-- `kind`
-- `sha256`
-- `is_optional`
-
-The output is intentionally flat because `bioextract` is library-first. The
-prior `biotidy` `canonical/` and `derived/` directories are not part of the
-new default contract.
-
-`row_count` is no longer part of the manifest contract. Asset hashing is also
-opt-in rather than mandatory.
+GO provenance and table counts are stored in `_bioextract`. KEGG provenance is
+embedded in the Parquet footer. Neither output requires a sidecar.

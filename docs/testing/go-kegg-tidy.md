@@ -23,7 +23,7 @@ and tidy writing. The current architecture is documented in
 [`tests/test_kegg_tidy.py`](../../tests/test_kegg_tidy.py) verifies:
 
 - pathway-level and entry/KO parsing variants
-- BRITE tidy frame schemas and flat Parquet output
+- BRITE tidy frame schemas and single-relation Parquet output
 - direct and legacy tidy writers
 
 The tests use compact local fixtures. They do not call remote GO or KEGG

@@ -6,9 +6,8 @@ import sqlite3
 from pathlib import Path
 
 import polars as pl
-import pytest
 
-from bioextract.eggnog import EggnogDb
+from bioextract.eggnog import EggNOGDatabase
 
 
 def write_eggnog_fixture(tmp_path: Path) -> dict[str, Path]:
@@ -55,9 +54,9 @@ def write_eggnog_fixture(tmp_path: Path) -> dict[str, Path]:
 
 def test_extract_mapping_from_sqlite_expands_og_cog_categories(tmp_path: Path) -> None:
     files = write_eggnog_fixture(tmp_path)
-    db = EggnogDb.from_files(
-        file_eggnog_db=files["db"],
-        file_cog_fun=files["cog_fun"],
+    db = EggNOGDatabase.from_files(
+        eggnog_database=files["db"],
+        cog_functions=files["cog_fun"],
     )
 
     df_mapping = db.extract_mapping()
@@ -104,79 +103,75 @@ def test_extract_mapping_from_sqlite_expands_og_cog_categories(tmp_path: Path) -
 
 def test_select_ids_queries_subset_and_reports_unmapped(tmp_path: Path) -> None:
     files = write_eggnog_fixture(tmp_path)
-    db = EggnogDb.from_files(
-        file_eggnog_db=files["db"],
-        file_cog_fun=files["cog_fun"],
+    db = EggNOGDatabase.from_files(
+        eggnog_database=files["db"],
+        cog_functions=files["cog_fun"],
     )
 
     selection = db.select_ids(
         ["9606.ENSP1", "9606.MISSING"],
-        kind_input_id="eggnog_protein",
     )
 
     df_mapping = selection.extract_mapping()
-    assert df_mapping.select("InputId", "KindInputId", "CogCategory").to_dicts() == [
+    assert df_mapping.select("InputId", "InputNamespace", "CogCategory").to_dicts() == [
         {
             "InputId": "9606.ENSP1",
-            "KindInputId": "eggnog_protein",
+            "InputNamespace": "eggnog_protein",
             "CogCategory": "E",
         },
         {
             "InputId": "9606.ENSP1",
-            "KindInputId": "eggnog_protein",
+            "InputNamespace": "eggnog_protein",
             "CogCategory": "G",
         },
         {
             "InputId": "9606.ENSP1",
-            "KindInputId": "eggnog_protein",
+            "InputNamespace": "eggnog_protein",
             "CogCategory": "S",
         },
     ]
-    assert selection.extract_unmapped_input_ids().to_dicts() == [
-        {"InputId": "9606.MISSING"}
-    ]
+    assert selection.extract_unmatched_ids().to_dicts() == [{"InputId": "9606.MISSING"}]
 
 
 def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     files = write_eggnog_fixture(tmp_path)
-    db = EggnogDb.from_files(
-        file_eggnog_db=files["db"],
-        file_cog_fun=files["cog_fun"],
+    db = EggNOGDatabase.from_files(
+        eggnog_database=files["db"],
+        cog_functions=files["cog_fun"],
     )
 
     selection = db.select_groups(
         {"up": ["9606.ENSP1"], "down": ["9606.MISSING"]},
-        kind_input_id="eggnog_protein",
     )
 
     assert selection.extract_mapping().columns[:3] == [
         "GroupId",
         "InputId",
-        "KindInputId",
+        "InputNamespace",
     ]
     assert selection.extract_mapping().select("GroupId", "CogCategory").to_dicts() == [
         {"GroupId": "up", "CogCategory": "E"},
         {"GroupId": "up", "CogCategory": "G"},
         {"GroupId": "up", "CogCategory": "S"},
     ]
-    assert selection.extract_unmapped_input_ids().to_dicts() == [
+    assert selection.extract_unmatched_ids().to_dicts() == [
         {"GroupId": "down", "InputId": "9606.MISSING"}
     ]
 
 
-def test_build_tidy_writes_mapping_parquet_and_manifest(tmp_path: Path) -> None:
+def test_write_parquet_writes_mapping_without_sidecar(tmp_path: Path) -> None:
     files = write_eggnog_fixture(tmp_path)
-    db = EggnogDb.from_files(
-        file_eggnog_db=files["db"],
-        file_cog_fun=files["cog_fun"],
+    db = EggNOGDatabase.from_files(
+        eggnog_database=files["db"],
+        cog_functions=files["cog_fun"],
     )
 
-    report = db.write_tidy(tmp_path / "out", should_write_manifest=True)
+    path = tmp_path / "eggnog.parquet"
+    result = db.write_parquet(path)
 
-    assert report.manifest is not None
-    assert report.manifest["schema_version"] == "eggnog-mapping-v0.1"
-    assert [asset.path for asset in report.assets] == ["mapping.parquet"]
-    assert pl.read_parquet(tmp_path / "out" / "mapping.parquet").height == 3
+    assert result.path == path
+    assert not (tmp_path / "manifest.json").exists()
+    assert pl.read_parquet(path).height == 3
 
 
 def test_gzip_sqlite_is_decompressed_to_tmp_dir(tmp_path: Path) -> None:
@@ -188,26 +183,17 @@ def test_gzip_sqlite_is_decompressed_to_tmp_dir(tmp_path: Path) -> None:
     ):
         shutil.copyfileobj(handle_in, handle_out)
 
-    db = EggnogDb.from_files(
-        file_eggnog_db=file_gz,
-        file_cog_fun=files["cog_fun"],
-        dir_tmp=tmp_path / "tmp",
+    db = EggNOGDatabase.from_files(
+        eggnog_database=file_gz,
+        cog_functions=files["cog_fun"],
+        temp_dir=tmp_path / "tmp",
     )
 
     assert (
         db.select_ids(
             ["9606.ENSP1"],
-            kind_input_id="eggnog_protein",
         )
         .extract_mapping()
         .height
         == 3
     )
-
-
-def test_validates_kind_input_id(tmp_path: Path) -> None:
-    files = write_eggnog_fixture(tmp_path)
-    db = EggnogDb.from_files(file_eggnog_db=files["db"])
-
-    with pytest.raises(ValueError, match="kind_input_id"):
-        db.select_ids(["9606.ENSP1"], kind_input_id="uniprot")  # type: ignore[arg-type]

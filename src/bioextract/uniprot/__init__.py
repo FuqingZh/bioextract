@@ -1,6 +1,5 @@
-from bioextract.uniprot.uniprot import UniprotDb, UniprotResourceLimits
+from bioextract.uniprot.uniprot import UniProtDatabase
 
 __all__ = [
-    "UniprotDb",
-    "UniprotResourceLimits",
+    "UniProtDatabase",
 ]

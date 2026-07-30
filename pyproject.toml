@@ -1,12 +1,13 @@
 [project]
 name = "bioextract"
 version = "0.1.0"
-description = "Library-first extraction helpers for bioinformatics resource snapshots."
+description = "Stable, provenance-aware domain access to biological database snapshots."
 authors = [
     {name = "FuqingZh", email = "fu.qing.zhang.work@gmail.com"},
 ]
 dependencies = [
     "polars>=1.39.3",
+    "duckdb>=1.4.0",
 ]
 requires-python = ">=3.13"
 readme = "README.md"

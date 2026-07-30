@@ -1,4 +1,4 @@
-# InterProDb Architecture
+# InterProDatabase Architecture
 
 Version: v1.0
 Date: 2026-07-14
@@ -6,7 +6,7 @@ Status: current
 
 ## Goal
 
-`bioextract.interpro.InterProDb` provides path-first access to local InterPro
+`bioextract.interpro.InterProDatabase` provides path-first access to local InterPro
 protein-domain mapping resources and exposes a stable UniProt-to-InterPro
 annotation table for downstream enrichment and annotation joins.
 
@@ -28,7 +28,7 @@ It intentionally does not cover:
 
 ## Raw Inputs
 
-`InterProDb.from_mapping_files()` accepts exact file paths:
+`InterProDatabase.from_mapping_files()` accepts exact file paths:
 
 ```text
 protein2ipr.dat.gz
@@ -47,18 +47,18 @@ If XML is absent, those columns remain null.
 ## Public API
 
 ```python
-from bioextract.interpro import InterProDb
+from bioextract.interpro import InterProDatabase
 
-db = InterProDb.from_mapping_files(
-    file_protein2ipr="protein2ipr.dat.gz",
-    file_interpro_xml="interpro.xml.gz",
+db = InterProDatabase.from_mapping_files(
+    protein_to_interpro="protein2ipr.dat.gz",
+    interpro_xml="interpro.xml.gz",
 )
 
 df_mapping = db.extract_mapping()
 
-selection = db.select_ids(["P04637"], kind_input_id="uniprot")
+selection = db.select_ids(["P04637"], namespace="uniprot")
 df_selected = selection.extract_mapping()
-df_unmapped = selection.extract_unmapped_input_ids()
+df_unmapped = selection.extract_unmatched_ids()
 ```
 
 Grouped selections mirror the other DB contracts by prepending `GroupId`.
@@ -66,20 +66,16 @@ Grouped selections mirror the other DB contracts by prepending `GroupId`.
 Compact Pfam publication is an InterPro tidy configuration:
 
 ```python
-from bioextract.interpro import InterProDb
+from bioextract.interpro import InterProDatabase
 
-db = InterProDb.from_mapping_files(
-    file_protein2ipr="108.0/raw/protein2ipr.dat.gz",
-    file_interpro_xml="108.0/raw/interpro.xml.gz",
+db = InterProDatabase.from_mapping_files(
+    protein_to_interpro="108.0/raw/protein2ipr.dat.gz",
+    interpro_xml="108.0/raw/interpro.xml.gz",
 )
 
-dataset = db.build_tidy(config="pfam")
-report = db.write_tidy(
-    "108.0/tidy/pfam",
+result = db.write_duckdb(
+    "108.0/interpro_pfam.duckdb",
     config="pfam",
-    should_write_manifest=True,
-    should_hash_sources=True,
-    should_hash_assets=True,
 )
 ```
 
@@ -107,27 +103,23 @@ The contract stays row-level:
 - one InterPro entry can emit multiple member-database rows
 - positional coordinates remain attached to each row
 
-## Tidy Writing
+## Publication
 
-`write_tidy()` emits:
-
-```text
-mapping.parquet
-manifest.json
-```
+`write_parquet(path)` publishes the independent InterPro mapping.
+`write_duckdb(path, config="pfam")` publishes the related Pfam
+`protein_term`, `term`, and `term_xref` relations together.
 
 The write path is lazy:
 
 1. scan `protein2ipr.dat.gz`
 2. lazy-join XML-derived entry/member lookup frames when present
-3. `sink_parquet()` directly to the final artifact
+3. `sink_parquet()` to a staging artifact before atomic publication
 
 This keeps the main publication path aligned with the shared tidy contract
 without forcing a full materialized DataFrame before write.
 
-`build_tidy()` and `write_tidy()` default to `config="mapping"`.
-`config="pfam"` selects the compact Pfam asset contract without adding a
-parallel standalone API.
+`build_tidy()` exposes the lazy relation plan; `write_parquet(path)` and
+`write_duckdb(path)` publish its single- and multi-relation products.
 
 ## Pfam Compact Contract
 
@@ -176,7 +168,7 @@ xref outputs are not materialized before their Parquet sinks.
 
 ## Selection Contract
 
-Accepted `kind_input_id` values:
+Accepted `namespace` values:
 
 ```text
 uniprot
@@ -186,7 +178,7 @@ Single selection output prepends:
 
 ```text
 InputId
-KindInputId
+InputNamespace
 ```
 
 Grouped selection output prepends:
@@ -194,10 +186,10 @@ Grouped selection output prepends:
 ```text
 GroupId
 InputId
-KindInputId
+InputNamespace
 ```
 
-`extract_unmapped_input_ids()` follows the same single/grouped shape as the
+`extract_unmatched_ids()` follows the same single/grouped shape as the
 other DBs.
 
 ## Real Snapshot Status
@@ -209,5 +201,5 @@ The validated local InterPro snapshot is:
 ```
 
 Published tidy output validation is recorded in the
-[InterProDb test standard](../testing/interpro-db.md) and the
+[InterProDatabase test standard](../testing/interpro-db.md) and the
 [InterPro 108.0 benchmark](../benchmarks/20260714-v1.0-interpro-108-benchmark.md).

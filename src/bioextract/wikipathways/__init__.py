@@ -1,11 +1,9 @@
 from bioextract.wikipathways.wikipathways import (
-    WikiPathwaysDb,
-    WikiPathwaysResourceLimits,
+    WikiPathwaysDatabase,
     WikiPathwaysTidyDataset,
 )
 
 __all__ = [
-    "WikiPathwaysDb",
-    "WikiPathwaysResourceLimits",
+    "WikiPathwaysDatabase",
     "WikiPathwaysTidyDataset",
 ]

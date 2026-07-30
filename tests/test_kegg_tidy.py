@@ -3,8 +3,7 @@ from pathlib import Path
 
 import polars as pl
 
-from bioextract.kegg import KeggDb
-from bioextract.kegg.brite import run_tidy_kegg_brite
+from bioextract.kegg import KEGGDatabase
 from bioextract.kegg.brite.parse import parse_entry_and_ko, parse_pathway_level3
 
 
@@ -86,33 +85,23 @@ def test_parse_entry_and_ko_supports_entry_only_leaf() -> None:
     assert leaf.ko is None
 
 
-def test_kegg_db_build_tidy_exposes_frames_and_write_contract(tmp_path: Path) -> None:
+def test_kegg_db_build_tidy_exposes_frames_and_writes_parquet(tmp_path: Path) -> None:
     file_in = tmp_path / "tcar00001.json"
-    dir_out = tmp_path / "tidy"
+    path = tmp_path / "kegg.parquet"
     write_minimal_brite_json(file_in)
 
-    tidy = KeggDb.from_brite_json(file_in).build_tidy()
+    db = KEGGDatabase.from_brite_json(file_in)
+    tidy = db.build_tidy()
 
     assert set(tidy.frames) == {"pathway"}
     assert tidy.frames["pathway"].select(pl.len()).collect().item() == 2
 
-    report = tidy.write(dir_out)
+    result = db.write_parquet(path)
+    assert result.path == path
+    assert not (tmp_path / "manifest.json").exists()
+    assert pl.read_parquet(path).height == 2
 
-    assert report.manifest is None
-    assert len(report.assets) == 1
-    assert (dir_out / "pathway.parquet").exists()
-    assert not (dir_out / "manifest.json").exists()
-
-    report_manifest = tidy.write(dir_out / "with_manifest", should_write_manifest=True)
-    assert report_manifest.manifest is not None
-    assert report_manifest.manifest["schema_version"] == "kegg-brite-tidy-v0.1"
-    data_manifest = json.loads(
-        (dir_out / "with_manifest" / "manifest.json").read_text("utf-8")
-    )
-    assert data_manifest["sources"][0]["path"] == file_in.as_posix()
-    assert data_manifest["sources"][0]["media_type"] == "application/json"
-
-    df_pathway = pl.read_parquet(dir_out / "pathway.parquet")
+    df_pathway = pl.read_parquet(path)
     assert df_pathway.to_dicts()[0] == {
         "pathway_level1_id": "09100",
         "pathway_level1_name": "Metabolism",
@@ -126,15 +115,3 @@ def test_kegg_db_build_tidy_exposes_frames_and_write_contract(tmp_path: Path) ->
         "ko_id": "K00845",
         "ko_name": "glk; glucokinase [EC:2.7.1.2]",
     }
-
-
-def test_legacy_kegg_tidy_runner_still_writes_contract(tmp_path: Path) -> None:
-    file_in = tmp_path / "tcar00001.json"
-    dir_out = tmp_path / "legacy"
-    write_minimal_brite_json(file_in, has_leaf=False)
-
-    run_tidy_kegg_brite(file_in=file_in, dir_out=dir_out)
-
-    df_pathway = pl.read_parquet(dir_out / "pathway.parquet")
-    assert df_pathway.height == 1
-    assert df_pathway.to_dicts()[0]["entry_id"] is None

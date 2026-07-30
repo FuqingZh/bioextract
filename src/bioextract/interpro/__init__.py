@@ -1,14 +1,12 @@
 from .interpro import (
-    InterProDb,
-    InterProResourceLimits,
+    InterProDatabase,
     InterProSelection,
     InterProTidyConfig,
     InterProTidyDataset,
 )
 
 __all__ = [
-    "InterProDb",
-    "InterProResourceLimits",
+    "InterProDatabase",
     "InterProSelection",
     "InterProTidyConfig",
     "InterProTidyDataset",

@@ -1,7 +1,8 @@
-from bioextract.kegg.kegg import KeggDb, KeggResourceLimits, KeggTidyDataset
+from bioextract.kegg.kegg import KEGGDatabase, KeggTidyDataset
+from bioextract.kegg.mapping.constant import KEGGNamespace
 
 __all__ = [
-    "KeggDb",
-    "KeggResourceLimits",
+    "KEGGDatabase",
+    "KEGGNamespace",
     "KeggTidyDataset",
 ]

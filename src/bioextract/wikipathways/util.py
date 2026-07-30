@@ -153,7 +153,7 @@ def extract_mapping_frame(
     )
 
 
-def extract_unmapped_input_ids_frame(
+def extract_unmatched_ids_frame(
     df_input_ids: pl.DataFrame,
     lf_mapping: pl.LazyFrame,
     *,

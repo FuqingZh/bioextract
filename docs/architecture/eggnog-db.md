@@ -1,4 +1,4 @@
-# EggnogDb Architecture
+# EggNOGDatabase Architecture
 
 Version: v1.0
 Date: 2026-07-14
@@ -6,7 +6,7 @@ Status: current
 
 ## Goal
 
-`bioextract.eggnog.EggnogDb` provides path-first access to local eggNOG mapper
+`bioextract.eggnog.EggNOGDatabase` provides path-first access to local eggNOG mapper
 resources and exposes a stable protein-to-COG annotation table for downstream
 selection, enrichment-input extraction, and resource publication.
 
@@ -27,7 +27,7 @@ It intentionally does not cover:
 
 ## Raw Inputs
 
-`EggnogDb.from_files()` accepts exact file paths:
+`EggNOGDatabase.from_files()` accepts exact file paths:
 
 ```text
 eggnog.db.gz
@@ -47,21 +47,21 @@ and leaves `CogClass` / `CogName` null.
 ## Public API
 
 ```python
-from bioextract.eggnog import EggnogDb
+from bioextract.eggnog import EggNOGDatabase
 
-db = EggnogDb.from_files(
-    file_eggnog_db="eggnog.db.gz",
-    file_cog_fun="cog-24.fun.tab",
+db = EggNOGDatabase.from_files(
+    eggnog_database="eggnog.db.gz",
+    cog_functions="cog-24.fun.tab",
 )
 
 df_mapping = db.extract_mapping()
 
 selection = db.select_ids(
     ["9606.ENSP00000369497"],
-    kind_input_id="eggnog_protein",
+    namespace="eggnog_protein",
 )
 df_selected = selection.extract_mapping()
-df_unmapped = selection.extract_unmapped_input_ids()
+df_unmapped = selection.extract_unmatched_ids()
 ```
 
 Grouped selections prepend `GroupId` in the same style as other resource DBs.
@@ -87,14 +87,10 @@ Many-to-many expansion is preserved:
 
 This keeps the output auditable and easy to project into downstream term tables.
 
-## Tidy Writing
+## Publication
 
-`write_tidy()` emits:
-
-```text
-mapping.parquet
-manifest.json
-```
+`write_parquet(path)` emits one independently usable mapping relation.
+Identity and source provenance are embedded in its footer.
 
 The writer does not materialize the full table in Python memory before parquet
 write. The implemented path is:
@@ -102,7 +98,7 @@ write. The implemented path is:
 1. open local eggNOG SQLite, decompressing `.gz` to `dir_tmp` when needed
 2. stream expanded rows into a temporary TSV
 3. scan the TSV lazily with Polars
-4. `sink_parquet()` into the final tidy artifact
+4. `sink_parquet()` into a staging file and atomically publish it
 
 `build_tidy()` is intentionally not offered as a stable full-resource lazy
 dataset handle for the SQLite source, because its lazy plan depends on a
@@ -110,7 +106,7 @@ materialized intermediate TSV with temporary lifetime.
 
 ## Selection Contract
 
-Accepted `kind_input_id` values:
+Accepted `namespace` values:
 
 ```text
 eggnog_protein
@@ -120,7 +116,7 @@ Single selection output prepends:
 
 ```text
 InputId
-KindInputId
+InputNamespace
 ```
 
 Grouped selection output prepends:
@@ -128,10 +124,10 @@ Grouped selection output prepends:
 ```text
 GroupId
 InputId
-KindInputId
+InputNamespace
 ```
 
-`extract_unmapped_input_ids()` returns `InputId` for single selection and
+`extract_unmatched_ids()` returns `InputId` for single selection and
 `GroupId, InputId` for grouped selection.
 
 ## Real Snapshot Status
@@ -149,5 +145,5 @@ The local COG function lookup is:
 ```
 
 Validation details are recorded in the
-[EggnogDb test standard](../testing/eggnog-db.md) and the
+[EggNOGDatabase test standard](../testing/eggnog-db.md) and the
 [eggNOG 5.0.2 benchmark](../benchmarks/20260608-v1.0-eggnog-5.0.2-benchmark.md).

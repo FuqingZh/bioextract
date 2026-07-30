@@ -1,4 +1,4 @@
-# UniprotDb Architecture
+# UniProtDatabase Architecture
 
 Version: v1.0
 Date: 2026-07-14
@@ -6,7 +6,7 @@ Status: current
 
 ## Goal
 
-`bioextract.uniprot.UniprotDb` provides path-first access to UniProt
+`bioextract.uniprot.UniProtDatabase` provides path-first access to UniProt
 `idmapping_selected` resources. The resource is large, so the database handle
 must not load data during construction. It supports raw UniProt selected
 mapping files, normalized parquet files, and hive parquet datasets from
@@ -67,22 +67,22 @@ All columns are normalized as strings.
 ## Public API
 
 ```python
-from bioextract.uniprot import UniprotDb
+from bioextract.uniprot import UniProtDatabase
 
-db = UniprotDb.from_files(
-    file_idmapping_selected="idmapping_selected.tab.gz",
+db = UniProtDatabase.from_files(
+    id_mapping="idmapping_selected.tab.gz",
 )
 
 df_hsa = db.with_taxids("9606").extract_mapping()
 
-db.with_taxids("9606", "10090").write_tidy("out/uniprot")
-db.write_tidy("out/uniprot-all", should_allow_all=True)
+db.with_taxids("9606", "10090").write_parquet("out/uniprot.parquet")
+db.write_parquet("out/uniprot-all.parquet", allow_all_taxa=True)
 ```
 
 The same constructor accepts tidy outputs:
 
 ```python
-db = UniprotDb.from_files(file_idmapping_selected="out/uniprot")
+db = UniProtDatabase.from_files(id_mapping="out/uniprot")
 df_hsa = db.with_taxids("9606").extract_mapping()
 ```
 
@@ -96,39 +96,24 @@ df_hsa = db.with_taxids("9606").extract_mapping()
 - hive dataset directories contain at least one parquet file
 
 It does not read the raw data or collect parquet schemas. Schema validation is
-done by `validate_schema()`, `extract_mapping()`, and `write_tidy()`.
+done by `validate_schema()`, `extract_mapping()`, and `write_parquet()`.
 
-## Tidy Output
+## Publication
 
-Tidy writing emits one canonical parquet file:
-
-```text
-out/
-  mapping.parquet
-  manifest.json
-```
-
-`write_tidy()` requires `should_allow_all=True` when no taxids are selected,
+`write_parquet(path)` publishes one canonical idmapping relation with
+footer provenance. It requires `allow_all_taxa=True` when no taxids are selected,
 because all-taxa export may scan the entire 9 GB raw gzip file.
-The writer uses zstd compression by default; callers can pass
-`level_compression` to tune the zstd compression level.
-
-Existing non-empty outputs are controlled by `policy_existing`:
-
-```text
-error      raise FileExistsError
-overwrite  replace the output directory
-skip       return a write report without rewriting files
-```
+`if_exists="fail"` protects an existing file; `"replace"` publishes through a
+staging file.
 
 For UniProt knowledge-base flat files, the implemented helper path is:
 
 ```python
-db = UniprotDb.from_dat(
-    file_dat="uniprot_sprot.dat.gz",
-    source_db="Swiss-Prot",
+db = UniProtDatabase.from_dat(
+    path="uniprot_sprot.dat.gz",
+    source_database="Swiss-Prot",
 )
-report = db.write_eggnog_xref_tidy("out/uniprot-eggnog-xref")
+result = db.write_eggnog_xref_parquet("out/uniprot_eggnog_xref.parquet")
 ```
 
 That path emits a canonical `mapping.parquet` with:
@@ -145,16 +130,18 @@ SourceDb
 Swiss-Prot subcellular location comments use the same flat-file constructor:
 
 ```python
-db = UniprotDb.from_dat(
-    file_dat="uniprot_sprot.dat.gz",
-    source_db="sprot",
+db = UniProtDatabase.from_dat(
+    path="uniprot_sprot.dat.gz",
+    source_database="sprot",
 )
 
 df_subcell = db.extract_subcellular_location()
-report = db.write_subcellular_location_tidy("out/subcellular_location")
+result = db.write_subcellular_location_parquet(
+    "out/uniprot_subcellular_location.parquet"
+)
 ```
 
-That path emits `data.parquet` with one row per
+That path emits one Parquet with one row per
 `UniProt accession x subcellular location text x evidence`:
 
 ```text
@@ -181,7 +168,7 @@ localization evidence.
 Raw TSV and parquet inputs are scanned lazily. Tidy writing uses Polars
 `sink_parquet()`, so large writes do not need to collect the full table in
 memory before writing. Hive parquet dataset reading remains supported for
-compatibility, but `write_tidy()` no longer creates `TaxId=` partitioned output
+compatibility, but `write_parquet()` publishes one selected relation rather than `TaxId=` partitioned output
 because UniProt all-taxa data has very high `TaxId` cardinality.
 
 The shared tidy contract has also changed since the first draft:

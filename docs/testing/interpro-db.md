@@ -1,4 +1,4 @@
-# InterProDb Test Standard
+# InterProDatabase Test Standard
 
 Version: v1.0
 Date: 2026-07-14
@@ -6,7 +6,7 @@ Status: current
 
 ## Scope
 
-The InterProDb test standard covers:
+The InterProDatabase test standard covers:
 
 - lightweight construction
 - `protein2ipr.dat.gz` parsing
@@ -29,11 +29,11 @@ It does not cover:
 - `from_mapping_files()` accepts required and optional files.
 - `extract_mapping()` returns the normalized mapping columns.
 - XML enrichment fills `InterProType` and `MemberDb` when present.
-- `select_ids(..., kind_input_id="uniprot")` returns filtered rows.
-- `select_groups(..., kind_input_id="uniprot")` preserves `GroupId`.
+- `select_ids(..., namespace="uniprot")` returns filtered rows.
+- `select_groups(..., namespace="uniprot")` preserves `GroupId`.
 - unmapped IDs are reported correctly.
-- `write_tidy()` writes canonical `mapping.parquet`.
-- invalid `kind_input_id` raises targeted `ValueError`.
+- `write_parquet(path)` writes canonical mapping output with provenance.
+- invalid `namespace` raises targeted `ValueError`.
 - duplicate positional Pfam matches collapse to one protein-term row.
 - non-PFAM signatures are excluded.
 - Pfam names remain distinct from InterPro entry names.

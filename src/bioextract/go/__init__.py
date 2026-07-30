@@ -1,15 +1,13 @@
 from bioextract.go.go import (
-    GoDb,
+    GODatabase,
     GoNamespace,
-    GoResourceLimits,
     GoSubsetId,
     GoTidyDataset,
 )
 
 __all__ = [
-    "GoDb",
+    "GODatabase",
     "GoNamespace",
-    "GoResourceLimits",
     "GoSubsetId",
     "GoTidyDataset",
 ]

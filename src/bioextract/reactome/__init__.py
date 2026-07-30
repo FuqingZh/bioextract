@@ -1,11 +1,9 @@
 from bioextract.reactome.reactome import (
-    ReactomeDb,
-    ReactomeResourceLimits,
+    ReactomeDatabase,
     ReactomeTidyDataset,
 )
 
 __all__ = [
-    "ReactomeDb",
-    "ReactomeResourceLimits",
+    "ReactomeDatabase",
     "ReactomeTidyDataset",
 ]

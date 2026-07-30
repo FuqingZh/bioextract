@@ -3,12 +3,13 @@ from __future__ import annotations
 import gzip
 from pathlib import Path
 
+import duckdb
 import polars as pl
 import pytest
 from polars.testing import assert_frame_equal
 
 import bioextract.interpro as interpro
-from bioextract.interpro import InterProDb
+from bioextract.interpro import InterProDatabase
 
 
 def write_interpro_snapshot(
@@ -69,89 +70,67 @@ def write_interpro_snapshot(
     return file_protein2ipr, file_xml
 
 
-def test_write_pfam_tidy_emits_compact_assets_and_hashes(tmp_path: Path) -> None:
+def test_write_pfam_duckdb_emits_compact_relations(tmp_path: Path) -> None:
     file_protein2ipr, file_xml = write_interpro_snapshot(tmp_path)
-    dir_out = tmp_path / "out"
+    path = tmp_path / "interpro_pfam.duckdb"
 
-    db = InterProDb.from_mapping_files(
-        file_protein2ipr=file_protein2ipr,
-        file_interpro_xml=file_xml,
+    db = InterProDatabase.from_mapping_files(
+        protein_to_interpro=file_protein2ipr,
+        interpro_xml=file_xml,
     )
-    report = db.write_tidy(
-        dir_out,
-        config="pfam",
-        should_write_manifest=True,
-        should_hash_sources=True,
-        should_hash_assets=True,
-    )
+    result = db.write_duckdb(path)
 
-    assert report.manifest is not None
-    assert report.manifest["schema_version"] == "interpro-pfam-v0.1"
-    assert [asset.path for asset in report.assets] == [
-        "protein_term.parquet",
-        "term.parquet",
-        "term_xref.parquet",
-    ]
-    assert all(
-        isinstance(sha256 := source.get("sha256"), str) and len(sha256) == 64
-        for source in report.manifest["sources"]
-    )
-    assert all(
-        isinstance(asset["sha256"], str) and len(asset["sha256"]) == 64
-        for asset in report.manifest["assets"]
-    )
-
-    df_protein_term = pl.read_parquet(dir_out / "protein_term.parquet").sort(
-        "UniProtId", "PfamId"
-    )
+    assert result.tables == ("protein_term", "term", "term_xref")
+    with duckdb.connect(str(path), read_only=True) as connection:
+        df_protein_term = pl.read_database(
+            "SELECT * FROM protein_term", connection
+        ).sort("uniprot_id", "pfam_id")
+        df_term = pl.read_database("SELECT * FROM term", connection)
+        df_term_xref = pl.read_database("SELECT * FROM term_xref", connection)
     assert df_protein_term.schema == {
-        "UniProtId": pl.String,
-        "PfamId": pl.String,
+        "uniprot_id": pl.String,
+        "pfam_id": pl.String,
     }
     assert df_protein_term.to_dicts() == [
-        {"UniProtId": "P12345", "PfamId": "PF00051"},
-        {"UniProtId": "P12345", "PfamId": "PF00069"},
-        {"UniProtId": "Q9Y243", "PfamId": "PF00069"},
+        {"uniprot_id": "P12345", "pfam_id": "PF00051"},
+        {"uniprot_id": "P12345", "pfam_id": "PF00069"},
+        {"uniprot_id": "Q9Y243", "pfam_id": "PF00069"},
     ]
 
-    df_term = pl.read_parquet(dir_out / "term.parquet")
     assert df_term.to_dicts() == [
-        {"PfamId": "PF00051", "PfamName": "Kringle"},
-        {"PfamId": "PF00069", "PfamName": "Pkinase"},
+        {"pfam_id": "PF00051", "pfam_name": "Kringle"},
+        {"pfam_id": "PF00069", "pfam_name": "Pkinase"},
     ]
-    assert "InterPro Kringle domain" not in df_term.get_column("PfamName").to_list()
+    assert "InterPro Kringle domain" not in df_term.get_column("pfam_name").to_list()
 
-    df_term_xref = pl.read_parquet(dir_out / "term_xref.parquet")
     assert df_term_xref.to_dicts() == [
         {
-            "PfamId": "PF00051",
-            "InterProId": "IPR000001",
-            "InterProName": "InterPro Kringle domain",
-            "InterProType": "Domain",
+            "pfam_id": "PF00051",
+            "interpro_id": "IPR000001",
+            "interpro_name": "InterPro Kringle domain",
+            "interpro_type": "Domain",
         },
         {
-            "PfamId": "PF00069",
-            "InterProId": "IPR000002",
-            "InterProName": "Protein kinase domain",
-            "InterProType": "Homologous_superfamily",
+            "pfam_id": "PF00069",
+            "interpro_id": "IPR000002",
+            "interpro_name": "Protein kinase domain",
+            "interpro_type": "Homologous_superfamily",
         },
     ]
 
 
-def test_build_pfam_tidy_omits_source_hashes_by_default(tmp_path: Path) -> None:
+def test_build_pfam_tidy_keeps_lazy_frames(tmp_path: Path) -> None:
     file_protein2ipr, file_xml = write_interpro_snapshot(tmp_path)
 
-    db = InterProDb.from_mapping_files(
-        file_protein2ipr=file_protein2ipr,
-        file_interpro_xml=file_xml,
+    db = InterProDatabase.from_mapping_files(
+        protein_to_interpro=file_protein2ipr,
+        interpro_xml=file_xml,
     )
     dataset = db.build_tidy(config="pfam")
-    report = dataset.write(tmp_path / "out", should_write_manifest=True)
+    result = dataset.write_duckdb(tmp_path / "interpro_pfam.duckdb")
 
     assert dataset.schema_version == "interpro-pfam-v0.1"
-    assert report.manifest is not None
-    manifest = report.manifest
-    assert all("sha256" not in source for source in manifest["sources"])
+    assert result.tables == ("protein_term", "term", "term_xref")
     assert all(isinstance(frame, pl.LazyFrame) for frame in dataset.frames.values())
     assert dataset.frames["protein_term"].collect_schema() == pl.Schema(
         {"UniProtId": pl.String, "PfamId": pl.String}
@@ -238,9 +217,9 @@ def test_build_pfam_tidy_rejects_invalid_contracts(
     )
 
     with pytest.raises(ValueError, match=error):
-        InterProDb.from_mapping_files(
-            file_protein2ipr=file_protein2ipr,
-            file_interpro_xml=file_xml,
+        InterProDatabase.from_mapping_files(
+            protein_to_interpro=file_protein2ipr,
+            interpro_xml=file_xml,
         ).build_tidy(config="pfam")
 
 
@@ -255,17 +234,17 @@ def test_build_pfam_tidy_rejects_cross_version_inputs(tmp_path: Path) -> None:
     )
 
     with pytest.raises(ValueError, match="same snapshot directory"):
-        InterProDb.from_mapping_files(
-            file_protein2ipr=file_protein2ipr,
-            file_interpro_xml=file_xml,
+        InterProDatabase.from_mapping_files(
+            protein_to_interpro=file_protein2ipr,
+            interpro_xml=file_xml,
         ).build_tidy(config="pfam")
 
 
 def test_tidy_config_defaults_to_mapping(tmp_path: Path) -> None:
     file_protein2ipr, file_xml = write_interpro_snapshot(tmp_path)
-    db = InterProDb.from_mapping_files(
-        file_protein2ipr=file_protein2ipr,
-        file_interpro_xml=file_xml,
+    db = InterProDatabase.from_mapping_files(
+        protein_to_interpro=file_protein2ipr,
+        interpro_xml=file_xml,
     )
 
     assert set(db.build_tidy().frames) == {"mapping"}
@@ -278,7 +257,7 @@ def test_tidy_config_defaults_to_mapping(tmp_path: Path) -> None:
 
 def test_pfam_config_requires_xml(tmp_path: Path) -> None:
     file_protein2ipr, _file_xml = write_interpro_snapshot(tmp_path)
-    db = InterProDb.from_mapping_files(file_protein2ipr=file_protein2ipr)
+    db = InterProDatabase.from_mapping_files(protein_to_interpro=file_protein2ipr)
 
     with pytest.raises(ValueError, match="XML file is required"):
         db.build_tidy(config="pfam")
@@ -286,9 +265,9 @@ def test_pfam_config_requires_xml(tmp_path: Path) -> None:
 
 def test_rejects_unknown_tidy_config(tmp_path: Path) -> None:
     file_protein2ipr, file_xml = write_interpro_snapshot(tmp_path)
-    db = InterProDb.from_mapping_files(
-        file_protein2ipr=file_protein2ipr,
-        file_interpro_xml=file_xml,
+    db = InterProDatabase.from_mapping_files(
+        protein_to_interpro=file_protein2ipr,
+        interpro_xml=file_xml,
     )
 
     with pytest.raises(ValueError, match="tidy config"):

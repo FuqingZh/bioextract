@@ -11,7 +11,7 @@ from pathlib import Path
 
 import polars as pl
 
-from bioextract.stringdb import StringDb
+from bioextract.stringdb import STRINGDatabase
 
 try:
     import resource
@@ -76,27 +76,27 @@ def _create_group_queries(
         return {}
 
     num_proteins = len(protein_ids)
-    group_to_ids: dict[str, list[str]] = {}
+    ids_by_group: dict[str, list[str]] = {}
     for idx_group in range(num_groups):
         ids_group = [
             protein_ids[(idx_group * query_size + idx_query) % num_proteins]
             for idx_query in range(query_size)
         ]
-        group_to_ids[f"G{idx_group + 1:03d}"] = ids_group
-    return group_to_ids
+        ids_by_group[f"G{idx_group + 1:03d}"] = ids_group
+    return ids_by_group
 
 
 def _extract_edges_repeated_single_queries(
     *,
-    db: StringDb,
-    group_to_ids: dict[str, list[str]],
+    db: STRINGDatabase,
+    ids_by_group: dict[str, list[str]],
     thr_score_min: int,
 ) -> pl.DataFrame:
     df_edges_grouped: list[pl.DataFrame] = []
-    for group_id, input_ids in group_to_ids.items():
+    for group_id, input_ids in ids_by_group.items():
         df_edges_group = (
             db.select_ids(input_ids)
-            .with_score_min(thr_score_min)
+            .with_min_combined_score(thr_score_min)
             .extract_edges()
             .with_columns(pl.lit(group_id).alias("GroupId"))
             .select(["GroupId", "StringIdA", "StringIdB", "Score"])
@@ -150,29 +150,29 @@ def main() -> None:
             num_links=args.num_links,
             seed=args.seed,
         )
-        group_to_ids = _create_group_queries(
+        ids_by_group = _create_group_queries(
             protein_ids=protein_ids,
             num_groups=args.num_groups,
             query_size=args.query_size,
         )
-        db = StringDb.from_files(
-            file_aliases=file_aliases,
-            file_links=file_links,
+        db = STRINGDatabase.from_files(
+            aliases=file_aliases,
+            links=file_links,
         )
 
         case_repeated = _run_case(
             "repeated_single_queries",
             lambda: _extract_edges_repeated_single_queries(
                 db=db,
-                group_to_ids=group_to_ids,
+                ids_by_group=ids_by_group,
                 thr_score_min=args.thr_score_min,
             ),
         )
         case_grouped = _run_case(
             "grouped_query",
             lambda: (
-                db.select_groups(group_to_ids)
-                .with_score_min(args.thr_score_min)
+                db.select_groups(ids_by_group)
+                .with_min_combined_score(args.thr_score_min)
                 .extract_edges()
             ),
         )

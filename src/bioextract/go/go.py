@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import tarfile
+import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -9,8 +11,8 @@ from typing import Literal
 
 import polars as pl
 
-from bioextract._shared import validate_file_size
-from bioextract._tidy import TidyAsset, TidyDataset, TidySource, TidyWriteReport
+from bioextract._publication import DuckDBWriteResult
+from bioextract._tidy import TidyAsset, TidyDataset, TidySource
 
 from .ontology.constant import (
     ASSET_SPECS,
@@ -26,9 +28,8 @@ from .ontology.parse import (
 from .ontology.tidy import _build_tidy_frames, extract_subcell_frame
 
 __all__ = [
-    "GoDb",
+    "GODatabase",
     "GoNamespace",
-    "GoResourceLimits",
     "GoSubsetId",
     "GoTidyDataset",
 ]
@@ -50,13 +51,13 @@ class _GoNamespace(StrEnum):
 class GoSubsetId(StrEnum):
     """Provide named GO subset IDs without restricting arbitrary subset text.
 
-    `GoDb.select_terms()` also accepts ordinary strings so snapshots can expose
+    `GODatabase.select_terms()` also accepts ordinary strings so snapshots can expose
     subsets added outside this convenience enum.
 
     Examples:
         Select the generic GO slim terms without spelling its raw subset ID:
 
-        >>> db = GoDb.from_obo("data/go-basic.obo")
+        >>> db = GODatabase.from_obo("data/go-basic.obo")
         >>> db.select_terms(
         ...     subset_id=GoSubsetId.GOSLIM_GENERIC
         ... )["go_id"].to_list()
@@ -64,32 +65,6 @@ class GoSubsetId(StrEnum):
     """
 
     GOSLIM_GENERIC = GO_SUBSET_GOSLIM_GENERIC
-
-
-@dataclass(frozen=True, slots=True)
-class GoResourceLimits:
-    """Configure fail-fast limits for a GO OBO snapshot.
-
-    Attributes:
-        file_obo_bytes_max: Maximum on-disk OBO file size in bytes, or `None`
-            to disable the size check.
-
-    Examples:
-        Reject a snapshot before parsing when it exceeds the configured limit:
-
-        >>> from tempfile import TemporaryDirectory
-        >>> with TemporaryDirectory() as dir_tmp:
-        ...     file_obo = Path(dir_tmp) / "go-basic.obo"
-        ...     _ = file_obo.write_text("format-version: 1.2\\n", encoding="utf-8")
-        ...     limits = GoResourceLimits(file_obo_bytes_max=1)
-        ...     try:
-        ...         GoDb.from_obo(file_obo, limits=limits)
-        ...     except ValueError as error:
-        ...         print("exceeds configured size limit" in str(error))
-        True
-    """
-
-    file_obo_bytes_max: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,13 +76,12 @@ GoTidyDataset = TidyDataset
 
 
 @dataclass(slots=True)
-class GoDb:
+class GODatabase:
     """Path-first access to a local Gene Ontology OBO snapshot.
 
-    `GoDb` is the public entrypoint for extracting tidy ontology tables from a
-    local GO OBO file. It keeps the raw file path and resource limits, then
-    builds materialized Polars frames only when tidy or convenience exports are
-    requested.
+    `GODatabase` is the public entrypoint for extracting tidy ontology tables from a
+    local GO OBO file. It keeps the raw file path and builds materialized
+    Polars frames only when an operation requests them.
 
     The default tidy output is a flat ontology snapshot with canonical term and
     edge tables plus derived graph tables. `extract_subcell()` is a convenience
@@ -116,7 +90,7 @@ class GoDb:
     Examples:
         Read a hierarchical edge from a compact local snapshot:
 
-        >>> db = GoDb.from_obo("data/go-basic.obo")
+        >>> db = GODatabase.from_obo("data/go-basic.obo")
         >>> db.build_tidy().frames["edge"].filter(
         ...     pl.col("relation_type") == "is_a"
         ... ).select(
@@ -126,24 +100,17 @@ class GoDb:
     """
 
     snapshot: _GoSnapshot
-    limits: GoResourceLimits
     _tidy: GoTidyDataset | None = field(default=None, init=False, repr=False)
-
-    DEFAULT_RESOURCE_LIMITS = GoResourceLimits()
 
     @classmethod
     def from_obo(
         cls,
-        file_obo: os.PathLike[str] | str,
-        *,
-        limits: GoResourceLimits | None = None,
-    ) -> GoDb:
+        path: os.PathLike[str] | str,
+    ) -> GODatabase:
         """Create a dataset handle from a local GO OBO file.
 
         Args:
-            file_obo: Path to a local Gene Ontology OBO file.
-            limits: Optional resource policy. When omitted, the file-size
-                check is disabled.
+            path: Local Gene Ontology OBO path or supported archive.
 
         Returns:
             A dataset handle that can build tidy ontology frames and subcellular
@@ -151,26 +118,16 @@ class GoDb:
 
         Raises:
             FileNotFoundError: If the OBO file does not exist.
-            ValueError: If the configured file-size limit is exceeded.
 
         Examples:
             Open a local GO fixture and read one parsed term:
 
-            >>> db = GoDb.from_obo("data/go-basic.obo")
+            >>> db = GODatabase.from_obo("data/go-basic.obo")
             >>> db.select_terms(term_ids=["GO:0000002"])["term_name"].item()
             'child process'
         """
-        file_obo = Path(file_obo)
-        if not file_obo.exists():
-            raise FileNotFoundError(f"GO OBO file not found: {file_obo}")
-
-        limits_resolved = GoResourceLimits() if limits is None else limits
-        validate_file_size(
-            file_path=file_obo,
-            size_max=limits_resolved.file_obo_bytes_max,
-            label="GO OBO file",
-        )
-        return cls(snapshot=_GoSnapshot(file_obo=file_obo), limits=limits_resolved)
+        source_path = _resolve_obo_input(Path(path))
+        return cls(snapshot=_GoSnapshot(file_obo=source_path))
 
     def build_tidy(self) -> GoTidyDataset:
         """Build the GO tidy dataset.
@@ -183,7 +140,7 @@ class GoDb:
         Examples:
             Inspect the frame names built from a local OBO snapshot:
 
-            >>> db = GoDb.from_obo("data/go-basic.obo")
+            >>> db = GODatabase.from_obo("data/go-basic.obo")
             >>> sorted(db.build_tidy().frames)
             ['alt_id', 'ancestor_all', 'depth', 'edge', 'subset_definition', 'subset_membership', 'synonym', 'term', 'xref']
         """
@@ -201,13 +158,17 @@ class GoDb:
         }
         self._tidy = GoTidyDataset(
             frames=frames,
-            source=TidySource(path=self.snapshot.file_obo, media_type=MEDIA_TYPE_OBO),
+            source=TidySource(
+                path=self.snapshot.file_obo,
+                media_type=_obo_media_type(self.snapshot.file_obo),
+            ),
             schema_version=SCHEMA_VERSION,
             build_id_prefix=f"go-ontology-{self.snapshot.file_obo.stem}",
             assets=tuple(
                 TidyAsset(path=path, kind=kind, frame_name=frame_name)
                 for path, kind, frame_name in ASSET_SPECS
             ),
+            resource_name="go",
         )
         return self._tidy
 
@@ -218,7 +179,7 @@ class GoDb:
         namespace: GoNamespace | None = None,
         subset_id: str | GoSubsetId | None = None,
         include_obsolete: bool = False,
-        should_resolve_alt_ids: bool = True,
+        resolve_alt_ids: bool = True,
     ) -> pl.DataFrame:
         """Select GO terms from the current OBO snapshot.
 
@@ -228,7 +189,7 @@ class GoDb:
             namespace: Optional GO namespace filter.
             subset_id: Optional OBO subset membership filter.
             include_obsolete: Whether to keep obsolete GO terms.
-            should_resolve_alt_ids: Whether to resolve alternate GO IDs through
+            resolve_alt_ids: Whether to resolve alternate GO IDs through
                 the `alt_id` frame.
 
         Returns:
@@ -238,7 +199,7 @@ class GoDb:
         Examples:
             Resolve an alternate ID from the compact GO fixture:
 
-            >>> db = GoDb.from_obo("data/go-basic.obo")
+            >>> db = GODatabase.from_obo("data/go-basic.obo")
             >>> db.select_terms(term_ids=["GO:1234567"]).select(
             ...     "input_go_id", "go_id"
             ... ).to_dicts()
@@ -259,7 +220,7 @@ class GoDb:
                 df_term,
                 frames["alt_id"],
                 df_input_terms,
-                should_resolve_alt_ids=should_resolve_alt_ids,
+                resolve_alt_ids=resolve_alt_ids,
             )
 
         if namespace is not None:
@@ -306,7 +267,7 @@ class GoDb:
         Examples:
             Discover a subset's display name and term count:
 
-            >>> db = GoDb.from_obo("data/go-basic.obo")
+            >>> db = GODatabase.from_obo("data/go-basic.obo")
             >>> db.list_subsets().row(0, named=True)
             {'subset_id': 'goslim_generic', 'subset_name': 'Generic GO slim', 'num_terms': 5}
         """
@@ -335,36 +296,33 @@ class GoDb:
         )
         return df_subsets.sort("subset_id")
 
-    def write_tidy(
+    def write_duckdb(
         self,
-        dir_out: os.PathLike[str] | str,
+        path: os.PathLike[str] | str,
         *,
-        should_write_manifest: bool = False,
-        should_hash_assets: bool = False,
-    ) -> TidyWriteReport:
-        """Write the GO tidy dataset as flat parquet files.
-
-        Args:
-            dir_out: Output directory for parquet assets.
-            should_write_manifest: Whether to write `manifest.json`.
-            should_hash_assets: Whether to calculate asset checksums in the
-                manifest.
-
-        Returns:
-            A write report with asset paths and optional manifest content.
+        if_exists: Literal["fail", "replace"] = "fail",
+    ) -> DuckDBWriteResult:
+        """Atomically publish the complete ontology as one DuckDB database.
 
         Examples:
-            Write the nine declared GO assets:
-
-            >>> db = GoDb.from_obo("data/go-basic.obo")
-            >>> report = db.write_tidy("build/go-basic")
-            >>> (report.assets[0].path, report.assets[-1].path)
-            ('term.parquet', 'depth.parquet')
+            >>> from tempfile import TemporaryDirectory
+            >>> db = GODatabase.from_obo("data/go-basic.obo")
+            >>> with TemporaryDirectory() as dir_out:
+            ...     result = db.write_duckdb(Path(dir_out) / "go.duckdb")
+            ...     "term_relation" in result.tables
+            True
         """
-        return self.build_tidy().write(
-            Path(dir_out),
-            should_write_manifest=should_write_manifest,
-            should_hash_assets=should_hash_assets,
+        return self.build_tidy().write_duckdb(
+            Path(path),
+            table_names={
+                "edge": "term_relation",
+                "synonym": "term_synonym",
+                "xref": "term_xref",
+                "alt_id": "term_alternate_id",
+                "ancestor_all": "term_ancestor",
+                "depth": "term_depth",
+            },
+            if_exists=if_exists,
         )
 
     def extract_subcell(self, *, include_obsolete: bool = False) -> pl.DataFrame:
@@ -379,7 +337,7 @@ class GoDb:
         Examples:
             Extract cellular-component IDs from the compact fixture:
 
-            >>> db = GoDb.from_obo("data/go-basic.obo")
+            >>> db = GODatabase.from_obo("data/go-basic.obo")
             >>> db.extract_subcell()["go_id"].to_list()
             ['GO:0005575', 'GO:0005737']
         """
@@ -393,14 +351,14 @@ class GoDb:
 
     def write_subcell(
         self,
-        file_out: os.PathLike[str] | str,
+        path: os.PathLike[str] | str,
         *,
         include_obsolete: bool = False,
     ) -> Path:
         """Write the cellular component subcell table as a parquet file.
 
         Args:
-            file_out: Output parquet path.
+            path: Output parquet path.
             include_obsolete: Whether to keep obsolete cellular component terms.
 
         Returns:
@@ -410,21 +368,21 @@ class GoDb:
             Write the subcell projection and read back its public columns:
 
             >>> from tempfile import TemporaryDirectory
-            >>> db = GoDb.from_obo("data/go-basic.obo")
+            >>> db = GODatabase.from_obo("data/go-basic.obo")
             >>> with TemporaryDirectory() as dir_out:
-            ...     file_out = Path(dir_out) / "subcell.parquet"
-            ...     _ = db.write_subcell(file_out)
-            ...     pl.read_parquet(file_out).select(
+            ...     path = Path(dir_out) / "subcell.parquet"
+            ...     _ = db.write_subcell(path)
+            ...     pl.read_parquet(path).select(
             ...         "go_id", "subcell_name"
             ...     ).to_dicts()
             [{'go_id': 'GO:0005575', 'subcell_name': 'cellular_component'}, {'go_id': 'GO:0005737', 'subcell_name': 'cytoplasm'}]
         """
-        file_out = Path(file_out)
-        file_out.parent.mkdir(parents=True, exist_ok=True)
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
         self.extract_subcell(include_obsolete=include_obsolete).lazy().sink_parquet(
-            file_out
+            path
         )
-        return file_out
+        return path
 
 
 def normalize_go_namespace(namespace: str) -> str:
@@ -441,6 +399,39 @@ def normalize_subset_id(subset_id: str | GoSubsetId) -> str:
     return str(
         subset_id.value if isinstance(subset_id, GoSubsetId) else subset_id
     ).strip()
+
+
+def _resolve_obo_input(path: Path) -> Path:
+    if not path.exists():
+        raise FileNotFoundError(f"GO OBO file not found: {path}")
+    if path.is_file():
+        return path
+    candidates = [
+        candidate
+        for candidate in path.rglob("*")
+        if candidate.is_file()
+        and (
+            ".obo" in candidate.name.lower()
+            or candidate.name.lower().endswith((".zip", ".tar", ".tgz"))
+        )
+    ]
+    if len(candidates) != 1:
+        raise ValueError(
+            "GO ontology directory must contain exactly one recognizable "
+            f"ontology input; found {len(candidates)}"
+        )
+    return candidates[0]
+
+
+def _obo_media_type(path: Path) -> str:
+    with path.open("rb") as handle:
+        if handle.read(2) == b"\x1f\x8b":
+            return "application/gzip"
+    if zipfile.is_zipfile(path):
+        return "application/zip"
+    if tarfile.is_tarfile(path):
+        return "application/x-tar"
+    return MEDIA_TYPE_OBO
 
 
 def create_go_term_input_frame(term_ids: Iterable[str]) -> pl.DataFrame:
@@ -467,7 +458,7 @@ def select_terms_by_ids(
     df_alt_id: pl.DataFrame,
     df_input_terms: pl.DataFrame,
     *,
-    should_resolve_alt_ids: bool,
+    resolve_alt_ids: bool,
 ) -> pl.DataFrame:
     if df_input_terms.height == 0:
         return df_term.head(0).with_columns(
@@ -482,7 +473,7 @@ def select_terms_by_ids(
     )
     df_primary = df_primary.with_columns(pl.col("go_id").alias("input_go_id"))
 
-    if should_resolve_alt_ids:
+    if resolve_alt_ids:
         df_alt = (
             df_input_terms.join(
                 df_alt_id,

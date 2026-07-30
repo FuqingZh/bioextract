@@ -102,7 +102,7 @@ def extract_mapping_frame(
     return df_hits
 
 
-def extract_unmapped_input_ids_frame(
+def extract_unmatched_ids_frame(
     df_input_ids: pl.DataFrame,
     df_mapping: pl.DataFrame,
     *,

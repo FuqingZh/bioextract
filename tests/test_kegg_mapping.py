@@ -5,13 +5,13 @@ from pathlib import Path
 import polars as pl
 import pytest
 
-from bioextract.kegg import KeggDb
+from bioextract.kegg import KEGGDatabase
 
 
 def write_kegg_mapping_fixture(tmp_path: Path) -> dict[str, Path]:
     files = {
         "conv_uniprot": tmp_path / "conv_uniprot.tsv",
-        "conv_ncbi_geneid": tmp_path / "conv_ncbi_geneid.tsv",
+        "conv_ncbi_gene": tmp_path / "conv_ncbi_gene.tsv",
         "gene_ko": tmp_path / "gene_ko.tsv",
         "gene_pathway": tmp_path / "gene_pathway.tsv",
         "gene_list": tmp_path / "gene_list.tsv",
@@ -20,7 +20,7 @@ def write_kegg_mapping_fixture(tmp_path: Path) -> dict[str, Path]:
         "up:P12345\thsa:1\nup:Q9Y243\thsa:2\nup:P12345\thsa:1\n",
         encoding="utf-8",
     )
-    files["conv_ncbi_geneid"].write_text(
+    files["conv_ncbi_gene"].write_text(
         "ncbi-geneid:101\thsa:1\nncbi-geneid:102\thsa:2\n",
         encoding="utf-8",
     )
@@ -39,13 +39,13 @@ def write_kegg_mapping_fixture(tmp_path: Path) -> dict[str, Path]:
     return files
 
 
-def create_mapping_db(files: dict[str, Path]) -> KeggDb:
-    return KeggDb.from_mapping_files(
-        file_conv_uniprot=files["conv_uniprot"],
-        file_conv_ncbi_geneid=files["conv_ncbi_geneid"],
-        file_gene_ko=files["gene_ko"],
-        file_gene_pathway=files["gene_pathway"],
-        file_gene_list=files["gene_list"],
+def create_mapping_db(files: dict[str, Path]) -> KEGGDatabase:
+    return KEGGDatabase.from_mapping_files(
+        uniprot_conversion=files["conv_uniprot"],
+        ncbi_gene_conversion=files["conv_ncbi_gene"],
+        gene_ko=files["gene_ko"],
+        gene_pathway=files["gene_pathway"],
+        gene_list=files["gene_list"],
         organism_code="hsa",
     )
 
@@ -108,23 +108,23 @@ def test_select_ids_supports_input_id_kinds_and_unmapped(tmp_path: Path) -> None
 
     df_uniprot = db.select_ids(
         ["sp|P12345|GENE1_HUMAN", "MISSING"],
-        kind_input_id="uniprot",
+        namespace="uniprot",
     ).extract_mapping()
-    assert df_uniprot.select("InputId", "KindInputId", "KeggGeneId").to_dicts() == [
-        {"InputId": "P12345", "KindInputId": "uniprot", "KeggGeneId": "hsa:1"},
-        {"InputId": "P12345", "KindInputId": "uniprot", "KeggGeneId": "hsa:1"},
+    assert df_uniprot.select("InputId", "InputNamespace", "KeggGeneId").to_dicts() == [
+        {"InputId": "P12345", "InputNamespace": "uniprot", "KeggGeneId": "hsa:1"},
+        {"InputId": "P12345", "InputNamespace": "uniprot", "KeggGeneId": "hsa:1"},
     ]
     assert db.select_ids(
         ["P12345", "MISSING"],
-        kind_input_id="uniprot",
-    ).extract_unmapped_input_ids().to_dicts() == [{"InputId": "MISSING"}]
+        namespace="uniprot",
+    ).extract_unmatched_ids().to_dicts() == [{"InputId": "MISSING"}]
 
-    df_ncbi = db.select_ids(["102"], kind_input_id="ncbi_geneid").extract_mapping()
+    df_ncbi = db.select_ids(["102"], namespace="ncbi_gene").extract_mapping()
     assert df_ncbi.select("InputId", "KeggGeneId").to_dicts() == [
         {"InputId": "102", "KeggGeneId": "hsa:2"}
     ]
 
-    df_kegg = db.select_ids(["hsa:1"], kind_input_id="kegg_gene").extract_mapping()
+    df_kegg = db.select_ids(["hsa:1"], namespace="kegg_gene").extract_mapping()
     assert df_kegg.select("InputId", "UniProtId", "KeggPathwayId").to_dicts() == [
         {"InputId": "hsa:1", "UniProtId": "P12345", "KeggPathwayId": "hsa00010"},
         {"InputId": "hsa:1", "UniProtId": "P12345", "KeggPathwayId": "hsa01100"},
@@ -136,32 +136,32 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
 
     selection = db.select_groups(
         {"up": ["P12345", "MISSING"], "down": ["Q9Y243"]},
-        kind_input_id="uniprot",
+        namespace="uniprot",
     )
 
     df_mapping = selection.extract_mapping()
-    assert df_mapping.columns[:3] == ["GroupId", "InputId", "KindInputId"]
+    assert df_mapping.columns[:3] == ["GroupId", "InputId", "InputNamespace"]
     assert df_mapping.select("GroupId", "InputId", "KeggGeneId").to_dicts() == [
         {"GroupId": "down", "InputId": "Q9Y243", "KeggGeneId": "hsa:2"},
         {"GroupId": "up", "InputId": "P12345", "KeggGeneId": "hsa:1"},
         {"GroupId": "up", "InputId": "P12345", "KeggGeneId": "hsa:1"},
     ]
-    assert selection.extract_unmapped_input_ids().to_dicts() == [
+    assert selection.extract_unmatched_ids().to_dicts() == [
         {"GroupId": "up", "InputId": "MISSING"}
     ]
 
 
 def test_optional_mapping_files_leave_nullable_columns(tmp_path: Path) -> None:
     files = write_kegg_mapping_fixture(tmp_path)
-    db = KeggDb.from_mapping_files(
-        file_conv_uniprot=files["conv_uniprot"],
-        file_gene_ko=files["gene_ko"],
-        file_gene_pathway=files["gene_pathway"],
+    db = KEGGDatabase.from_mapping_files(
+        uniprot_conversion=files["conv_uniprot"],
+        gene_ko=files["gene_ko"],
+        gene_pathway=files["gene_pathway"],
         organism_code="hsa",
     )
 
     row = (
-        db.select_ids(["Q9Y243"], kind_input_id="uniprot")
+        db.select_ids(["Q9Y243"], namespace="uniprot")
         .extract_mapping()
         .row(
             0,
@@ -173,27 +173,27 @@ def test_optional_mapping_files_leave_nullable_columns(tmp_path: Path) -> None:
     assert row["GeneDescription"] is None
 
 
-def test_build_tidy_writes_mapping_parquet_and_manifest(tmp_path: Path) -> None:
+def test_write_parquet_writes_mapping_without_sidecar(tmp_path: Path) -> None:
     db = create_mapping_db(write_kegg_mapping_fixture(tmp_path))
 
-    report = db.write_tidy(tmp_path / "out", should_write_manifest=True)
+    path = tmp_path / "kegg.parquet"
+    result = db.write_parquet(path)
 
-    assert report.manifest is not None
-    assert report.manifest["schema_version"] == "kegg-mapping-v0.1"
-    assert [asset.path for asset in report.assets] == ["mapping.parquet"]
-    assert pl.read_parquet(tmp_path / "out" / "mapping.parquet").height == 3
+    assert result.path == path
+    assert not (tmp_path / "manifest.json").exists()
+    assert pl.read_parquet(path).height == 3
 
 
 def test_mapping_validates_kind_and_snapshot_kind(tmp_path: Path) -> None:
     files = write_kegg_mapping_fixture(tmp_path)
     db = create_mapping_db(files)
 
-    with pytest.raises(ValueError, match="kind_input_id"):
-        db.select_ids(["P12345"], kind_input_id="symbol")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="namespace"):
+        db.select_ids(["P12345"], namespace="symbol")  # type: ignore[arg-type]
 
     file_brite = tmp_path / "br08901.json"
     file_brite.write_text('{"name": "ko00001", "children": []}', encoding="utf-8")
-    db_brite = KeggDb.from_brite_json(file_brite)
+    db_brite = KEGGDatabase.from_brite_json(file_brite)
     with pytest.raises(ValueError, match="BRITE JSON snapshot"):
         db_brite.extract_mapping()
 

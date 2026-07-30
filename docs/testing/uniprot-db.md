@@ -1,4 +1,4 @@
-# UniprotDb Test Standard
+# UniProtDatabase Test Standard
 
 Version: v1.0
 Date: 2026-07-14
@@ -6,7 +6,7 @@ Status: current
 
 ## Scope
 
-The UniProtDb test suite verifies lightweight construction, raw
+The UniProtDatabase test suite verifies lightweight construction, raw
 `idmapping_selected` parsing, taxid filtering, single parquet writing, hive
 dataset reading, single parquet reading, eggNOG xref flat-file extraction, and
 Swiss-Prot subcellular location flat-file extraction, and schema/error
@@ -34,9 +34,9 @@ P31750	AKT1_MOUSE	11651	...	10090	...
 - missing, unsupported, empty hive, and oversized inputs are rejected.
 - `with_taxids()` normalizes taxid values and rejects empty values.
 - `extract_mapping()` filters by selected taxids.
-- `write_tidy()` emits canonical `mapping.parquet`.
+- `write_parquet(path)` emits canonical mapping output with provenance.
 - `level_compression` is passed through to zstd parquet writing.
-- all-taxid write requires `should_allow_all=True`.
+- all-taxid write requires `allow_all_taxa=True`.
 - non-empty output directories follow `policy_existing`.
 - `validate_schema()` reports missing required columns.
 - `.dat(.gz)` snapshots can emit eggNOG xref tidy output.

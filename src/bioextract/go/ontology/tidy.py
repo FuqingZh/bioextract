@@ -1,5 +1,4 @@
 from collections.abc import Iterable, Mapping
-from pathlib import Path
 
 import polars as pl
 
@@ -32,11 +31,9 @@ from .parse import (
     normalize_whitespace,
     parse_synonym,
     parse_xref_lossless,
-    read_obo_subset_definitions,
-    scan_obo_term_records,
     validate_go_id,
 )
-from .write import build_deduped_frame, write_frame_assets
+from .write import build_deduped_frame
 
 
 # #region CanonicalColumnBuilders
@@ -136,7 +133,7 @@ def _build_tidy_frames(
 
     Notes:
         This builder consumes parser-owned record types. Callers should use
-        `GoDb.build_tidy()` rather than depend on those internal models.
+        `GODatabase.build_tidy()` rather than depend on those internal models.
     """
     term_data = TermColumnBuffer()
     edge_data = EdgeColumnBuffer()
@@ -258,44 +255,6 @@ def extract_subcell_frame(
     if not include_obsolete:
         df_subcell = df_subcell.filter(~pl.col("is_obsolete"))
     return df_subcell.select(SCHEMA_SUBCELL.keys()).sort("go_id")
-
-
-# #endregion
-################################################################################
-# #region Entrypoint
-def run_tidy_go_ontology(file_in: Path, dir_out: Path) -> None:
-    """Parse a GO OBO snapshot and write its nine tidy parquet assets.
-
-    Args:
-        file_in: GO OBO input path.
-        dir_out: Output directory for canonical and graph-derived parquet
-            assets.
-
-    Raises:
-        ValueError: If parsed identifiers are invalid or the hierarchical graph
-            contains a cycle.
-
-    Notes:
-        This low-level entrypoint does not write a manifest. Use
-        `GoDb.write_tidy()` when a shared tidy write report or manifest is
-        required.
-
-    Examples:
-        Write the compact local OBO fixture without a manifest:
-
-        >>> file_in = Path("data/go-basic.obo")
-        >>> dir_out = Path("build/go-basic")
-        >>> run_tidy_go_ontology(file_in, dir_out)
-        >>> (dir_out / "term.parquet").is_file()
-        True
-    """
-    records = scan_obo_term_records(file_in)
-    frames = _build_tidy_frames(
-        records,
-        subset_definitions=read_obo_subset_definitions(file_in),
-    )
-    dir_out.mkdir(parents=True, exist_ok=True)
-    write_frame_assets(dir_out=dir_out, frames=frames)
 
 
 # #endregion

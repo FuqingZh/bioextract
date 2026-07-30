@@ -7,9 +7,9 @@ from polars._typing import SchemaDict
 
 from .constant import (
     COLS_MAPPING,
-    KIND_INPUT_ID_VALUES,
+    NAMESPACE_VALUES,
     SCHEMA_MAPPING,
-    KeggInputIdKind,
+    KEGGNamespace,
 )
 
 
@@ -157,13 +157,13 @@ def extract_mapping_frame(
     df_mapping: pl.DataFrame,
     df_input_ids: pl.DataFrame,
     *,
-    kind_input_id: KeggInputIdKind,
+    namespace: KEGGNamespace,
     cols_group_id: tuple[str, ...],
 ) -> pl.DataFrame:
-    validate_kind_input_id(kind_input_id)
-    col_join = col_join_by_kind(kind_input_id)
+    validate_namespace(namespace)
+    col_join = column_by_namespace(namespace)
     cols_group = list(cols_group_id)
-    cols_out = cols_group + ["InputId", "KindInputId"] + COLS_MAPPING
+    cols_out = cols_group + ["InputId", "InputNamespace"] + COLS_MAPPING
     return (
         df_input_ids.join(
             df_mapping,
@@ -173,7 +173,7 @@ def extract_mapping_frame(
         )
         .with_columns(
             pl.col("InputId").alias(col_join),
-            pl.lit(kind_input_id).alias("KindInputId"),
+            pl.lit(namespace).alias("InputNamespace"),
         )
         .select(cols_out)
         .unique()
@@ -181,7 +181,7 @@ def extract_mapping_frame(
     )
 
 
-def extract_unmapped_input_ids_frame(
+def extract_unmatched_ids_frame(
     df_input_ids: pl.DataFrame,
     df_mapping: pl.DataFrame,
     *,
@@ -196,24 +196,24 @@ def extract_unmapped_input_ids_frame(
     )
 
 
-def validate_kind_input_id(kind_input_id: str) -> None:
-    if kind_input_id not in KIND_INPUT_ID_VALUES:
+def validate_namespace(namespace: str) -> None:
+    if namespace not in NAMESPACE_VALUES:
         raise ValueError(
-            "kind_input_id must be one of: "
-            f"{', '.join(KIND_INPUT_ID_VALUES)}; got {kind_input_id!r}"
+            "namespace must be one of: "
+            f"{', '.join(NAMESPACE_VALUES)}; got {namespace!r}"
         )
 
 
-def col_join_by_kind(kind_input_id: KeggInputIdKind) -> str:
-    match kind_input_id:
+def column_by_namespace(namespace: KEGGNamespace) -> str:
+    match namespace:
         case "uniprot":
             return "UniProtId"
-        case "ncbi_geneid":
+        case "ncbi_gene":
             return "NcbiGeneId"
         case "kegg_gene":
             return "KeggGeneId"
         case _:
-            validate_kind_input_id(kind_input_id)
+            validate_namespace(namespace)
             raise AssertionError("unreachable")
 
 

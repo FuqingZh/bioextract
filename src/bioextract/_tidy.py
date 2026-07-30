@@ -1,25 +1,31 @@
 from __future__ import annotations
 
 import hashlib
-import json
-from collections.abc import Mapping
-from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+import os
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TypedDict
 
 import polars as pl
+
+from bioextract._publication import (
+    DuckDBWriteResult,
+    ParquetWriteResult,
+    RelationSpec,
+    SourceFileRecord,
+    write_duckdb_publication,
+    write_parquet_publication,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class TidySource:
-    """Describe one source file recorded in a tidy manifest.
+    """Describe one source file recorded in publication provenance.
 
     Attributes:
         path: Source file whose path and byte size are recorded.
         media_type: Stable media-type label for the source format.
-        sha256: Optional precomputed source digest. When omitted, the manifest
-            leaves out the source `sha256` key instead of recording `null`.
+        sha256: Optional precomputed source digest.
     """
 
     path: Path
@@ -29,10 +35,11 @@ class TidySource:
 
 @dataclass(frozen=True, slots=True)
 class TidyAsset:
-    """Map one lazy frame to its relative output path and artifact kind.
+    """Map one lazy frame to its resource-local relation metadata.
 
-    `is_optional` is delivery metadata propagated to reports and manifests; it
-    does not permit `write()` to skip a missing frame.
+    `path` remains an internal relation label during the 1.0 convergence; it
+    never determines a caller output path. `kind` becomes the DuckDB relation
+    role when a multi-relation publication is built.
     """
 
     path: str
@@ -41,65 +48,22 @@ class TidyAsset:
     is_optional: bool = False
 
 
-@dataclass(frozen=True, slots=True)
-class TidyReportAsset:
-    """Describe a relative output asset returned after a tidy write."""
-
-    path: str
-    kind: str
-    is_optional: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class TidyManifestAsset:
-    """Describe an asset in the serializable tidy manifest.
-
-    A missing digest is serialized as a JSON `null` value.
-    """
-
-    path: str
-    kind: str
-    sha256: str | None
-    is_optional: bool = False
-
-
-class TidyManifest(TypedDict):
-    """JSON-compatible manifest emitted for one tidy dataset build."""
-
-    build_id: str
-    schema_version: str
-    generated_at: str
-    sources: list[dict[str, str | int]]
-    assets: list[dict[str, str | bool | None]]
-
-
-@dataclass(frozen=True, slots=True)
-class TidyWriteReport:
-    """Report persisted assets and the optional manifest returned by a write.
-
-    Asset paths are relative to `dir_out`. `manifest` is `None` unless the
-    caller requested manifest generation.
-    """
-
-    dir_out: Path
-    assets: tuple[TidyReportAsset, ...]
-    manifest: TidyManifest | None = None
-
-
 @dataclass(slots=True)
 class TidyDataset:
-    """Bind lazy resource frames to a versioned flat-file output contract.
+    """Bind lazy resource relations to versioned publication contracts.
 
     Each asset maps a relative output path to one entry in `frames`. The asset
     tuple defines write and report order; frames not referenced by an asset are
-    not persisted. Sources provide provenance for an optional manifest.
+    not persisted. Sources provide embedded publication provenance.
 
     Attributes:
         frames: Lazy frames keyed by the names referenced from `assets`.
         source: One source or an ordered tuple of sources for provenance.
         schema_version: Version of the resource-specific output schema.
-        build_id_prefix: Stable prefix used to construct manifest build IDs.
+        build_id_prefix: Stable resource identity prefix.
         assets: Ordered output specifications for frames to persist.
+        resource_name: Stable database resource name for embedded provenance.
+        release_version: Optional official source release identifier.
 
     Examples:
         Bind one in-memory frame to a parquet asset:
@@ -120,127 +84,112 @@ class TidyDataset:
     schema_version: str
     build_id_prefix: str
     assets: tuple[TidyAsset, ...]
+    resource_name: str | None = None
+    release_version: str | None = None
 
-    def write(
+    def write_parquet(
         self,
-        dir_out: Path | str,
+        path: os.PathLike[str] | str,
         *,
-        should_write_manifest: bool = False,
-        should_hash_assets: bool = False,
-    ) -> TidyWriteReport:
-        """Persist configured frames as parquet assets.
-
-        Args:
-            dir_out: Output directory. Relative asset paths are resolved below
-                this directory.
-            should_write_manifest: Whether to also write `manifest.json` and
-                return its content.
-            should_hash_assets: Whether to calculate SHA256 digests for
-                manifest asset entries.
-
-        Returns:
-            A report whose assets follow the configured asset order.
-
-        Raises:
-            KeyError: If an asset references a frame missing from `frames`.
+        if_exists: str = "fail",
+        preserve_source_headers: bool = False,
+    ) -> ParquetWriteResult:
+        """Publish a single-relation dataset as one provenance-aware Parquet.
 
         Examples:
-            Write a one-frame dataset to a temporary directory:
-
             >>> from tempfile import TemporaryDirectory
             >>> dataset = TidyDataset(
             ...     frames={"term": pl.DataFrame({"id": ["T1"]}).lazy()},
-            ...     source=TidySource(Path("data/source.tsv"), "text/tab-separated-values"),
+            ...     source=TidySource(Path("data/source.tsv"), "text/plain"),
             ...     schema_version="example-v1",
             ...     build_id_prefix="example",
             ...     assets=(TidyAsset("term.parquet", "canonical", "term"),),
             ... )
             >>> with TemporaryDirectory() as dir_out:
-            ...     report = dataset.write(dir_out)
-            ...     [asset.path for asset in report.assets]
-            ['term.parquet']
+            ...     dataset.write_parquet(
+            ...         Path(dir_out) / "example.parquet"
+            ...     ).schema_version
+            'example-v1'
         """
-        dir_out = Path(dir_out)
-        dir_out.mkdir(parents=True, exist_ok=True)
-
-        entries_report: list[TidyReportAsset] = []
-        entries_manifest: list[TidyManifestAsset] = []
-        for asset in self.assets:
-            frame = self.frames[asset.frame_name]
-            file_out = dir_out / asset.path
-            file_out.parent.mkdir(parents=True, exist_ok=True)
-            frame.sink_parquet(file_out)
-            entry_report = TidyReportAsset(
-                path=asset.path,
-                kind=asset.kind,
-                is_optional=asset.is_optional,
+        if len(self.assets) != 1:
+            raise ValueError(
+                "write_parquet() requires exactly one published relation; "
+                "use write_duckdb() for a multi-relation dataset"
             )
-            entries_report.append(entry_report)
-            entries_manifest.append(
-                TidyManifestAsset(
-                    path=asset.path,
-                    kind=asset.kind,
-                    is_optional=asset.is_optional,
-                    sha256=calculate_file_sha256(file_out)
-                    if should_hash_assets
-                    else None,
-                )
-            )
-
-        manifest = (
-            self._build_manifest(entries_manifest) if should_write_manifest else None
-        )
-        if manifest is not None:
-            (dir_out / "manifest.json").write_text(
-                json.dumps(manifest, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-        return TidyWriteReport(
-            dir_out=dir_out,
-            assets=tuple(entries_report),
-            manifest=manifest,
+        asset = self.assets[0]
+        return write_parquet_publication(
+            self.frames[asset.frame_name],
+            path,
+            resource_name=self.resource_name or self.build_id_prefix,
+            schema_version=self.schema_version,
+            sources=self._source_records,
+            release_version=self.release_version,
+            if_exists=if_exists,
+            normalize_columns=not preserve_source_headers,
         )
 
-    def _build_manifest(
+    def write_duckdb(
         self,
-        assets: list[TidyManifestAsset],
-    ) -> TidyManifest:
-        """Build manifest content from source metadata and prepared assets.
+        path: os.PathLike[str] | str,
+        *,
+        table_names: Mapping[str, str] | None = None,
+        if_exists: str = "fail",
+        preserve_source_headers: Collection[str] = (),
+    ) -> DuckDBWriteResult:
+        """Publish all configured relations as one provenance-aware DuckDB.
 
-        Args:
-            assets: Ordered asset records, including any digests calculated at
-                the write boundary.
-
-        Returns:
-            JSON-compatible manifest content with a UTC build timestamp.
-
-        Notes:
-            Manifest construction stays behind `write()` so callers cannot
-            bypass asset persistence or request hashes that were never
-            calculated. This method does not read assets to calculate hashes.
+        Examples:
+            >>> from tempfile import TemporaryDirectory
+            >>> dataset = TidyDataset(
+            ...     frames={"term": pl.DataFrame({"id": ["T1"]}).lazy()},
+            ...     source=TidySource(Path("data/source.tsv"), "text/plain"),
+            ...     schema_version="example-v1",
+            ...     build_id_prefix="example",
+            ...     assets=(TidyAsset("term.parquet", "canonical", "term"),),
+            ... )
+            >>> with TemporaryDirectory() as dir_out:
+            ...     dataset.write_duckdb(
+            ...         Path(dir_out) / "example.duckdb"
+            ...     ).tables
+            ('term',)
         """
-        timestamp = datetime.now(UTC)
-        return {
-            "build_id": f"{self.build_id_prefix}-{timestamp.strftime('%Y%m%dT%H%M%SZ')}",
-            "schema_version": self.schema_version,
-            "generated_at": timestamp.isoformat().replace("+00:00", "Z"),
-            "sources": [
-                {
-                    "path": source.path.as_posix(),
-                    "bytes": source.path.stat().st_size,
-                    "media_type": source.media_type,
-                    **({"sha256": source.sha256} if source.sha256 is not None else {}),
-                }
-                for source in self._sources
-            ],
-            "assets": [asdict(asset) for asset in assets],
-        }
+        names = table_names or {}
+        relations = tuple(
+            RelationSpec(
+                table_name=names.get(asset.frame_name, asset.frame_name),
+                frame=self.frames[asset.frame_name],
+                role=asset.kind,
+                preserve_source_headers=asset.frame_name in preserve_source_headers,
+            )
+            for asset in self.assets
+        )
+        return write_duckdb_publication(
+            relations,
+            path,
+            resource_name=self.resource_name or self.build_id_prefix,
+            schema_version=self.schema_version,
+            sources=self._source_records,
+            release_version=self.release_version,
+            if_exists=if_exists,
+        )
 
     @property
     def _sources(self) -> tuple[TidySource, ...]:
         if isinstance(self.source, TidySource):
             return (self.source,)
         return self.source
+
+    @property
+    def _source_records(self) -> tuple[SourceFileRecord, ...]:
+        return tuple(
+            SourceFileRecord(
+                logical_name=source.path.name,
+                path=source.path,
+                media_type=source.media_type,
+                sha256=source.sha256,
+            )
+            for source in self._sources
+        )
 
 
 def calculate_file_sha256(file_path: Path) -> str:

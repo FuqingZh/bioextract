@@ -392,12 +392,12 @@ def parse_recommended_protein_name_line(line: str) -> str | None:
 
 def write_eggnog_xref_tsv(
     file_dat: Path,
-    file_out: Path,
+    path: Path,
     *,
     source_db: str,
 ) -> None:
-    file_out.parent.mkdir(parents=True, exist_ok=True)
-    with file_out.open("w", encoding="utf-8", newline="") as handle_out:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle_out:
         writer = create_tsv_writer(handle_out)
         writer.writerow(COLS_EGGNOG_XREF)
         with open_uniprot_dat(file_dat) as handle_in:
@@ -429,12 +429,12 @@ def write_eggnog_xref_tsv(
 
 def write_subcellular_location_tsv(
     file_dat: Path,
-    file_out: Path,
+    path: Path,
     *,
     source_db: str,
 ) -> None:
-    file_out.parent.mkdir(parents=True, exist_ok=True)
-    with file_out.open("w", encoding="utf-8", newline="") as handle_out:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle_out:
         writer = create_tsv_writer(handle_out)
         writer.writerow(COLS_SUBCELLULAR_LOCATION)
         for record in iter_subcellular_location_records(file_dat):

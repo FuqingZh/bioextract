@@ -2,88 +2,62 @@ from __future__ import annotations
 
 import doctest
 import inspect
-import sys
 from collections.abc import Iterator
 
 import pytest
 
-import bioextract.go.ontology as go_ontology
 from bioextract._tidy import TidyDataset
-from bioextract.eggnog import EggnogDb, EggnogResourceLimits, EggnogSelection
-from bioextract.go import GoDb, GoResourceLimits, GoSubsetId
-from bioextract.go.ontology import run_tidy_go_ontology
+from bioextract.chebi import ChEBIDatabase
+from bioextract.eggnog import EggNOGDatabase, EggnogSelection
+from bioextract.go import GODatabase, GoSubsetId
 from bioextract.interpro import (
-    InterProDb,
-    InterProResourceLimits,
+    InterProDatabase,
     InterProSelection,
 )
-from bioextract.kegg import KeggDb, KeggResourceLimits
+from bioextract.kegg import KEGGDatabase
 from bioextract.kegg.brite import (
     build_tidy_frames as build_kegg_tidy_frames,
 )
-from bioextract.kegg.brite import (
-    run_tidy_kegg_brite,
-)
 from bioextract.kegg.kegg import KeggSelection
-from bioextract.omnipath import OmniPathDb, OmniPathResourceLimits
+from bioextract.omnipath import OmniPathDatabase
 from bioextract.omnipath.omnipath import OmniPathSelection
-from bioextract.reactome import ReactomeDb, ReactomeResourceLimits
+from bioextract.reactome import ReactomeDatabase
 from bioextract.reactome.reactome import ReactomeSelection
-from bioextract.stringdb import StringDb, StringResourceLimits
+from bioextract.rhea import RheaDatabase, RheaReactionSelection, RheaWriteResult
+from bioextract.stringdb import STRINGDatabase
 from bioextract.stringdb.stringdb import StringSelection
-from bioextract.uniprot import UniprotDb, UniprotResourceLimits
-from bioextract.wikipathways import WikiPathwaysDb, WikiPathwaysResourceLimits
+from bioextract.uniprot import UniProtDatabase
+from bioextract.wikipathways import WikiPathwaysDatabase
 from bioextract.wikipathways.wikipathways import WikiPathwaysSelection
 
 PUBLIC_CLASSES = (
-    GoDb,
-    GoResourceLimits,
+    ChEBIDatabase,
+    GODatabase,
     GoSubsetId,
-    KeggDb,
-    KeggResourceLimits,
+    KEGGDatabase,
     KeggSelection,
-    ReactomeDb,
-    ReactomeResourceLimits,
+    ReactomeDatabase,
     ReactomeSelection,
-    WikiPathwaysDb,
-    WikiPathwaysResourceLimits,
+    WikiPathwaysDatabase,
     WikiPathwaysSelection,
-    EggnogDb,
-    EggnogResourceLimits,
+    EggNOGDatabase,
     EggnogSelection,
-    InterProDb,
-    InterProResourceLimits,
+    InterProDatabase,
     InterProSelection,
-    UniprotDb,
-    UniprotResourceLimits,
-    StringDb,
-    StringResourceLimits,
+    UniProtDatabase,
+    STRINGDatabase,
     StringSelection,
-    OmniPathDb,
-    OmniPathResourceLimits,
+    OmniPathDatabase,
     OmniPathSelection,
+    RheaDatabase,
+    RheaReactionSelection,
+    RheaWriteResult,
     TidyDataset,
 )
 
-PUBLIC_FUNCTIONS = (
-    ("go.ontology.run_tidy_go_ontology", run_tidy_go_ontology),
-    ("kegg.brite.build_tidy_frames", build_kegg_tidy_frames),
-    ("kegg.brite.run_tidy_kegg_brite", run_tidy_kegg_brite),
-)
+PUBLIC_FUNCTIONS = (("kegg.brite.build_tidy_frames", build_kegg_tidy_frames),)
 
-EXECUTABLE_DOCSTRING_TARGETS = (
-    GoResourceLimits,
-    KeggResourceLimits,
-    ReactomeResourceLimits,
-    WikiPathwaysResourceLimits,
-    EggnogResourceLimits,
-    InterProResourceLimits,
-    UniprotResourceLimits,
-    StringResourceLimits,
-    OmniPathResourceLimits,
-)
-
-EXPECTED_PUBLIC_TARGET_COUNT = 124
+EXPECTED_PUBLIC_TARGET_COUNT = 142
 
 
 def iter_public_docstring_targets() -> Iterator[tuple[str, object, str | None]]:
@@ -113,17 +87,16 @@ PUBLIC_DOCSTRING_TARGETS = tuple(iter_public_docstring_targets())
 
 
 def test_public_docstring_target_matrix_is_complete() -> None:
-    assert len(PUBLIC_CLASSES) == 27
-    assert len(PUBLIC_FUNCTIONS) == 3
+    assert len(PUBLIC_CLASSES) == 22
+    assert len(PUBLIC_FUNCTIONS) == 1
     assert len(PUBLIC_DOCSTRING_TARGETS) == EXPECTED_PUBLIC_TARGET_COUNT
 
 
 def test_maintenance_helpers_are_not_public_api() -> None:
     assert not hasattr(TidyDataset, "build_manifest")
-    assert not hasattr(ReactomeDb, "mapping_frame")
-    assert not hasattr(WikiPathwaysDb, "lazy_frame")
-    assert not hasattr(StringDb, "alias_schema")
-    assert not hasattr(go_ontology, "build_tidy_frames")
+    assert not hasattr(ReactomeDatabase, "mapping_frame")
+    assert not hasattr(WikiPathwaysDatabase, "lazy_frame")
+    assert not hasattr(STRINGDatabase, "alias_schema")
 
 
 # This is a structural floor. Whether an observed result explains why callers
@@ -153,26 +126,3 @@ def test_public_api_docstring_has_direct_example(
         assert usage_token in sources, (
             f"{label} does not demonstrate {usage_token!r} directly"
         )
-
-
-@pytest.mark.parametrize(
-    "target",
-    EXECUTABLE_DOCSTRING_TARGETS,
-    ids=[target.__name__ for target in EXECUTABLE_DOCSTRING_TARGETS],
-)
-def test_pure_public_examples_execute(target: type[object]) -> None:
-    docstring = inspect.getdoc(target)
-    assert docstring is not None
-    module = sys.modules[target.__module__]
-    test = doctest.DocTestParser().get_doctest(
-        docstring,
-        module.__dict__.copy(),
-        target.__name__,
-        inspect.getsourcefile(target) or target.__module__,
-        0,
-    )
-    failures: list[str] = []
-    result = doctest.DocTestRunner(
-        optionflags=doctest.ELLIPSIS | doctest.NORMALIZE_WHITESPACE
-    ).run(test, out=failures.append)
-    assert result.failed == 0, "".join(failures)

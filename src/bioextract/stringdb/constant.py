@@ -62,4 +62,4 @@ SCHEMA_GROUP_EDGES = {
 
 RE_UNIPROT_PIPE = re.compile(r"^[^|]+\|([^|]+)\|")
 
-StringDbVersion = Literal["v12.0"]
+StringDatabaseVersion = Literal["v12.0"]

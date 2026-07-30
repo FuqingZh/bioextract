@@ -7,8 +7,6 @@ from pathlib import Path
 
 import polars as pl
 
-from bioextract._shared import validate_count_limit, validate_file_size
-
 from .._shared import create_group_input_frames, create_input_id_frame
 from .constant import (
     SCHEMA_GROUP_INPUT_IDS,
@@ -16,7 +14,6 @@ from .constant import (
     SCHEMA_UNMAPPED,
     OmniPathResourceName,
 )
-from .spec import OmniPathResourceLimits
 from .util import (
     extract_enzsub_frame,
     extract_interactions_frame,
@@ -32,7 +29,7 @@ from .util import (
 )
 
 __all__ = [
-    "OmniPathDb",
+    "OmniPathDatabase",
 ]
 
 
@@ -43,19 +40,18 @@ class _OmniPathSnapshot:
 
 
 @dataclass(slots=True)
-class OmniPathDb:
+class OmniPathDatabase:
     """Path-first access to local OmniPath relation files.
 
-    `OmniPathDb` is the public entrypoint for extracting OmniPath
+    `OmniPathDatabase` is the public entrypoint for extracting OmniPath
     enzyme-substrate relations and interaction relations from local files.
-    It keeps dataset-level resource limits and exposes single and grouped
-    selections through one selection type.
+    It exposes single and grouped selections through one selection type.
 
     Examples:
         Select enzyme-substrate relations for normalized protein IDs:
 
-        >>> db = OmniPathDb.from_files(
-        ...     file_enzsub="fixtures/omnipath/enzsub.tsv"
+        >>> db = OmniPathDatabase.from_files(
+        ...     enzsub="fixtures/omnipath/enzsub.tsv"
         ... )
         >>> (
         ...     db.select_ids(["P31749"])
@@ -67,62 +63,49 @@ class OmniPathDb:
     """
 
     snapshot: _OmniPathSnapshot
-    limits: OmniPathResourceLimits = field(default_factory=OmniPathResourceLimits)
-
-    DEFAULT_RESOURCE_LIMITS = OmniPathResourceLimits()
 
     @classmethod
     def from_files(
         cls,
         *,
-        file_enzsub: os.PathLike[str] | str | None = None,
-        file_interactions: os.PathLike[str] | str | None = None,
-        limits: OmniPathResourceLimits | None = None,
-    ) -> OmniPathDb:
+        enzsub: os.PathLike[str] | str | None = None,
+        interactions: os.PathLike[str] | str | None = None,
+    ) -> OmniPathDatabase:
         """Create a dataset handle from local OmniPath files.
 
         Args:
-            file_enzsub: Path to a local OmniPath `enzsub` text or gzip file.
-            file_interactions: Path to a local OmniPath `interactions` text or
+            enzsub: Path to a local OmniPath `enzsub` text or gzip file.
+            interactions: Path to a local OmniPath `interactions` text or
                 gzip file.
-            limits: Dataset-level resource limits. When omitted, default
-                fail-fast limits are used. see :class:`OmniPathResourceLimits` and
-                `OmniPathDb.DEFAULT_RESOURCE_LIMITS` for details.
 
         Returns:
             A dataset handle that can produce single or grouped selections.
 
         Raises:
             FileNotFoundError: If any provided file does not exist.
-            ValueError: If no resource files are provided or a configured
-                file-size limit is exceeded.
+            ValueError: If no resource files are provided.
 
         Examples:
             Open both relation resources from one fixture snapshot:
 
-            >>> db = OmniPathDb.from_files(
-            ...     file_enzsub="fixtures/omnipath/enzsub.tsv",
-            ...     file_interactions="fixtures/omnipath/interactions.tsv",
+            >>> db = OmniPathDatabase.from_files(
+            ...     enzsub="fixtures/omnipath/enzsub.tsv",
+            ...     interactions="fixtures/omnipath/interactions.tsv",
             ... )
             >>> sorted(db.available_resources)
             ['enzsub', 'interactions']
         """
-        if file_enzsub is None and file_interactions is None:
+        if enzsub is None and interactions is None:
             raise ValueError("At least one OmniPath resource file must be provided")
 
-        limits_resolved = OmniPathResourceLimits() if limits is None else limits
-
+        file_enzsub = enzsub
+        file_interactions = interactions
         if file_enzsub is not None:
             file_enzsub = Path(file_enzsub)
             if not file_enzsub.exists():
                 raise FileNotFoundError(
                     f"OmniPath enzsub file not found: {file_enzsub}"
                 )
-            validate_file_size(
-                file_path=file_enzsub,
-                size_max=limits_resolved.file_enzsub_bytes_max,
-                label="OmniPath enzsub file",
-            )
 
         if file_interactions is not None:
             file_interactions = Path(file_interactions)
@@ -130,18 +113,12 @@ class OmniPathDb:
                 raise FileNotFoundError(
                     f"OmniPath interactions file not found: {file_interactions}"
                 )
-            validate_file_size(
-                file_path=file_interactions,
-                size_max=limits_resolved.file_interactions_bytes_max,
-                label="OmniPath interactions file",
-            )
 
         return cls(
             snapshot=_OmniPathSnapshot(
                 file_enzsub=file_enzsub,
                 file_interactions=file_interactions,
             ),
-            limits=limits_resolved,
         )
 
     @property
@@ -149,8 +126,8 @@ class OmniPathDb:
         """Return the relation resources backed by files in this snapshot.
 
         Examples:
-            >>> db = OmniPathDb.from_files(
-            ...     file_enzsub="fixtures/omnipath/enzsub.tsv"
+            >>> db = OmniPathDatabase.from_files(
+            ...     enzsub="fixtures/omnipath/enzsub.tsv"
             ... )
             >>> sorted(db.available_resources)
             ['enzsub']
@@ -169,8 +146,8 @@ class OmniPathDb:
             ValueError: If this snapshot has no enzsub file.
 
         Examples:
-            >>> db = OmniPathDb.from_files(
-            ...     file_enzsub="fixtures/omnipath/enzsub.tsv"
+            >>> db = OmniPathDatabase.from_files(
+            ...     enzsub="fixtures/omnipath/enzsub.tsv"
             ... )
             >>> db.has_any_enzsub_relation()
             True
@@ -186,8 +163,8 @@ class OmniPathDb:
             ValueError: If this snapshot has no interactions file.
 
         Examples:
-            >>> db = OmniPathDb.from_files(
-            ...     file_interactions="fixtures/omnipath/interactions.tsv"
+            >>> db = OmniPathDatabase.from_files(
+            ...     interactions="fixtures/omnipath/interactions.tsv"
             ... )
             >>> db.has_any_interaction_relation()
             True
@@ -213,8 +190,8 @@ class OmniPathDb:
         Examples:
             Test present and absent modification labels:
 
-            >>> db = OmniPathDb.from_files(
-            ...     file_enzsub="fixtures/omnipath/enzsub.tsv"
+            >>> db = OmniPathDatabase.from_files(
+            ...     enzsub="fixtures/omnipath/enzsub.tsv"
             ... )
             >>> db.has_any_enzsub_modification("phosphorylation")
             True
@@ -237,24 +214,16 @@ class OmniPathDb:
             ids: Protein identifiers. Whitespace, blank values, duplicates, and
                 UniProt pipe-style IDs follow the shared normalization contract.
 
-        Raises:
-            ValueError: If the normalized ID count exceeds the configured limit.
-
         Examples:
             Select the substrates linked to one kinase:
 
-            >>> db = OmniPathDb.from_files(
-            ...     file_enzsub="fixtures/omnipath/enzsub.tsv"
+            >>> db = OmniPathDatabase.from_files(
+            ...     enzsub="fixtures/omnipath/enzsub.tsv"
             ... )
             >>> db.select_ids(["P31749"]).extract_enzsub()["TargetId"].to_list()
             ['BAD', 'FOXO3']
         """
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
-        validate_count_limit(
-            count=df_input_ids.height,
-            limit_max=self.limits.num_input_ids_max,
-            label="Normalized input ID count",
-        )
         return OmniPathSelection(
             dataset=self,
             _df_input_ids=df_input_ids,
@@ -264,25 +233,21 @@ class OmniPathDb:
 
     def select_groups(
         self,
-        group_to_ids: Mapping[str, Iterable[str]],
+        ids_by_group: Mapping[str, Iterable[str]],
     ) -> OmniPathSelection:
         """Create a grouped selection that preserves ``GroupId`` in outputs.
 
         The selection initially enables every resource backed by this snapshot.
 
         Args:
-            group_to_ids: Group labels mapped to protein identifiers. Labels
+            ids_by_group: Group labels mapped to protein identifiers. Labels
                 must remain non-empty and unique after stripping whitespace.
-
-        Raises:
-            ValueError: If normalized labels are invalid or configured group or
-                input-ID limits are exceeded.
 
         Examples:
             Preserve comparison labels in a grouped selection:
 
-            >>> db = OmniPathDb.from_files(
-            ...     file_enzsub="fixtures/omnipath/enzsub.tsv"
+            >>> db = OmniPathDatabase.from_files(
+            ...     enzsub="fixtures/omnipath/enzsub.tsv"
             ... )
             >>> (
             ...     db.select_groups({"up": ["P31749"], "down": ["MAPK1"]})
@@ -295,19 +260,9 @@ class OmniPathDb:
             [{'GroupId': 'down', 'SourceId': 'MAPK1'}, {'GroupId': 'up', 'SourceId': 'P31749'}]
         """
         grp_in_frames = create_group_input_frames(
-            group_to_ids,
+            ids_by_group,
             schema_groups=SCHEMA_GROUPS,
             schema_group_input_ids=SCHEMA_GROUP_INPUT_IDS,
-        )
-        validate_count_limit(
-            count=grp_in_frames.df_groups.height,
-            limit_max=self.limits.num_groups_max,
-            label="Group count",
-        )
-        validate_count_limit(
-            count=grp_in_frames.df_input_ids.height,
-            limit_max=self.limits.num_input_ids_max,
-            label="Normalized input ID count",
         )
         return OmniPathSelection(
             dataset=self,
@@ -324,15 +279,15 @@ class OmniPathSelection:
     Examples:
         Use a returned selection to materialize substrate relations:
 
-        >>> db = OmniPathDb.from_files(
-        ...     file_enzsub="fixtures/omnipath/enzsub.tsv"
+        >>> db = OmniPathDatabase.from_files(
+        ...     enzsub="fixtures/omnipath/enzsub.tsv"
         ... )
         >>> selection = db.select_ids(["P31749"])
         >>> selection.extract_enzsub()["TargetId"].to_list()
         ['BAD', 'FOXO3']
     """
 
-    dataset: OmniPathDb
+    dataset: OmniPathDatabase
     _df_input_ids: pl.DataFrame = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
     resources_selected: frozenset[OmniPathResourceName]
@@ -345,8 +300,8 @@ class OmniPathSelection:
         """Report whether this selection carries `GroupId` through outputs.
 
         Examples:
-            >>> db = OmniPathDb.from_files(
-            ...     file_enzsub="fixtures/omnipath/enzsub.tsv"
+            >>> db = OmniPathDatabase.from_files(
+            ...     enzsub="fixtures/omnipath/enzsub.tsv"
             ... )
             >>> db.select_ids(["P31749"]).is_grouped
             False
@@ -380,14 +335,14 @@ class OmniPathSelection:
         Examples:
             Restrict unmapped-ID reporting to enzyme-substrate relations:
 
-            >>> db = OmniPathDb.from_files(
-            ...     file_enzsub="fixtures/omnipath/enzsub.tsv",
-            ...     file_interactions="fixtures/omnipath/interactions.tsv",
+            >>> db = OmniPathDatabase.from_files(
+            ...     enzsub="fixtures/omnipath/enzsub.tsv",
+            ...     interactions="fixtures/omnipath/interactions.tsv",
             ... )
             >>> selection = db.select_ids(["P31749", "ERBB2"])
             >>> (
             ...     selection.with_resources(["enzsub"])
-            ...     .extract_unmapped_input_ids()
+            ...     .extract_unmatched_ids()
             ...     .to_dicts()
             ... )
             [{'InputId': 'ERBB2'}]
@@ -416,9 +371,9 @@ class OmniPathSelection:
         """Create a new selection constrained to OmniPath enzsub relations.
 
         Examples:
-            >>> db = OmniPathDb.from_files(
-            ...     file_enzsub="fixtures/omnipath/enzsub.tsv",
-            ...     file_interactions="fixtures/omnipath/interactions.tsv",
+            >>> db = OmniPathDatabase.from_files(
+            ...     enzsub="fixtures/omnipath/enzsub.tsv",
+            ...     interactions="fixtures/omnipath/interactions.tsv",
             ... )
             >>> (
             ...     db.select_ids(["P31749"])
@@ -434,9 +389,9 @@ class OmniPathSelection:
         """Create a new selection constrained to OmniPath interactions.
 
         Examples:
-            >>> db = OmniPathDb.from_files(
-            ...     file_enzsub="fixtures/omnipath/enzsub.tsv",
-            ...     file_interactions="fixtures/omnipath/interactions.tsv",
+            >>> db = OmniPathDatabase.from_files(
+            ...     enzsub="fixtures/omnipath/enzsub.tsv",
+            ...     interactions="fixtures/omnipath/interactions.tsv",
             ... )
             >>> (
             ...     db.select_ids(["ERBB2"])
@@ -467,8 +422,8 @@ class OmniPathSelection:
         Examples:
             Extract a substrate site and modification:
 
-            >>> db = OmniPathDb.from_files(
-            ...     file_enzsub="fixtures/omnipath/enzsub.tsv"
+            >>> db = OmniPathDatabase.from_files(
+            ...     enzsub="fixtures/omnipath/enzsub.tsv"
             ... )
             >>> db.select_ids(["P31749"]).extract_enzsub().head(1).to_dicts()
             [{'SourceId': 'P31749', 'TargetId': 'BAD', 'TargetSite': 'S136', 'Modification': 'phosphorylation'}]
@@ -506,8 +461,8 @@ class OmniPathSelection:
         Examples:
             Extract one interaction and its direction flags:
 
-            >>> db = OmniPathDb.from_files(
-            ...     file_interactions="fixtures/omnipath/interactions.tsv"
+            >>> db = OmniPathDatabase.from_files(
+            ...     interactions="fixtures/omnipath/interactions.tsv"
             ... )
             >>> db.select_ids(["ERBB2"]).extract_interactions().to_dicts()
             [{'SourceId': 'EGFR', 'TargetId': 'ERBB2', 'IsDirected': False, 'IsStimulation': True, 'IsInhibition': False}]
@@ -528,7 +483,7 @@ class OmniPathSelection:
             )
         return self._df_interactions
 
-    def extract_unmapped_input_ids(self) -> pl.DataFrame:
+    def extract_unmatched_ids(self) -> pl.DataFrame:
         """Extract normalized input IDs not found in the selected resources.
 
         Returns:
@@ -540,11 +495,11 @@ class OmniPathSelection:
         Examples:
             Report an identifier absent from the selected resource:
 
-            >>> db = OmniPathDb.from_files(
-            ...     file_interactions="fixtures/omnipath/interactions.tsv"
+            >>> db = OmniPathDatabase.from_files(
+            ...     interactions="fixtures/omnipath/interactions.tsv"
             ... )
             >>> selection = db.select_ids(["MISSING"]).with_interactions()
-            >>> selection.extract_unmapped_input_ids().to_dicts()
+            >>> selection.extract_unmatched_ids().to_dicts()
             [{'InputId': 'MISSING'}]
         """
         if self._df_unmapped is None:

@@ -1,7 +1,5 @@
-from .omnipath import OmniPathDb
-from .spec import OmniPathResourceLimits
+from .omnipath import OmniPathDatabase
 
 __all__ = [
-    "OmniPathDb",
-    "OmniPathResourceLimits",
+    "OmniPathDatabase",
 ]

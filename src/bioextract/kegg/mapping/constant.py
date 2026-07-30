@@ -8,8 +8,8 @@ from polars._typing import SchemaDict
 SCHEMA_VERSION = "kegg-mapping-v0.1"
 MEDIA_TYPE_TSV = "text/tab-separated-values"
 
-KIND_INPUT_ID_VALUES = ("uniprot", "ncbi_geneid", "kegg_gene")
-KeggInputIdKind = Literal["uniprot", "ncbi_geneid", "kegg_gene"]
+NAMESPACE_VALUES = ("uniprot", "ncbi_gene", "kegg_gene")
+KEGGNamespace = Literal["uniprot", "ncbi_gene", "kegg_gene"]
 
 COLS_MAPPING = [
     "OrganismCode",

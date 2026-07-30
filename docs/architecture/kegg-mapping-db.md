@@ -6,10 +6,9 @@ Status: current
 
 ## Goal
 
-`bioextract.kegg.KeggDb` supports local KEGG organism mapping snapshots
+`bioextract.kegg.KEGGDatabase` supports local KEGG organism mapping snapshots
 in addition to the existing BRITE JSON tidy path. The mapping path turns
-explicit KEGG raw files into a stable annotation table for downstream
-proteomics enrichment.
+explicit KEGG raw files into stable gene, KO, and pathway relationships.
 
 The first version covers:
 
@@ -29,25 +28,25 @@ The first version intentionally does not cover:
 
 ## Raw Inputs
 
-`KeggDb.from_mapping_files()` accepts exact file paths:
+`KEGGDatabase.from_mapping_files()` accepts exact file paths:
 
 ```text
 conv_uniprot.tsv
 gene_ko.tsv
 gene_pathway.tsv
 gene_list.tsv
-conv_ncbi_geneid.tsv
+conv_ncbi_gene.tsv
 ```
 
 `conv_uniprot.tsv`, `gene_ko.tsv`, and `gene_pathway.tsv` are required for the
-first version because the proteomics path needs UniProt-to-pathway and
-UniProt-to-KO mappings. `gene_list.tsv` and `conv_ncbi_geneid.tsv` are optional
+first version because together they define UniProt-to-pathway and
+UniProt-to-KO mappings. `gene_list.tsv` and `conv_ncbi_gene.tsv` are optional
 metadata and alternate-ID inputs.
 
 The organism code is explicit:
 
 ```python
-KeggDb.from_mapping_files(..., organism_code="hsa")
+KEGGDatabase.from_mapping_files(..., organism_code="hsa")
 ```
 
 It is also used to validate that observed KEGG gene IDs belong to the expected
@@ -56,35 +55,35 @@ organism namespace when the raw files are non-empty.
 ## Public API
 
 ```python
-from bioextract.kegg import KeggDb
+from bioextract.kegg import KEGGDatabase
 
-db = KeggDb.from_mapping_files(
-    file_conv_uniprot="conv_uniprot.tsv",
-    file_gene_ko="gene_ko.tsv",
-    file_gene_pathway="gene_pathway.tsv",
+db = KEGGDatabase.from_mapping_files(
+    uniprot_conversion="conv_uniprot.tsv",
+    gene_ko="gene_ko.tsv",
+    gene_pathway="gene_pathway.tsv",
     organism_code="hsa",
-    file_gene_list="gene_list.tsv",
-    file_conv_ncbi_geneid="conv_ncbi_geneid.tsv",
+    gene_list="gene_list.tsv",
+    ncbi_gene_conversion="conv_ncbi_gene.tsv",
 )
 
 df_mapping = db.extract_mapping()
 
-selection = db.select_ids(["P12345", "Q9Y243"], kind_input_id="uniprot")
+selection = db.select_ids(["P12345", "Q9Y243"], namespace="uniprot")
 df_selected = selection.extract_mapping()
-df_unmapped = selection.extract_unmapped_input_ids()
+df_unmapped = selection.extract_unmatched_ids()
 
 grouped = db.select_groups(
     {"up": ["P12345"], "down": ["Q9Y243"]},
-    kind_input_id="uniprot",
+    namespace="uniprot",
 )
 df_grouped = grouped.extract_mapping()
 ```
 
-The accepted `kind_input_id` values are:
+The accepted `namespace` values are:
 
 ```text
 uniprot
-ncbi_geneid
+ncbi_gene
 kegg_gene
 ```
 
@@ -131,7 +130,7 @@ Single selections prepend:
 
 ```text
 InputId
-KindInputId
+InputNamespace
 ```
 
 Grouped selections prepend:
@@ -139,10 +138,10 @@ Grouped selections prepend:
 ```text
 GroupId
 InputId
-KindInputId
+InputNamespace
 ```
 
-`extract_unmapped_input_ids()` returns `InputId` for single selections and
+`extract_unmatched_ids()` returns `InputId` for single selections and
 `GroupId, InputId` for grouped selections.
 
 ## Tidy Dataset
@@ -160,16 +159,16 @@ kegg-mapping-v0.1
 ```
 
 The existing BRITE JSON path keeps its current `pathway.parquet` contract.
-`KeggDb` internally distinguishes snapshot kinds and dispatches
+`KEGGDatabase` internally distinguishes snapshot kinds and dispatches
 `build_tidy()` accordingly.
 
 ## Implementation Notes
 
-- Keep the public entrypoint on `KeggDb`; do not add another top-level DB type.
+- Keep the public entrypoint on `KEGGDatabase`; do not add another top-level DB type.
 - Keep file paths explicit in `from_mapping_files()`.
 - Keep selection output flat, matching Reactome, WikiPathways, StringDB, and
   OmniPath grouped selection behavior.
-- Cache the full mapping frame on the `KeggDb` instance after first materialize.
+- Cache the full mapping frame on the `KEGGDatabase` instance after first materialize.
 - Use Polars joins and projections rather than manual row loops.
 - Raise targeted `ValueError` when mapping-only methods are called on a BRITE
   snapshot.
@@ -180,12 +179,12 @@ Focused tests cover:
 
 - `from_mapping_files()` with required and optional files
 - `extract_mapping()` normalization and many-to-many expansion
-- `select_ids(..., kind_input_id="uniprot")`
-- `select_ids(..., kind_input_id="ncbi_geneid")`
-- `select_ids(..., kind_input_id="kegg_gene")`
-- `select_groups(..., kind_input_id="uniprot")`
+- `select_ids(..., namespace="uniprot")`
+- `select_ids(..., namespace="ncbi_gene")`
+- `select_ids(..., namespace="kegg_gene")`
+- `select_groups(..., namespace="uniprot")`
 - unmapped IDs for single and grouped selections
 - missing optional files with null output columns
-- `build_tidy()` and `write_tidy()` writing `mapping.parquet`
-- invalid `kind_input_id`
+- `build_tidy()` and `write_parquet(path)` for the mapping relation
+- invalid `namespace`
 - mapping APIs called on a BRITE snapshot

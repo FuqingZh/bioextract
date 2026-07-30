@@ -7,7 +7,7 @@ from .constant import (
     SCHEMA_BRITE,
 )
 from .parse import read_brite
-from .write import build_deduped_frame, write_frame_assets
+from .write import build_deduped_frame
 
 
 def build_tidy_frames(file_in: Path) -> dict[str, pl.DataFrame]:
@@ -41,28 +41,3 @@ def build_tidy_frames(file_in: Path) -> dict[str, pl.DataFrame]:
         dedup_keys=DEDUP_KEYS_BY_FRAME["pathway"],
     )
     return {"pathway": df_pathway}
-
-
-def run_tidy_kegg_brite(file_in: Path, dir_out: Path) -> None:
-    """Write the legacy manifest-free KEGG BRITE parquet assets.
-
-    Args:
-        file_in: Path to a KEGG BRITE JSON file.
-        dir_out: Destination directory for ``pathway.parquet``.
-
-    Notes:
-        New callers that need source provenance or a manifest should use
-        :meth:`bioextract.kegg.KeggDb.write_tidy`. This function remains the
-        direct writer for compatibility and intentionally emits no manifest.
-
-    Examples:
-        Write the compact BRITE fixture to a relative output directory:
-
-        >>> dir_out = Path("build/kegg-brite")
-        >>> run_tidy_kegg_brite(Path("data/kegg/tcar00001.json"), dir_out)
-        >>> (dir_out / "pathway.parquet").is_file()
-        True
-    """
-    frames = build_tidy_frames(file_in)
-    dir_out.mkdir(parents=True, exist_ok=True)
-    write_frame_assets(dir_out=dir_out, frames=frames)
