@@ -211,3 +211,41 @@ def test_tidy_publication_rejects_mapping_relationships_absent_from_xml(
 
     with pytest.raises(ValueError, match=message):
         database.build_tidy()
+
+
+@pytest.mark.parametrize(
+    ("old_xml", "new_xml", "message"),
+    [
+        (
+            'id="IPR000001" type="Domain"',
+            'id="IPR000001" type=""',
+            "one non-empty XML InterProType",
+        ),
+        (
+            '<db_xref db="PFAM" dbkey="PF00051" name="Kringle"/>',
+            (
+                '<db_xref db="PFAM" dbkey="PF00051" name="Kringle"/>'
+                '<db_xref db="OTHER" dbkey="PF00051" name="Kringle"/>'
+            ),
+            "one non-empty XML MemberDb",
+        ),
+    ],
+)
+def test_tidy_publication_requires_unique_nonempty_xml_enrichment(
+    tmp_path: Path,
+    old_xml: str,
+    new_xml: str,
+    message: str,
+) -> None:
+    files = write_interpro_fixture(tmp_path)
+    with gzip.open(files["xml"], "rt", encoding="utf-8") as handle:
+        xml = handle.read()
+    with gzip.open(files["xml"], "wt", encoding="utf-8") as handle:
+        handle.write(xml.replace(old_xml, new_xml, 1))
+    database = InterProDatabase.from_mapping_files(
+        protein_to_interpro=files["protein2ipr"],
+        interpro_xml=files["xml"],
+    )
+
+    with pytest.raises(ValueError, match=message):
+        database.build_tidy()

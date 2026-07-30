@@ -549,6 +549,22 @@ def test_selection_and_fasta_inputs_reject_empty_values(tmp_path: Path) -> None:
             entries=entries, isoform_sequences=embedded_blank
         ).write_duckdb(tmp_path / "embedded-blank.duckdb")
 
+    leading_whitespace = tmp_path / "leading-whitespace.fasta"
+    leading_whitespace.write_text(
+        ">sp|P12345|TEST_HUMAN\n ACDEFGHIKL\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="invalid sequence characters"):
+        UniProtDatabase.from_knowledgebase(
+            entries=entries, canonical_sequences=leading_whitespace
+        ).write_duckdb(tmp_path / "leading-whitespace.duckdb")
+
+    trailing_whitespace = tmp_path / "trailing-whitespace.fasta"
+    trailing_whitespace.write_text(">sp|P12345-2|TEST_HUMAN\nACD \n", encoding="utf-8")
+    with pytest.raises(ValueError, match="invalid sequence characters"):
+        UniProtDatabase.from_knowledgebase(
+            entries=entries, isoform_sequences=trailing_whitespace
+        ).write_duckdb(tmp_path / "trailing-whitespace.duckdb")
+
     invalid_fasta = tmp_path / "invalid-sequence.fasta"
     invalid_fasta.write_text(">sp|P12345-2|TEST_HUMAN\nAC D1!\n", encoding="utf-8")
     with pytest.raises(ValueError, match="invalid sequence characters"):
@@ -573,6 +589,40 @@ SQ   SEQUENCE   3 AA;  300 MW;  0000000000000000 CRC64;
     with pytest.raises(ValueError, match="CRC64 mismatch"):
         UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
             tmp_path / "bad-checksum.duckdb"
+        )
+
+
+@pytest.mark.parametrize(
+    "sq_line",
+    [
+        "SQ   SEQUENCE   3 AA;  300 MW;  6AAEBDB0 CRC64;",
+        "SQ   SEQUENCE   3 AA;  300 MW;  6aaebdb000000000 CRC64;",
+        "SQ   SEQUENCE   3 AA;  300 MW;  6AAEBDBG000000000 CRC64;",
+        "SQ   SEQUENCE   3 AA;  300 MW;  6AAEBDB000000000 CRC64; trailing",
+        "SQ\tSEQUENCE   3 AA;  300 MW;  6AAEBDB000000000 CRC64;",
+        "SQ   junk SEQUENCE   3 AA;  300 MW;  6AAEBDB000000000 CRC64;",
+    ],
+)
+def test_dat_sq_line_requires_exact_crc64_grammar(tmp_path: Path, sq_line: str) -> None:
+    entries = tmp_path / "invalid-sq.dat"
+    entries.write_text(
+        "\n".join(
+            [
+                "ID   TEST_HUMAN Reviewed; 3 AA.",
+                "AC   P12345;",
+                "OX   NCBI_TaxID=9606;",
+                sq_line,
+                "     ACD",
+                "//",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Invalid UniProt SQ line"):
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+            tmp_path / "invalid-sq.duckdb"
         )
 
 

@@ -448,11 +448,11 @@ def _iter_records(path: Path) -> Iterator[_Record]:
                 comment_parts = [first.strip()]
             elif line.startswith("CC       ") and comment_type is not None:
                 comment_parts.append(line[9:].strip())
-            elif line.startswith("SQ   "):
-                match = re.search(
-                    r"SEQUENCE\s+([0-9]+) AA;\s+([0-9]+) MW;\s+"
+            elif line.startswith("SQ"):
+                match = re.fullmatch(
+                    r"SQ {3}SEQUENCE +([0-9]+) AA; +([0-9]+) MW; +"
                     r"([0-9A-F]{16}) CRC64;",
-                    line,
+                    line.rstrip("\r\n"),
                 )
                 if match is None:
                     raise ValueError(

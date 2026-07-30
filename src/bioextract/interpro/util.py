@@ -95,39 +95,51 @@ def validate_mapping_xml_relationships(
     df_interpro_entry: pl.DataFrame,
     df_interpro_member: pl.DataFrame,
 ) -> None:
-    """Require every mapping entry/member relationship to exist in the XML."""
-    mapping = scan_protein2ipr_frame(file_protein2ipr)
-    missing_entry = (
-        mapping.select("InterProId")
+    """Require one complete XML explanation for every mapping relationship."""
+    mapping_keys = (
+        scan_protein2ipr_frame(file_protein2ipr)
+        .select("InterProId", "MemberDbId")
         .unique()
-        .join(
-            df_interpro_entry.lazy().select("InterProId"), on="InterProId", how="anti"
-        )
-        .limit(1)
         .collect(engine="streaming")
     )
-    if missing_entry.height:
-        raise ValueError(
-            "InterPro mapping relationship is absent from XML entry metadata: "
-            f"{missing_entry.item(0, 'InterProId')}"
-        )
-    missing_member = (
-        mapping.select("InterProId", "MemberDbId")
-        .unique()
-        .join(
-            df_interpro_member.lazy().select("InterProId", "MemberDbId"),
-            on=["InterProId", "MemberDbId"],
-            how="anti",
-        )
-        .limit(1)
-        .collect(engine="streaming")
-    )
-    if missing_member.height:
-        row = missing_member.row(0, named=True)
-        raise ValueError(
-            "InterPro mapping relationship is absent from XML member metadata: "
-            f"{row['InterProId']}/{row['MemberDbId']}"
-        )
+    entry_values: dict[str, set[str]] = {}
+    entry_keys: set[str] = set()
+    for interpro_id, interpro_type in df_interpro_entry.iter_rows():
+        entry_keys.add(interpro_id)
+        if interpro_type is not None and interpro_type.strip():
+            entry_values.setdefault(interpro_id, set()).add(interpro_type.strip())
+    member_values: dict[tuple[str, str], set[str]] = {}
+    member_keys: set[tuple[str, str]] = set()
+    for interpro_id, member_db_id, member_db in df_interpro_member.iter_rows():
+        key = (interpro_id, member_db_id)
+        member_keys.add(key)
+        if member_db is not None and member_db.strip():
+            member_values.setdefault(key, set()).add(member_db.strip())
+
+    for interpro_id, member_db_id in mapping_keys.iter_rows():
+        if interpro_id not in entry_keys:
+            raise ValueError(
+                "InterPro mapping relationship is absent from XML entry metadata: "
+                f"{interpro_id}"
+            )
+        types = entry_values.get(interpro_id, set())
+        if len(types) != 1:
+            raise ValueError(
+                "InterPro mapping entry is not uniquely explained by one non-empty "
+                f"XML InterProType: {interpro_id}"
+            )
+        member_key = (interpro_id, member_db_id)
+        if member_key not in member_keys:
+            raise ValueError(
+                "InterPro mapping relationship is absent from XML member metadata: "
+                f"{interpro_id}/{member_db_id}"
+            )
+        databases = member_values.get(member_key, set())
+        if len(databases) != 1:
+            raise ValueError(
+                "InterPro mapping member is not uniquely explained by one non-empty "
+                f"XML MemberDb: {interpro_id}/{member_db_id}"
+            )
 
 
 def select_mapping_frame(
