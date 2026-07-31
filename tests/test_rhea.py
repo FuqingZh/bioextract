@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import gzip
+import inspect
+import os
 import zipfile
 from pathlib import Path
 
@@ -181,7 +183,7 @@ def test_reaction_files_write_semantic_tables(tmp_path: Path) -> None:
     )
     path = tmp_path / "rhea.duckdb"
 
-    report = RheaDatabase.from_reaction_files(
+    report = RheaDatabase.from_files(
         rdf=file_rdf,
         directions=file_directions,
     ).write_duckdb(path)
@@ -216,6 +218,103 @@ def test_reaction_files_write_semantic_tables(tmp_path: Path) -> None:
         ).fetchone() == (None, None, True)
 
 
+def test_from_files_signature_and_removed_constructors() -> None:
+    parameters = inspect.signature(RheaDatabase.from_files).parameters
+    assert tuple(parameters) == (
+        "rdf",
+        "directions",
+        "relationships",
+        "obsolete_reactions",
+        "reaction_smiles",
+        "sdf",
+        "chebi_names",
+        "chebi_ph7_3_mapping",
+        "xrefs",
+        "uniprot_sprot",
+        "uniprot_trembl",
+    )
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY and parameter.default is None
+        for parameter in parameters.values()
+    )
+    assert not hasattr(RheaDatabase, "from_reaction_files")
+    assert not hasattr(RheaDatabase, "from_compound_files")
+    assert not hasattr(RheaDatabase, "from_cross_reference_files")
+
+
+def test_from_files_validation_and_scope_matrix(tmp_path: Path) -> None:
+    files = {
+        name: _write(tmp_path / f"{name}.txt", name)
+        for name in (
+            "rdf",
+            "directions",
+            "relationships",
+            "obsolete_reactions",
+            "reaction_smiles",
+            "sdf",
+            "chebi_names",
+            "chebi_ph7_3_mapping",
+            "xrefs",
+            "uniprot_sprot",
+            "uniprot_trembl",
+        )
+    }
+    with pytest.raises(ValueError, match="At least one"):
+        RheaDatabase.from_files()
+
+    invalid_reaction_profiles = [
+        {"rdf": files["rdf"]},
+        {"directions": files["directions"]},
+    ]
+    for role in ("relationships", "obsolete_reactions", "reaction_smiles"):
+        invalid_reaction_profiles.extend(
+            (
+                {role: files[role]},
+                {"rdf": files["rdf"], role: files[role]},
+                {"directions": files["directions"], role: files[role]},
+            )
+        )
+    for values in invalid_reaction_profiles:
+        with pytest.raises(ValueError, match="require both rdf and directions"):
+            RheaDatabase.from_files(**values)
+
+    reactions = {"rdf": files["rdf"], "directions": files["directions"]}
+    assert RheaDatabase.from_files(**reactions).snapshot.scope == "reactions"
+    for role in ("sdf", "chebi_names", "chebi_ph7_3_mapping"):
+        assert RheaDatabase.from_files(**{role: files[role]}).snapshot.scope == (
+            "compounds"
+        )
+    for role in ("xrefs", "uniprot_sprot", "uniprot_trembl"):
+        assert RheaDatabase.from_files(**{role: files[role]}).snapshot.scope == (
+            "cross_references"
+        )
+
+    compounds = {"chebi_names": files["chebi_names"]}
+    cross_references = {"xrefs": files["xrefs"]}
+    for values in (
+        reactions | compounds,
+        reactions | cross_references,
+        compounds | cross_references,
+        reactions | compounds | cross_references,
+    ):
+        assert RheaDatabase.from_files(**values).snapshot.scope == "partial"
+
+
+def test_from_files_rejects_duplicate_physical_files(tmp_path: Path) -> None:
+    source = _write(tmp_path / "source.tsv", "value\n")
+    symlink = tmp_path / "alias.tsv"
+    symlink.symlink_to(source)
+    hard_link = tmp_path / "hard-link.tsv"
+    os.link(source, hard_link)
+
+    for alias in (tmp_path / "." / "source.tsv", symlink, hard_link):
+        with pytest.raises(
+            ValueError,
+            match="roles 'chebi_names' and 'xrefs'.*same physical file",
+        ):
+            RheaDatabase.from_files(chebi_names=source, xrefs=alias)
+
+
 def test_gzip_is_detected_from_content_not_suffix(tmp_path: Path) -> None:
     file_rdf = tmp_path / "rhea.data"
     with gzip.open(file_rdf, "wt", encoding="utf-8") as handle:
@@ -226,7 +325,7 @@ def test_gzip_is_detected_from_content_not_suffix(tmp_path: Path) -> None:
         "10000\t10001\t10002\t10003\n",
     )
 
-    report = RheaDatabase.from_reaction_files(
+    report = RheaDatabase.from_files(
         rdf=file_rdf,
         directions=file_directions,
     ).write_duckdb(tmp_path / "gzip.duckdb")
@@ -242,7 +341,7 @@ def test_participant_constructor_creates_only_supplied_tables(
         handle.write("CHEBI:1\t A\nCHEBI:2\t B\n")
     path = tmp_path / "participants.duckdb"
 
-    report = RheaDatabase.from_compound_files(chebi_names=file_names).write_duckdb(path)
+    report = RheaDatabase.from_files(chebi_names=file_names).write_duckdb(path)
 
     assert report.tables == ("chebi_name",)
     with duckdb.connect(str(path), read_only=True) as connection:
@@ -256,7 +355,7 @@ def test_cross_reference_constructor_builds_views(tmp_path: Path) -> None:
     raw = release / "raw"
     path = tmp_path / "xrefs.duckdb"
 
-    RheaDatabase.from_cross_reference_files(
+    RheaDatabase.from_files(
         xrefs=raw / "rhea2xrefs.tsv",
         uniprot_sprot=raw / "rhea2uniprot_sprot.tsv",
     ).write_duckdb(path)
@@ -268,6 +367,108 @@ def test_cross_reference_constructor_builds_views(tmp_path: Path) -> None:
         assert connection.execute(
             "SELECT uniprot_section FROM reaction_uniprot"
         ).fetchone() == ("Swiss-Prot",)
+
+
+def test_all_role_provenance_and_mixed_reaction_xref_capability(
+    tmp_path: Path,
+) -> None:
+    release = _write_release(tmp_path / "release")
+    raw = release / "raw"
+    path = tmp_path / "all-roles.duckdb"
+
+    report = RheaDatabase.from_files(
+        rdf=raw / "rhea.rdf",
+        directions=raw / "rhea-directions.tsv",
+        relationships=raw / "rhea-relationships.tsv",
+        obsolete_reactions=raw / "rhea-obsoletes.tsv",
+        reaction_smiles=raw / "rhea-reaction-smiles.tsv",
+        sdf=raw / "rhea.sdf",
+        chebi_names=raw / "chebiId_name.tsv",
+        chebi_ph7_3_mapping=raw / "chebi_pH7_3_mapping.tsv",
+        xrefs=raw / "rhea2xrefs.tsv",
+        uniprot_sprot=raw / "rhea2uniprot_sprot.tsv",
+        uniprot_trembl=raw / "rhea2uniprot_trembl.tsv",
+    ).write_duckdb(path)
+
+    assert report.scope == "partial"
+    assert set(report.source_files) == {
+        "rdf",
+        "directions",
+        "relationships",
+        "obsoletes",
+        "reaction_smiles",
+        "sdf",
+        "chebi_names",
+        "chebi_ph7_3_mapping",
+        "xrefs",
+        "uniprot_sprot",
+        "uniprot_trembl",
+    }
+    with duckdb.connect(str(path), read_only=True) as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+        logical_sources = {
+            row[0]
+            for row in connection.execute(
+                "SELECT logical_name FROM _bioextract.source_file"
+            ).fetchall()
+        }
+        assert metadata["bioextract.scope"] == "partial"
+        assert metadata["bioextract.resource_schema_version"] == "rhea-duckdb-v1"
+        assert "bioextract.release_version" not in metadata
+        assert logical_sources == set(report.source_files)
+
+    database = RheaDatabase.from_duckdb(path)
+    assert database.snapshot.scope == "publication"
+    matches = database.select_reactions(["1.1.1.1"], namespace="ec").extract_matches()
+    assert matches["RheaId"].to_list() == [10000]
+
+
+def test_xref_only_publication_reports_reaction_capability_failure(
+    tmp_path: Path,
+) -> None:
+    release = _write_release(tmp_path / "release")
+    path = tmp_path / "xrefs-only.duckdb"
+    RheaDatabase.from_files(xrefs=release / "raw" / "rhea2xrefs.tsv").write_duckdb(path)
+
+    with duckdb.connect(str(path), read_only=True) as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+    assert metadata["bioextract.scope"] == "cross_references"
+    assert metadata["bioextract.resource_schema_version"] == "rhea-duckdb-v1"
+
+    database = RheaDatabase.from_duckdb(path)
+    assert database.snapshot.scope == "publication"
+    with pytest.raises(RheaCapabilityError, match="missing relations"):
+        database.select_reactions(["1.1.1.1"], namespace="ec")
+
+
+def test_reaction_xref_publication_persists_partial_construction_scope(
+    tmp_path: Path,
+) -> None:
+    release = _write_release(tmp_path / "release")
+    raw = release / "raw"
+    path = tmp_path / "reaction-xrefs.duckdb"
+    report = RheaDatabase.from_files(
+        rdf=raw / "rhea.rdf",
+        directions=raw / "rhea-directions.tsv",
+        xrefs=raw / "rhea2xrefs.tsv",
+    ).write_duckdb(path)
+
+    assert report.scope == "partial"
+    with duckdb.connect(str(path), read_only=True) as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+    assert metadata["bioextract.scope"] == "partial"
+    assert metadata["bioextract.resource_schema_version"] == "rhea-duckdb-v1"
+
+    database = RheaDatabase.from_duckdb(path)
+    assert database.snapshot.scope == "publication"
+    matches = database.select_reactions(["1.1.1.1"], namespace="ec").extract_matches()
+    assert matches["RheaId"].to_list() == [10000]
 
 
 def test_complete_release_directory_and_archive(tmp_path: Path) -> None:
@@ -308,7 +509,7 @@ def test_release_is_strict_but_partial_constructor_is_not(
     with pytest.raises(ValueError, match="Incomplete Rhea release"):
         RheaDatabase.from_release(tmp_path)
 
-    db = RheaDatabase.from_compound_files(chebi_names=tmp_path / "chebiId_name.tsv")
+    db = RheaDatabase.from_files(chebi_names=tmp_path / "chebiId_name.tsv")
     assert db.snapshot.scope == "compounds"
 
 
@@ -316,7 +517,7 @@ def test_if_exists_and_failed_build_preserve_destination(
     tmp_path: Path,
 ) -> None:
     file_names = _write(tmp_path / "names.tsv", "1\t A\n")
-    db = RheaDatabase.from_compound_files(chebi_names=file_names)
+    db = RheaDatabase.from_files(chebi_names=file_names)
     path = tmp_path / "rhea.duckdb"
     db.write_duckdb(path)
     original = path.read_bytes()
@@ -335,7 +536,7 @@ def test_if_exists_and_failed_build_preserve_destination(
         "RHEA_ID_MASTER\tRHEA_ID_LR\tRHEA_ID_RL\tRHEA_ID_BI\n"
         "20000\t20001\t20002\t20003\n",
     )
-    invalid_db = RheaDatabase.from_reaction_files(
+    invalid_db = RheaDatabase.from_files(
         rdf=file_rdf,
         directions=file_bad_directions,
     )
@@ -349,7 +550,7 @@ def test_source_hash_is_opt_in(tmp_path: Path) -> None:
     file_names = _write(tmp_path / "names.tsv", "1\t A\n")
     path = tmp_path / "rhea.duckdb"
 
-    RheaDatabase.from_compound_files(chebi_names=file_names).write_duckdb(
+    RheaDatabase.from_files(chebi_names=file_names).write_duckdb(
         path, include_source_hashes=True
     )
 
@@ -562,13 +763,13 @@ def test_obsolete_policy_is_explicit(tmp_path: Path) -> None:
 def test_partial_publication_reports_missing_capabilities(tmp_path: Path) -> None:
     file_names = _write(tmp_path / "names.tsv", "CHEBI:1\t A\n")
     path = tmp_path / "compounds.duckdb"
-    RheaDatabase.from_compound_files(chebi_names=file_names).write_duckdb(path)
+    RheaDatabase.from_files(chebi_names=file_names).write_duckdb(path)
     database = RheaDatabase.from_duckdb(path)
 
     with pytest.raises(RheaCapabilityError, match="missing relations"):
         database.select_reactions(["CHEBI:1"], namespace="chebi")
     with pytest.raises(RheaCapabilityError, match="from_duckdb"):
-        RheaDatabase.from_compound_files(chebi_names=file_names).select_reactions(
+        RheaDatabase.from_files(chebi_names=file_names).select_reactions(
             ["CHEBI:1"], namespace="chebi"
         )
     with pytest.raises(RuntimeError, match="cannot be republished"):

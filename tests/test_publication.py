@@ -549,19 +549,15 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "release_version",
         ),
         omnipath.OmniPathDatabase.from_files: ("enzsub", "interactions"),
-        rhea.RheaDatabase.from_reaction_files: (
+        rhea.RheaDatabase.from_files: (
             "rdf",
             "directions",
             "relationships",
             "obsolete_reactions",
             "reaction_smiles",
-        ),
-        rhea.RheaDatabase.from_compound_files: (
             "sdf",
             "chebi_names",
             "chebi_ph7_3_mapping",
-        ),
-        rhea.RheaDatabase.from_cross_reference_files: (
             "xrefs",
             "uniprot_sprot",
             "uniprot_trembl",
@@ -586,6 +582,12 @@ def test_phase_1_constructor_parameter_kinds_are_explicit() -> None:
     assert all(
         parameter.kind is inspect.Parameter.KEYWORD_ONLY
         for parameter in string_parameters.values()
+    )
+
+    rhea_parameters = inspect.signature(rhea.RheaDatabase.from_files).parameters
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY and parameter.default is None
+        for parameter in rhea_parameters.values()
     )
 
 

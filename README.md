@@ -91,23 +91,20 @@ result = RheaDatabase.from_release("rhea-release.zip").write_duckdb(
 print(result.tables)
 ```
 
-Focused constructors accept incomplete capabilities while retaining the same
+Explicit files accept incomplete or mixed capabilities while retaining the same
 DuckDB container:
 
 ```python
 from bioextract.rhea import RheaDatabase
 
-RheaDatabase.from_reaction_files(
+RheaDatabase.from_files(
     rdf="rhea.rdf.gz",
     directions="rhea-directions.tsv",
     relationships="rhea-relationships.tsv",
-).write_duckdb("out/rhea.duckdb")
-
-RheaDatabase.from_cross_reference_files(
     xrefs="rhea2xrefs.tsv",
     uniprot_sprot="rhea2uniprot_sprot.tsv",
     uniprot_trembl="rhea2uniprot_trembl.tsv.gz",
-).write_duckdb("out/rhea_xrefs.duckdb")
+).write_duckdb("out/rhea.duckdb")
 ```
 
 Open a published database and select reactions through any one supported
