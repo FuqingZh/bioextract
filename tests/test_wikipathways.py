@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import duckdb
@@ -139,6 +140,32 @@ def test_from_gmt_requires_common_collection(
 
     with pytest.raises(ValueError, match="common Collection"):
         WikiPathwaysDatabase.from_gmt([file_a, file_b]).extract_pathway()
+
+
+def test_from_gmt_rejects_empty_file_alongside_valid_file(tmp_path: Path) -> None:
+    valid = write_gmt(
+        tmp_path / "valid.gmt",
+        "A%WikiPathways_20260510%WP1%Homo sapiens\thttps://example/WP1\t1",
+    )
+    empty = tmp_path / "empty.gmt"
+    empty.write_text("\n \t\n", encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=rf"at least one non-empty pathway record: path={re.escape(str(empty))}",
+    ):
+        WikiPathwaysDatabase.from_gmt([valid, empty]).extract_pathway()
+
+
+def test_from_gmt_rejects_single_empty_file(tmp_path: Path) -> None:
+    empty = tmp_path / "empty.gmt"
+    empty.write_text("", encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=rf"at least one non-empty pathway record: path={re.escape(str(empty))}",
+    ):
+        WikiPathwaysDatabase.from_gmt(empty).extract_pathway()
 
 
 @pytest.mark.parametrize("collection", ["Reactome_20260510", "WikiPathways_"])

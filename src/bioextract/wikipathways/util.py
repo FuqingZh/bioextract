@@ -104,10 +104,11 @@ def read_gmt_frames(files_gmt: tuple[Path, ...]) -> _ParsedGmtDataset:
 
     pathway_locations: dict[str, tuple[Path, int]] = {}
     for file_gmt in files_gmt:
+        pathway_count = 0
         with file_gmt.open("r", encoding="utf-8") as handle:
             for line_number, line in enumerate(handle, start=1):
                 line = line.rstrip("\n")
-                if not line:
+                if not line.strip():
                     continue
                 fields = line.split("\t")
                 if len(fields) < 2:
@@ -128,6 +129,7 @@ def read_gmt_frames(files_gmt: tuple[Path, ...]) -> _ParsedGmtDataset:
                         f"duplicate_line={line_number}"
                     )
                 pathway_locations[pathway_id] = (file_gmt, line_number)
+                pathway_count += 1
                 url = fields[1].strip()
                 gene_ids = [
                     gene_id.strip() for gene_id in fields[2:] if gene_id.strip()
@@ -146,6 +148,11 @@ def read_gmt_frames(files_gmt: tuple[Path, ...]) -> _ParsedGmtDataset:
                             "GeneId": gene_id,
                         }
                     )
+        if pathway_count == 0:
+            raise ValueError(
+                "WikiPathways GMT file must contain at least one non-empty "
+                f"pathway record: path={file_gmt}"
+            )
 
     collections = {pathway["Collection"] for pathway in pathways}
     versions = {pathway["Version"] for pathway in pathways}

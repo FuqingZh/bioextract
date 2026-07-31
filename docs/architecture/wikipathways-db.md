@@ -111,6 +111,10 @@ Construction resolves and freezes paths immediately. Content parsing and the
 Collection, Version, and pathway-ID checks are deferred until the first
 extraction, tidy build, or publication.
 
+Every resolved GMT must independently contain at least one non-empty pathway
+record. An empty or whitespace-only file is rejected with its path even when
+other resolved files contain valid records.
+
 ## Output Contract
 
 `extract_pathway()` returns:

@@ -39,6 +39,9 @@ Mouse pathway%WikiPathways_20260510%WP1%Mus musculus	https://www.wikipathways.or
   one Version derived from that Collection.
 - Collection values without the `WikiPathways_` prefix or its non-empty Version
   suffix are rejected before release provenance is published.
+- Each resolved GMT must contain a non-empty pathway record; both a single
+  empty file and an empty file alongside a valid file raise a path-specific
+  error.
 - Duplicate `WikiPathwaysId` values within one file or across files are
   rejected.
 - Malformed pathway headers raise a targeted `ValueError`.
