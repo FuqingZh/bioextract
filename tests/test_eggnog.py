@@ -54,8 +54,8 @@ def write_eggnog_fixture(tmp_path: Path) -> dict[str, Path]:
 
 def test_extract_mapping_from_sqlite_expands_og_cog_categories(tmp_path: Path) -> None:
     files = write_eggnog_fixture(tmp_path)
-    db = EggNOGDatabase.from_files(
-        eggnog_database=files["db"],
+    db = EggNOGDatabase.from_sqlite(
+        files["db"],
         cog_functions=files["cog_fun"],
     )
 
@@ -103,8 +103,8 @@ def test_extract_mapping_from_sqlite_expands_og_cog_categories(tmp_path: Path) -
 
 def test_select_ids_queries_subset_and_reports_unmapped(tmp_path: Path) -> None:
     files = write_eggnog_fixture(tmp_path)
-    db = EggNOGDatabase.from_files(
-        eggnog_database=files["db"],
+    db = EggNOGDatabase.from_sqlite(
+        files["db"],
         cog_functions=files["cog_fun"],
     )
 
@@ -135,8 +135,8 @@ def test_select_ids_queries_subset_and_reports_unmapped(tmp_path: Path) -> None:
 
 def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     files = write_eggnog_fixture(tmp_path)
-    db = EggNOGDatabase.from_files(
-        eggnog_database=files["db"],
+    db = EggNOGDatabase.from_sqlite(
+        files["db"],
         cog_functions=files["cog_fun"],
     )
 
@@ -161,8 +161,8 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
 
 def test_write_parquet_writes_mapping_without_sidecar(tmp_path: Path) -> None:
     files = write_eggnog_fixture(tmp_path)
-    db = EggNOGDatabase.from_files(
-        eggnog_database=files["db"],
+    db = EggNOGDatabase.from_sqlite(
+        files["db"],
         cog_functions=files["cog_fun"],
     )
 
@@ -183,8 +183,8 @@ def test_gzip_sqlite_is_decompressed_to_tmp_dir(tmp_path: Path) -> None:
     ):
         shutil.copyfileobj(handle_in, handle_out)
 
-    db = EggNOGDatabase.from_files(
-        eggnog_database=file_gz,
+    db = EggNOGDatabase.from_sqlite(
+        file_gz,
         cog_functions=files["cog_fun"],
         temp_dir=tmp_path / "tmp",
     )

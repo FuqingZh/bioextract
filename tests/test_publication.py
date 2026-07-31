@@ -470,6 +470,7 @@ def test_legacy_database_type_aliases_are_not_exported(
 def test_removed_legacy_writer_apis_are_not_exported() -> None:
     assert not hasattr(TidyDataset, "write")
     assert not hasattr(StringSelection, "with_score_min")
+    assert not hasattr(eggnog.EggNOGDatabase, "from_files")
 
 
 def test_resource_factories_do_not_expose_limits() -> None:
@@ -479,7 +480,7 @@ def test_resource_factories_do_not_expose_limits() -> None:
         kegg.KEGGDatabase.from_brite_json,
         reactome.ReactomeDatabase.from_files,
         wikipathways.WikiPathwaysDatabase.from_gmt,
-        eggnog.EggNOGDatabase.from_files,
+        eggnog.EggNOGDatabase.from_sqlite,
         interpro.InterProDatabase.from_mapping_files,
         uniprot.UniProtDatabase.from_idmapping,
         uniprot.UniProtDatabase.from_knowledgebase,
@@ -524,8 +525,8 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "relations",
         ),
         wikipathways.WikiPathwaysDatabase.from_gmt: ("path", "species"),
-        eggnog.EggNOGDatabase.from_files: (
-            "eggnog_database",
+        eggnog.EggNOGDatabase.from_sqlite: (
+            "source",
             "cog_functions",
             "temp_dir",
         ),
@@ -571,3 +572,18 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
     assert {
         factory: tuple(inspect.signature(factory).parameters) for factory in expected
     } == expected
+
+
+def test_phase_1_constructor_parameter_kinds_are_explicit() -> None:
+    eggnog_parameters = inspect.signature(eggnog.EggNOGDatabase.from_sqlite).parameters
+    assert eggnog_parameters["source"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert all(
+        eggnog_parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+        for name in ("cog_functions", "temp_dir")
+    )
+
+    string_parameters = inspect.signature(stringdb.STRINGDatabase.from_files).parameters
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in string_parameters.values()
+    )
