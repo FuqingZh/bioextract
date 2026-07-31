@@ -74,7 +74,8 @@ def resolve_gmt_sources(
         matched.extend(candidates)
 
     resolved: list[Path] = []
-    seen: set[Path] = set()
+    seen_paths: set[Path] = set()
+    seen_file_ids: set[tuple[int, int]] = set()
     for candidate in matched:
         try:
             actual = candidate.resolve(strict=True)
@@ -84,12 +85,15 @@ def resolve_gmt_sources(
             ) from error
         if not actual.is_file():
             raise ValueError(f"WikiPathways GMT source is not a file: {candidate}")
-        if actual in seen:
+        stat = actual.stat()
+        file_id = (stat.st_dev, stat.st_ino)
+        if actual in seen_paths or file_id in seen_file_ids:
             raise ValueError(
                 "WikiPathways GMT source resolves to a duplicate physical file: "
                 f"{actual}"
             )
-        seen.add(actual)
+        seen_paths.add(actual)
+        seen_file_ids.add(file_id)
         resolved.append(actual)
     return tuple(sorted(resolved, key=os.fspath))
 
@@ -189,7 +193,18 @@ def parse_pathway_header(
             f"path={file_gmt}, line={line_number}, value={header!r}"
         )
     pathway_name, collection, pathway_id, species = parts
-    version = collection.removeprefix("WikiPathways_")
+    collection_prefix = "WikiPathways_"
+    if not collection.startswith(collection_prefix):
+        raise ValueError(
+            "WikiPathways GMT Collection must start with 'WikiPathways_': "
+            f"path={file_gmt}, line={line_number}, value={collection!r}"
+        )
+    version = collection[len(collection_prefix) :]
+    if not version:
+        raise ValueError(
+            "WikiPathways GMT Collection must include a non-empty Version after "
+            f"'WikiPathways_': path={file_gmt}, line={line_number}"
+        )
     return {
         "PathwayName": pathway_name,
         "Collection": collection,

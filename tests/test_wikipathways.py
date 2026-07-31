@@ -111,11 +111,14 @@ def test_from_gmt_rejects_duplicate_physical_files(tmp_path: Path) -> None:
     file_gmt = write_wikipathways_fixture(tmp_path)
     alias = tmp_path / "alias.gmt"
     alias.symlink_to(file_gmt)
+    hard_link = tmp_path / "hard-link.gmt"
+    hard_link.hardlink_to(file_gmt)
 
     duplicate_sources = (
         [file_gmt, file_gmt],
         [str(tmp_path / "*.gmt"), file_gmt],
         [file_gmt, alias],
+        [file_gmt, hard_link],
     )
     for source in duplicate_sources:
         with pytest.raises(ValueError, match="duplicate physical file"):
@@ -136,6 +139,20 @@ def test_from_gmt_requires_common_collection(
 
     with pytest.raises(ValueError, match="common Collection"):
         WikiPathwaysDatabase.from_gmt([file_a, file_b]).extract_pathway()
+
+
+@pytest.mark.parametrize("collection", ["Reactome_20260510", "WikiPathways_"])
+def test_from_gmt_rejects_invalid_collection_version(
+    tmp_path: Path,
+    collection: str,
+) -> None:
+    file_gmt = write_gmt(
+        tmp_path / "invalid-collection.gmt",
+        f"A%{collection}%WP1%Homo sapiens\thttps://example/WP1\t1",
+    )
+
+    with pytest.raises(ValueError, match="WikiPathways GMT Collection"):
+        WikiPathwaysDatabase.from_gmt(file_gmt).extract_pathway()
 
 
 def test_from_gmt_extracts_one_common_version_from_collection(

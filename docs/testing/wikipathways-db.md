@@ -33,10 +33,12 @@ Mouse pathway%WikiPathways_20260510%WP1%Mus musculus	https://www.wikipathways.or
 - `glob=False` treats scalar and sequence entries literally.
 - Empty input, unmatched patterns, missing paths, directories, and non-files
   are rejected.
-- Repeated literals, overlapping globs, and symlink aliases that reach the same
-  physical file are rejected.
+- Repeated literals, overlapping globs, symlink aliases, and hard links that
+  reach the same physical file are rejected.
 - The complete resolved set requires one official Collection and exposes the
   one Version derived from that Collection.
+- Collection values without the `WikiPathways_` prefix or its non-empty Version
+  suffix are rejected before release provenance is published.
 - Duplicate `WikiPathwaysId` values within one file or across files are
   rejected.
 - Malformed pathway headers raise a targeted `ValueError`.

@@ -98,9 +98,10 @@ identity.
 
 The complete unfiltered dataset must contain one official `Collection` and
 globally unique `WikiPathwaysId` values. `Version` is derived from the
-`WikiPathways_` suffix of the official Collection field and is also checked for
-one common value defensively. Duplicate IDs within one file and across files
-are errors. One GMT may contain several species.
+non-empty suffix of an official Collection field that starts with
+`WikiPathways_`, and is also checked for one common value defensively.
+Duplicate IDs within one file and across files are errors. One GMT may contain
+several species.
 
 The validated common Version is recorded as `release_version` with
 `release_version_source="official_metadata"`. It comes only from parsed GMT
