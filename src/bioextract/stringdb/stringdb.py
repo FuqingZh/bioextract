@@ -100,9 +100,9 @@ class STRINGDatabase:
     @classmethod
     def from_files(
         cls,
-        aliases: os.PathLike[str] | None = None,
-        links: os.PathLike[str] | None = None,
         *,
+        aliases: os.PathLike[str] | str | None = None,
+        links: os.PathLike[str] | str | None = None,
         rank_by_source: Mapping[str, int] = DEFAULT_SOURCE_RANK_MAP,
         release_version: str | None = None,
     ) -> STRINGDatabase:

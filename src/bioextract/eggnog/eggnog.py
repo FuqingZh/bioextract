@@ -64,8 +64,8 @@ class EggNOGDatabase:
     Examples:
         Read one enriched protein-to-COG annotation:
 
-        >>> db = EggNOGDatabase.from_files(
-        ...     eggnog_database="fixtures/eggnog/eggnog.db",
+        >>> db = EggNOGDatabase.from_sqlite(
+        ...     "fixtures/eggnog/eggnog.db",
         ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
         ... )
         >>> db.extract_mapping().select(
@@ -79,18 +79,18 @@ class EggNOGDatabase:
     _df_cog_fun: pl.DataFrame | None = field(default=None, init=False, repr=False)
 
     @classmethod
-    def from_files(
+    def from_sqlite(
         cls,
+        source: os.PathLike[str] | str,
         *,
-        eggnog_database: os.PathLike[str] | str,
         cog_functions: os.PathLike[str] | str | None = None,
         temp_dir: os.PathLike[str] | str | None = None,
     ) -> EggNOGDatabase:
-        """Create a handle from explicit eggNOG mapper files.
+        """Create a handle from an eggNOG mapper SQLite database.
 
         Args:
-            eggnog_database: Path to an eggNOG mapper SQLite database or its
-                `.gz` wrapper.
+            source: Path to an eggNOG mapper SQLite database or its gzip
+                wrapper.
             cog_functions: Optional COG function table used to populate class
                 and display-name columns.
             temp_dir: Optional scratch directory for decompressing a wrapped
@@ -105,8 +105,8 @@ class EggNOGDatabase:
         Examples:
             Enrich COG categories with names from the optional lookup:
 
-            >>> db = EggNOGDatabase.from_files(
-            ...     eggnog_database="fixtures/eggnog/eggnog.db",
+            >>> db = EggNOGDatabase.from_sqlite(
+            ...     "fixtures/eggnog/eggnog.db",
             ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
             ... )
             >>> db.extract_mapping().select(
@@ -115,7 +115,7 @@ class EggNOGDatabase:
             [('E', 'Amino acid transport and metabolism')]
         """
         file_eggnog_db = _validate_file(
-            eggnog_database,
+            source,
             label="eggNOG SQLite database file",
         )
         file_cog_fun = cog_functions
@@ -147,8 +147,8 @@ class EggNOGDatabase:
         Examples:
             Preserve one row for each protein, OG, and COG-category match:
 
-            >>> db = EggNOGDatabase.from_files(
-            ...     eggnog_database="fixtures/eggnog/eggnog.db",
+            >>> db = EggNOGDatabase.from_sqlite(
+            ...     "fixtures/eggnog/eggnog.db",
             ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
             ... )
             >>> db.extract_mapping().select(
@@ -180,8 +180,8 @@ class EggNOGDatabase:
         Examples:
             Return annotations only for the selected protein ID:
 
-            >>> db = EggNOGDatabase.from_files(
-            ...     eggnog_database="fixtures/eggnog/eggnog.db"
+            >>> db = EggNOGDatabase.from_sqlite(
+            ...     "fixtures/eggnog/eggnog.db"
             ... )
             >>> selection = db.select_ids(["9606.ENSP1"])
             >>> selection.extract_mapping().select(
@@ -215,8 +215,8 @@ class EggNOGDatabase:
         Examples:
             Preserve a comparison label on every selected annotation row:
 
-            >>> db = EggNOGDatabase.from_files(
-            ...     eggnog_database="fixtures/eggnog/eggnog.db"
+            >>> db = EggNOGDatabase.from_sqlite(
+            ...     "fixtures/eggnog/eggnog.db"
             ... )
             >>> selection = db.select_groups(
             ...     {"up": ["9606.ENSP1"], "down": ["9606.MISSING"]},
@@ -247,8 +247,8 @@ class EggNOGDatabase:
 
         Examples:
             >>> from tempfile import TemporaryDirectory
-            >>> db = EggNOGDatabase.from_files(
-            ...     eggnog_database="fixtures/eggnog/eggnog.db"
+            >>> db = EggNOGDatabase.from_sqlite(
+            ...     "fixtures/eggnog/eggnog.db"
             ... )
             >>> with TemporaryDirectory() as dir_out:
             ...     result = db.write_parquet(Path(dir_out) / "eggnog.parquet")
@@ -290,8 +290,8 @@ class EggNOGDatabase:
         Examples:
             Resolve a COG category to its display name:
 
-            >>> db = EggNOGDatabase.from_files(
-            ...     eggnog_database="fixtures/eggnog/eggnog.db",
+            >>> db = EggNOGDatabase.from_sqlite(
+            ...     "fixtures/eggnog/eggnog.db",
             ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
             ... )
             >>> db.read_cog_fun().select(
@@ -338,8 +338,8 @@ class EggnogSelection:
     Examples:
         Inspect the COG categories retained by a selection:
 
-        >>> db = EggNOGDatabase.from_files(
-        ...     eggnog_database="fixtures/eggnog/eggnog.db"
+        >>> db = EggNOGDatabase.from_sqlite(
+        ...     "fixtures/eggnog/eggnog.db"
         ... )
         >>> selection = db.select_ids(["9606.ENSP1"])
         >>> selection.extract_mapping().get_column("CogCategory").to_list()
@@ -361,8 +361,8 @@ class EggnogSelection:
         """Report whether this selection carries `GroupId` through outputs.
 
         Examples:
-            >>> db = EggNOGDatabase.from_files(
-            ...     eggnog_database="fixtures/eggnog/eggnog.db"
+            >>> db = EggNOGDatabase.from_sqlite(
+            ...     "fixtures/eggnog/eggnog.db"
             ... )
             >>> db.select_ids(["9606.ENSP1"]).is_grouped
             False
@@ -384,8 +384,8 @@ class EggnogSelection:
         Examples:
             Extract the normalized input alongside its COG categories:
 
-            >>> db = EggNOGDatabase.from_files(
-            ...     eggnog_database="fixtures/eggnog/eggnog.db"
+            >>> db = EggNOGDatabase.from_sqlite(
+            ...     "fixtures/eggnog/eggnog.db"
             ... )
             >>> selection = db.select_ids(["9606.ENSP1"])
             >>> selection.extract_mapping().select(
@@ -414,8 +414,8 @@ class EggnogSelection:
         Examples:
             Report an identifier absent from the local snapshot:
 
-            >>> db = EggNOGDatabase.from_files(
-            ...     eggnog_database="fixtures/eggnog/eggnog.db"
+            >>> db = EggNOGDatabase.from_sqlite(
+            ...     "fixtures/eggnog/eggnog.db"
             ... )
             >>> selection = db.select_ids(["9606.MISSING"])
             >>> selection.extract_unmatched_ids().to_dicts()

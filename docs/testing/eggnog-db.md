@@ -24,7 +24,7 @@ It does not cover:
 
 ## Unit Tests
 
-- `from_files()` accepts SQLite and gzip-wrapped SQLite inputs.
+- `from_sqlite()` accepts SQLite and gzip-wrapped SQLite inputs.
 - `extract_mapping()` expands OGs and COG categories correctly.
 - `select_ids(..., namespace="eggnog_protein")` returns filtered rows.
 - `select_groups(..., namespace="eggnog_protein")` preserves `GroupId`.

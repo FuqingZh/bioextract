@@ -228,8 +228,8 @@ The canonical protein-to-orthologous-group mapping is one Parquet:
 ```python
 from bioextract.eggnog import EggNOGDatabase
 
-EggNOGDatabase.from_files(
-    eggnog_database="eggnog.db.gz",
+EggNOGDatabase.from_sqlite(
+    "eggnog.db.gz",
     cog_functions="cog-24.fun.tab",
 ).write_parquet("out/eggnog.parquet")
 ```

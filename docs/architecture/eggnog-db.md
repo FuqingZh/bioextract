@@ -27,7 +27,8 @@ It intentionally does not cover:
 
 ## Raw Inputs
 
-`EggNOGDatabase.from_files()` accepts exact file paths:
+`EggNOGDatabase.from_sqlite(source, *, cog_functions=None, temp_dir=None)`
+accepts an eggNOG mapper SQLite database or its gzip wrapper as `source`:
 
 ```text
 eggnog.db.gz
@@ -49,8 +50,8 @@ and leaves `CogClass` / `CogName` null.
 ```python
 from bioextract.eggnog import EggNOGDatabase
 
-db = EggNOGDatabase.from_files(
-    eggnog_database="eggnog.db.gz",
+db = EggNOGDatabase.from_sqlite(
+    "eggnog.db.gz",
     cog_functions="cog-24.fun.tab",
 )
 

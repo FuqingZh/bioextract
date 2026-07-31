@@ -41,6 +41,11 @@ when a domain does not yet have a dedicated architecture document.
 
 ## Plans And History
 
+The current
+[Constructor Source Convergence Plan](implementation-plan/20260731-v1.0-constructor-source-convergence.md)
+defines the accepted three-phase constructor naming contract and the eggNOG,
+STRING, WikiPathways, and Rhea delivery boundaries.
+
 The completed [UniProtKB Domain Access Plan](implementation-plan/20260730-uniprot-knowledgebase-domain-access.md)
 records the Swiss-Prot DuckDB boundary and version-contract convergence.
 
