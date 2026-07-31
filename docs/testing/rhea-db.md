@@ -40,8 +40,11 @@ Changes to `RheaDatabase` must verify:
     persistent writes.
 19. The three superseded explicit-file constructors are absent, all supplied
     roles appear in provenance with `obsolete_reactions` recorded as
-    `obsoletes`, and one-, two-, and three-group scopes remain stable across
-    write and reopen.
+    `obsoletes`, and each source profile has `reactions`, `compounds`,
+    `cross_references`, or `partial` construction scope. `write_duckdb()`
+    embeds that value as `bioextract.scope`; `from_duckdb()` returns a handle
+    whose snapshot scope is `publication` while retaining the embedded
+    construction scope for audit.
 
 Run the focused suite with:
 

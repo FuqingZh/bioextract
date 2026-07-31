@@ -419,11 +419,9 @@ def test_all_role_provenance_and_mixed_reaction_xref_capability(
         assert "bioextract.release_version" not in metadata
         assert logical_sources == set(report.source_files)
 
-    matches = (
-        RheaDatabase.from_duckdb(path)
-        .select_reactions(["1.1.1.1"], namespace="ec")
-        .extract_matches()
-    )
+    database = RheaDatabase.from_duckdb(path)
+    assert database.snapshot.scope == "publication"
+    matches = database.select_reactions(["1.1.1.1"], namespace="ec").extract_matches()
     assert matches["RheaId"].to_list() == [10000]
 
 
@@ -434,10 +432,43 @@ def test_xref_only_publication_reports_reaction_capability_failure(
     path = tmp_path / "xrefs-only.duckdb"
     RheaDatabase.from_files(xrefs=release / "raw" / "rhea2xrefs.tsv").write_duckdb(path)
 
+    with duckdb.connect(str(path), read_only=True) as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+    assert metadata["bioextract.scope"] == "cross_references"
+    assert metadata["bioextract.resource_schema_version"] == "rhea-duckdb-v1"
+
     database = RheaDatabase.from_duckdb(path)
     assert database.snapshot.scope == "publication"
     with pytest.raises(RheaCapabilityError, match="missing relations"):
         database.select_reactions(["1.1.1.1"], namespace="ec")
+
+
+def test_reaction_xref_publication_persists_partial_construction_scope(
+    tmp_path: Path,
+) -> None:
+    release = _write_release(tmp_path / "release")
+    raw = release / "raw"
+    path = tmp_path / "reaction-xrefs.duckdb"
+    report = RheaDatabase.from_files(
+        rdf=raw / "rhea.rdf",
+        directions=raw / "rhea-directions.tsv",
+        xrefs=raw / "rhea2xrefs.tsv",
+    ).write_duckdb(path)
+
+    assert report.scope == "partial"
+    with duckdb.connect(str(path), read_only=True) as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+    assert metadata["bioextract.scope"] == "partial"
+    assert metadata["bioextract.resource_schema_version"] == "rhea-duckdb-v1"
+
+    database = RheaDatabase.from_duckdb(path)
+    assert database.snapshot.scope == "publication"
+    matches = database.select_reactions(["1.1.1.1"], namespace="ec").extract_matches()
+    assert matches["RheaId"].to_list() == [10000]
 
 
 def test_complete_release_directory_and_archive(tmp_path: Path) -> None:
