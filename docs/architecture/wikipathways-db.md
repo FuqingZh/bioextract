@@ -6,19 +6,19 @@ Status: current
 
 ## Goal
 
-`bioextract.wikipathways.WikiPathwaysDatabase` provides path-first access to local
-WikiPathways GMT snapshots. The first version is a local enrichment-input layer:
-it reads species-specific GMT files and emits pathway metadata plus
+`bioextract.wikipathways.WikiPathwaysDatabase` provides source-first access to
+local WikiPathways GMT snapshots. The first version is a local enrichment-input
+layer: it reads one or more GMT files and emits pathway metadata plus
 `term2gene`/`term2name` frames.
 
 The MVP covers:
 
-- species-specific WikiPathways GMT files
+- single- and multiple-species WikiPathways GMT files
 - NCBI Entrez Gene ID gene sets
 - pathway metadata extraction
 - single-query and grouped gene selections
 - unmapped input ID reporting
-- flat tidy parquet writing
+- multi-relation DuckDB publication
 
 It intentionally does not cover:
 
@@ -59,7 +59,7 @@ Glutathione metabolism%WikiPathways_20260510%WP100%Homo sapiens	https://www.wiki
 from bioextract.wikipathways import WikiPathwaysDatabase
 
 db = WikiPathwaysDatabase.from_gmt(
-    "wikipathways-20260510-gmt-Homo_sapiens.gmt",
+    "wikipathways-20260510-gmt-*.gmt",
     species="Homo sapiens",
 )
 
@@ -80,6 +80,40 @@ df_mapping = (
     .extract_mapping()
 )
 ```
+
+## Source Resolution And Dataset Identity
+
+`from_gmt(source, *, species=None, glob=True)` accepts one local string or
+path-like path, a sequence of them, or glob expressions. `**` expressions
+recurse into nested directories. With `glob=False`, each scalar or sequence
+entry is literal. Empty sources, unmatched expressions, missing paths,
+directories, and other non-files are rejected.
+
+Resolution is private to the WikiPathways package. Every match is normalized to
+its actual physical file, duplicate physical files are rejected even when
+reached through repeated inputs, overlapping expressions, or symlink aliases,
+and the frozen file tuple is sorted deterministically before parsing. Filenames
+and directories never supply release, species, Collection, Version, or schema
+identity.
+
+The complete unfiltered dataset must contain one official `Collection` and
+globally unique `WikiPathwaysId` values. `Version` is derived from the
+non-empty suffix of an official Collection field that starts with
+`WikiPathways_`, and is also checked for one common value defensively.
+Duplicate IDs within one file and across files are errors. One GMT may contain
+several species.
+
+The validated common Version is recorded as `release_version` with
+`release_version_source="official_metadata"`. It comes only from parsed GMT
+content, never from a filename, directory, or species-filtered result.
+
+Construction resolves and freezes paths immediately. Content parsing and the
+Collection, Version, and pathway-ID checks are deferred until the first
+extraction, tidy build, or publication.
+
+Every resolved GMT must independently contain at least one non-empty pathway
+record. An empty or whitespace-only file is rejected with its path even when
+other resolved files contain valid records.
 
 ## Output Contract
 
@@ -141,12 +175,17 @@ Schema version:
 wikipathways-gmt-v0.1
 ```
 
-Source identity, table roles, and row counts are stored in `_bioextract`.
+Every resolved actual file is stored in `_bioextract` under a deterministic
+unique logical source name, including files that contribute no rows after
+filtering. The content-derived release Version, table roles, and row counts are
+stored there as before.
 `term2name` is not duplicated because the canonical `pathway` relation already
 owns pathway names.
 
 ## Species Filtering
 
-GMT files are expected to be species-specific, but `species=` is still accepted
-as a guard. When provided, pathway metadata is filtered by exact species string,
-and `term2gene` is filtered through the retained pathway IDs.
+`species=` is an exact row/content filter, not a source discovery or file
+identity rule. When provided, pathway metadata is filtered by exact species
+string, and `term2gene` is filtered through the retained pathway IDs. Parsing,
+Collection/Version validation, ID uniqueness checks, and provenance inventory
+always cover every resolved file before this filter is applied.

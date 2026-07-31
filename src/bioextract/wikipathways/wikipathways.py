@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,6 +26,7 @@ from .util import (
     extract_mapping_frame,
     extract_unmatched_ids_frame,
     read_gmt_frames,
+    resolve_gmt_sources,
 )
 
 __all__ = [
@@ -36,7 +37,7 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class _WikiPathwaysSnapshot:
-    file_gmt: Path
+    files_gmt: tuple[Path, ...]
     species: str | None = None
 
 
@@ -45,12 +46,12 @@ WikiPathwaysTidyDataset = TidyDataset
 
 @dataclass(slots=True)
 class WikiPathwaysDatabase:
-    """Path-first access to a local WikiPathways GMT snapshot.
+    """Source-first access to a local WikiPathways GMT snapshot.
 
     `WikiPathwaysDatabase` is the public entrypoint for extracting pathway gene sets
-    from local WikiPathways GMT files. GMT rows are interpreted as pathway
-    metadata followed by NCBI Entrez Gene IDs; the class does not perform
-    identifier conversion or enrichment statistics.
+    from one or more local WikiPathways GMT files. GMT rows are interpreted as
+    pathway metadata followed by NCBI Entrez Gene IDs; the class does not
+    perform identifier conversion or enrichment statistics.
 
     Construct instances with :meth:`from_gmt`, then either extract whole
     resource frames or create single/grouped Entrez ID selections through
@@ -78,34 +79,45 @@ class WikiPathwaysDatabase:
     _frames: dict[str, pl.LazyFrame] | None = field(
         default=None, init=False, repr=False
     )
+    _release_version: str | None = field(default=None, init=False, repr=False)
 
     @classmethod
     def from_gmt(
         cls,
-        path: os.PathLike[str] | str,
+        source: os.PathLike[str] | str | Sequence[os.PathLike[str] | str],
         *,
         species: str | None = None,
+        glob: bool = True,
     ) -> WikiPathwaysDatabase:
-        """Create a dataset handle from a local WikiPathways GMT file.
+        """Create a dataset handle from one or more local WikiPathways GMT files.
 
         Args:
-            path: Local WikiPathways GMT file.
+            source: One local path, a sequence of local paths, or glob
+                expressions. Every resolved physical file must be unique.
             species: Optional species display name used as an exact metadata
                 filter after parsing.
+            glob: Expand each source entry as a glob expression. If false,
+                treat every entry literally.
 
         Returns:
             A dataset handle that can build pathway, term2gene, and term2name
             frames.
 
         Raises:
-            FileNotFoundError: If the GMT file does not exist.
-            ValueError: If the species string is empty after normalization.
+            FileNotFoundError: If a literal file does not exist or a glob
+                expression has no matches.
+            ValueError: At construction, if the source is empty, resolves to a
+                directory, repeats a physical file, or the species string is
+                empty after normalization. GMT content parsing is deferred;
+                malformed content, inconsistent Collection or Version values,
+                and duplicate WikiPathways IDs raise when a frame is first
+                extracted, built, or written.
 
         Examples:
-            Open a compact human WikiPathways fixture:
+            Open all GMT files in one local snapshot and retain human rows:
 
             >>> db = WikiPathwaysDatabase.from_gmt(
-            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt",
+            ...     "data/wikipathways/*.gmt",
             ...     species="Homo sapiens",
             ... )
             >>> (
@@ -116,9 +128,7 @@ class WikiPathwaysDatabase:
             ... )
             [{'WikiPathwaysId': 'WP100', 'PathwayName': 'Glutathione metabolism'}]
         """
-        file_gmt = Path(path)
-        if not file_gmt.exists():
-            raise FileNotFoundError(f"WikiPathways GMT file not found: {file_gmt}")
+        files_gmt = resolve_gmt_sources(source, glob=glob)
         species_normalized = None if species is None else str(species).strip()
         if species is not None and not species_normalized:
             raise ValueError(
@@ -126,7 +136,7 @@ class WikiPathwaysDatabase:
             )
         return cls(
             snapshot=_WikiPathwaysSnapshot(
-                file_gmt=file_gmt,
+                files_gmt=files_gmt,
                 species=species_normalized,
             ),
         )
@@ -269,25 +279,37 @@ class WikiPathwaysDatabase:
             >>> sorted(db.build_tidy().frames)
             ['pathway', 'term2gene', 'term2name']
         """
+        frames = {
+            "pathway": self._lazy_frame("pathway"),
+            "term2gene": self._lazy_frame("term2gene"),
+            "term2name": self._lazy_frame("term2name"),
+        }
+        release_version = self._release_version
+        if release_version is None:
+            raise RuntimeError("WikiPathways GMT release Version was not parsed")
         return WikiPathwaysTidyDataset(
-            frames={
-                "pathway": self._lazy_frame("pathway"),
-                "term2gene": self._lazy_frame("term2gene"),
-                "term2name": self._lazy_frame("term2name"),
-            },
-            source=TidySource(
-                logical_name="pathway_gmt",
-                path=self.snapshot.file_gmt,
-                media_type=MEDIA_TYPE_GMT,
+            frames=frames,
+            source=tuple(
+                TidySource(
+                    logical_name=f"pathway_gmt_{index:03d}",
+                    path=file_gmt,
+                    media_type=MEDIA_TYPE_GMT,
+                )
+                for index, file_gmt in enumerate(
+                    self.snapshot.files_gmt,
+                    start=1,
+                )
             ),
             resource_schema_version=SCHEMA_VERSION,
             source_schema_profile="wikipathways-gmt-v1",
-            build_id_prefix=f"wikipathways-gmt-{self.snapshot.file_gmt.stem}",
+            build_id_prefix="wikipathways-gmt",
             assets=tuple(
                 TidyAsset(path=path, kind=kind, frame_name=frame_name)
                 for path, kind, frame_name in ASSET_SPECS
             ),
             resource_name="wikipathways",
+            release_version=release_version,
+            release_version_source="official_metadata",
         )
 
     def write_duckdb(
@@ -322,6 +344,7 @@ class WikiPathwaysDatabase:
             ),
             resource_name=dataset.resource_name,
             release_version=dataset.release_version,
+            release_version_source=dataset.release_version_source,
         )
         return canonical.write_duckdb(
             path,
@@ -349,7 +372,9 @@ class WikiPathwaysDatabase:
             keys do not become a second API.
         """
         if self._frames is None:
-            frames = read_gmt_frames(self.snapshot.file_gmt)
+            parsed = read_gmt_frames(self.snapshot.files_gmt)
+            frames = parsed.frames
+            self._release_version = parsed.release_version
             if self.snapshot.species is not None:
                 lf_pathway = _filter_species_frame(
                     frames["pathway"],
