@@ -355,8 +355,9 @@ def _create_validation_index(connection: sqlite3.Connection) -> None:
         """
             CREATE TABLE canonical(accession TEXT PRIMARY KEY, sequence TEXT NOT NULL);
             CREATE TABLE accession(
-                accession TEXT PRIMARY KEY,
-                primary_accession TEXT NOT NULL
+                accession TEXT NOT NULL,
+                primary_accession TEXT NOT NULL,
+                PRIMARY KEY (primary_accession, accession)
             );
             CREATE TABLE isoform(
                 isoform_id TEXT NOT NULL,
@@ -681,7 +682,8 @@ def _write_record(
             )
         except sqlite3.IntegrityError as error:
             raise ValueError(
-                f"UniProt accession is reused across records: {accession}"
+                f"Duplicate UniProt accession within record {record.number}: "
+                f"{accession}"
             ) from error
         writers["protein_accession"].writerow(
             {

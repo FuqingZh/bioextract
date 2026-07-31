@@ -485,17 +485,17 @@ def test_existing_destination_fails_before_entries_are_parsed(tmp_path: Path) ->
     assert destination.read_bytes() == b"existing"
 
 
-def test_accessions_must_be_unique_across_records(tmp_path: Path) -> None:
-    entries = tmp_path / "duplicate-accession.dat"
+def test_primary_accessions_must_be_unique_across_records(tmp_path: Path) -> None:
+    entries = tmp_path / "duplicate-primary-accession.dat"
     entries.write_text(
         """ID   FIRST_HUMAN Reviewed; 3 AA.
-AC   P11111; Q99999;
+AC   P11111;
 OX   NCBI_TaxID=9606;
 SQ   SEQUENCE   3 AA;  307 MW;  6AAEBDB000000000 CRC64;
      ACD
 //
 ID   SECOND_HUMAN Reviewed; 3 AA.
-AC   P22222; Q99999;
+AC   P11111;
 OX   NCBI_TaxID=9606;
 SQ   SEQUENCE   3 AA;  365 MW;  69CB1DB000000000 CRC64;
      AEF
@@ -504,10 +504,70 @@ SQ   SEQUENCE   3 AA;  365 MW;  69CB1DB000000000 CRC64;
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="reused across records: Q99999"):
+    with pytest.raises(ValueError, match="Duplicate primary UniProt accession: P11111"):
         UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
             tmp_path / "duplicate.duckdb"
         )
+
+
+def test_duplicate_accession_within_record_is_rejected(tmp_path: Path) -> None:
+    entries = tmp_path / "duplicate-record-accession.dat"
+    entries.write_text(
+        """ID   FIRST_HUMAN Reviewed; 3 AA.
+AC   P11111; Q99999; Q99999;
+OX   NCBI_TaxID=9606;
+SQ   SEQUENCE   3 AA;  307 MW;  6AAEBDB000000000 CRC64;
+     ACD
+//
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Duplicate accession in UniProtKB record 1"):
+        UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(
+            tmp_path / "duplicate.duckdb"
+        )
+
+
+def test_shared_secondary_accession_selects_every_canonical_match(
+    tmp_path: Path,
+) -> None:
+    entries = tmp_path / "shared-secondary-accession.dat"
+    entries.write_text(
+        """ID   FIRST_HUMAN Reviewed; 3 AA.
+AC   P11111; Q99999;
+OX   NCBI_TaxID=9606;
+SQ   SEQUENCE   3 AA;  307 MW;  6AAEBDB000000000 CRC64;
+     ACD
+//
+ID   SECOND_MOUSE Reviewed; 3 AA.
+AC   P22222; Q99999;
+OX   NCBI_TaxID=10090;
+SQ   SEQUENCE   3 AA;  365 MW;  69CB1DB000000000 CRC64;
+     AEF
+//
+""",
+        encoding="utf-8",
+    )
+    publication = tmp_path / "shared-secondary.duckdb"
+    UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(publication)
+    database = UniProtDatabase.from_duckdb(publication)
+
+    assert database.select_ids(
+        ["Q99999"], namespace="uniprot"
+    ).extract_proteins().select("InputId", "UniProtId", "TaxonId").to_dicts() == [
+        {"InputId": "Q99999", "UniProtId": "P11111", "TaxonId": "9606"},
+        {"InputId": "Q99999", "UniProtId": "P22222", "TaxonId": "10090"},
+    ]
+    assert database.select_ids(
+        ["Q99999"], namespace="uniprot", taxon_ids=["10090"]
+    ).extract_proteins()["UniProtId"].to_list() == ["P22222"]
+    assert database.select_groups(
+        {"demerged": ["Q99999"]}, namespace="uniprot"
+    ).extract_proteins().select("GroupId", "UniProtId").to_dicts() == [
+        {"GroupId": "demerged", "UniProtId": "P11111"},
+        {"GroupId": "demerged", "UniProtId": "P22222"},
+    ]
 
 
 def test_metadata_v3_requires_validation_issue_table(tmp_path: Path) -> None:
