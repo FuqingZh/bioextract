@@ -94,4 +94,4 @@ isoform-to-variation linkage, and unmatched identifiers.
 Relations whose semantics are not yet implemented are not published as empty
 placeholders. Deferred scope includes full TrEMBL scale acceptance, all feature
 types beyond `VAR_SEQ`, full evidence normalization, host-organism projection,
-persistent-index benchmarking and a formal 2026_01 benchmark/acceptance record.
+and persistent-index benchmarking.
