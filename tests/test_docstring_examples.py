@@ -59,7 +59,7 @@ PUBLIC_CLASSES = (
 
 PUBLIC_FUNCTIONS = (("kegg.brite.build_tidy_frames", build_kegg_tidy_frames),)
 
-EXPECTED_PUBLIC_TARGET_COUNT = 148
+EXPECTED_PUBLIC_TARGET_COUNT = 146
 
 
 class _FunctionDescriptor(Protocol):

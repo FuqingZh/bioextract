@@ -76,15 +76,15 @@ class _RheaSnapshot:
 class RheaDatabase:
     """Build a query-ready DuckDB database from local Rhea release files.
 
-    Partial constructors expose independently useful reaction, compound,
-    and cross-reference capabilities. :meth:`from_release` accepts either an
-    extracted release directory or a ``zip``/``tar`` archive and requires the
-    complete official release asset set.
+    :meth:`from_files` exposes independently useful or mixed reaction,
+    compound, and cross-reference capabilities. :meth:`from_release` accepts
+    either an extracted release directory or a ``zip``/``tar`` archive and
+    requires the complete official release asset set.
 
     Examples:
         Open only the reaction component:
 
-        >>> db = RheaDatabase.from_reaction_files(
+        >>> db = RheaDatabase.from_files(
         ...     rdf="rhea.rdf.gz",
         ...     directions="rhea-directions.tsv",
         ... )
@@ -96,120 +96,106 @@ class RheaDatabase:
     _publication: _RheaPublication | None = field(default=None, repr=False)
 
     @classmethod
-    def from_reaction_files(
+    def from_files(
         cls,
         *,
-        rdf: os.PathLike[str] | str,
-        directions: os.PathLike[str] | str,
+        rdf: os.PathLike[str] | str | None = None,
+        directions: os.PathLike[str] | str | None = None,
         relationships: os.PathLike[str] | str | None = None,
         obsolete_reactions: os.PathLike[str] | str | None = None,
         reaction_smiles: os.PathLike[str] | str | None = None,
-    ) -> RheaDatabase:
-        """Create a reaction-focused handle from explicit Rhea files.
-
-        Args:
-            rdf: Official ``rhea.rdf`` or ``rhea.rdf.gz``.
-            directions: Official reaction direction quartet table.
-            relationships: Optional reaction hierarchy table.
-            obsolete_reactions: Optional obsolete reaction ID table.
-            reaction_smiles: Optional headerless reaction SMILES table.
-
-        Examples:
-            Missing required files fail at construction:
-
-            >>> try:
-            ...     RheaDatabase.from_reaction_files(
-            ...         rdf="missing.rdf",
-            ...         directions="missing.tsv",
-            ...     )
-            ... except FileNotFoundError as error:
-            ...     print(error.filename)
-            missing.rdf
-        """
-        values = {
-            "rdf": rdf,
-            "directions": directions,
-            "relationships": relationships,
-            "obsoletes": obsolete_reactions,
-            "reaction_smiles": reaction_smiles,
-        }
-        return cls(
-            snapshot=_RheaSnapshot(
-                scope="reactions",
-                sources=_validate_explicit_sources(values),
-            ),
-        )
-
-    @classmethod
-    def from_compound_files(
-        cls,
-        *,
         sdf: os.PathLike[str] | str | None = None,
         chebi_names: os.PathLike[str] | str | None = None,
         chebi_ph7_3_mapping: os.PathLike[str] | str | None = None,
-    ) -> RheaDatabase:
-        """Create a compound-focused handle from one or more Rhea files.
-
-        Args:
-            sdf: Optional Rhea compound structure SDF.
-            chebi_names: Optional headerless ChEBI ID/name table.
-            chebi_ph7_3_mapping: Optional pH 7.3 ChEBI mapping table.
-
-        Examples:
-            At least one compound source is required:
-
-            >>> try:
-            ...     RheaDatabase.from_compound_files()
-            ... except ValueError as error:
-            ...     print(str(error))
-            At least one Rhea compound input file must be provided
-        """
-        values = {
-            "sdf": sdf,
-            "chebi_names": chebi_names,
-            "chebi_ph7_3_mapping": chebi_ph7_3_mapping,
-        }
-        sources = _validate_explicit_sources(values)
-        if not sources:
-            raise ValueError("At least one Rhea compound input file must be provided")
-        return cls(snapshot=_RheaSnapshot(scope="compounds", sources=sources))
-
-    @classmethod
-    def from_cross_reference_files(
-        cls,
-        *,
         xrefs: os.PathLike[str] | str | None = None,
         uniprot_sprot: os.PathLike[str] | str | None = None,
         uniprot_trembl: os.PathLike[str] | str | None = None,
     ) -> RheaDatabase:
-        """Create a cross-reference handle from one or more Rhea files.
+        """Create a capability-scoped handle from explicit Rhea files.
+
+        A reaction role requires both ``rdf`` and ``directions``. Compound and
+        cross-reference roles are independently constructible. A handle with
+        exactly one role group has that group's scope; mixed groups have
+        ``partial`` scope.
 
         Args:
+            rdf: Optional official ``rhea.rdf`` or ``rhea.rdf.gz``.
+            directions: Optional official reaction direction quartet table.
+            relationships: Optional reaction hierarchy table.
+            obsolete_reactions: Optional obsolete reaction ID table.
+            reaction_smiles: Optional headerless reaction SMILES table.
+            sdf: Optional Rhea compound structure SDF.
+            chebi_names: Optional headerless ChEBI ID/name table.
+            chebi_ph7_3_mapping: Optional pH 7.3 ChEBI mapping table.
             xrefs: Optional aggregate Rhea cross-reference table.
             uniprot_sprot: Optional reviewed UniProt reaction mapping.
             uniprot_trembl: Optional unreviewed UniProt mapping, plain or
                 gzip-compressed.
 
-        Examples:
-            At least one cross-reference source is required:
+        Returns:
+            A source-backed handle containing only the supplied capabilities.
 
-            >>> try:
-            ...     RheaDatabase.from_cross_reference_files()
-            ... except ValueError as error:
-            ...     print("cross-reference" in str(error))
-            True
+        Raises:
+            FileNotFoundError: If a supplied path does not exist.
+            ValueError: If no role is supplied, a reaction dependency is
+                missing, a path is not a file, or two roles resolve to the same
+                physical file.
+
+        Notes:
+            ``obsolete_reactions`` is the caller-facing role. It intentionally
+            maps to the stable internal and provenance role ``obsoletes``.
+
+        Examples:
+            Compound inputs remain independently constructible:
+
+            >>> db = RheaDatabase.from_files(chebi_names="names.tsv")  # doctest: +SKIP
+            >>> db.snapshot.scope  # doctest: +SKIP
+            'compounds'
         """
-        values = {
+        explicit_values = {
+            "rdf": rdf,
+            "directions": directions,
+            "relationships": relationships,
+            "obsolete_reactions": obsolete_reactions,
+            "reaction_smiles": reaction_smiles,
+            "sdf": sdf,
+            "chebi_names": chebi_names,
+            "chebi_ph7_3_mapping": chebi_ph7_3_mapping,
             "xrefs": xrefs,
             "uniprot_sprot": uniprot_sprot,
             "uniprot_trembl": uniprot_trembl,
         }
-        sources = _validate_explicit_sources(values)
-        if not sources:
+        supplied = {
+            name for name, value in explicit_values.items() if value is not None
+        }
+        if not supplied:
+            raise ValueError("At least one Rhea input file role must be provided")
+
+        reaction_roles = {
+            "rdf",
+            "directions",
+            "relationships",
+            "obsolete_reactions",
+            "reaction_smiles",
+        }
+        if supplied & reaction_roles and not {"rdf", "directions"} <= supplied:
+            missing = sorted({"rdf", "directions"} - supplied)
             raise ValueError(
-                "At least one Rhea cross-reference input file must be provided"
+                "Rhea reaction input roles require both rdf and directions; "
+                f"missing roles: {', '.join(missing)}"
             )
-        return cls(snapshot=_RheaSnapshot(scope="cross_references", sources=sources))
+
+        groups = {
+            "reactions": reaction_roles,
+            "compounds": {"sdf", "chebi_names", "chebi_ph7_3_mapping"},
+            "cross_references": {"xrefs", "uniprot_sprot", "uniprot_trembl"},
+        }
+        present_groups = [name for name, roles in groups.items() if supplied & roles]
+        scope = present_groups[0] if len(present_groups) == 1 else "partial"
+        sources = _validate_explicit_sources(explicit_values)
+        if "obsolete_reactions" in sources:
+            sources["obsoletes"] = sources.pop("obsolete_reactions")
+        return cls(snapshot=_RheaSnapshot(scope=scope, sources=sources))
 
     @classmethod
     def from_release(
@@ -453,12 +439,22 @@ def _validate_explicit_sources(
     values: Mapping[str, os.PathLike[str] | str | None],
 ) -> dict[str, Path]:
     sources: dict[str, Path] = {}
+    physical_roles: dict[tuple[int, int], tuple[str, Path]] = {}
     for name, value in values.items():
         if value is None:
             continue
-        path = _validate_path(value)
+        path = _validate_path(value).resolve()
         if not path.is_file():
             raise ValueError(f"Rhea input is not a file: {path}")
+        stat = path.stat()
+        physical_id = (stat.st_dev, stat.st_ino)
+        if physical_id in physical_roles:
+            other_name, other_path = physical_roles[physical_id]
+            raise ValueError(
+                f"Rhea input roles {other_name!r} and {name!r} refer to the "
+                f"same physical file: {other_path}"
+            )
+        physical_roles[physical_id] = (name, path)
         sources[name] = path
     return sources
 

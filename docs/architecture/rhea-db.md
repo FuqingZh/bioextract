@@ -26,12 +26,12 @@ artifacts; the only output is the DuckDB database.
 
 The public constructors disclose complexity by capability:
 
-- `from_reaction_files(...)` requires RDF and the direction quartet; hierarchy,
-  obsolete IDs, and reaction SMILES are optional.
-- `from_compound_files(...)` accepts any non-empty combination of SDF,
-  ChEBI names, and the pH 7.3 mapping.
-- `from_cross_reference_files(...)` accepts any non-empty combination of the
-  aggregate xref, Swiss-Prot, and TrEMBL mappings.
+- `from_files(...)` accepts the 11 keyword-only explicit roles. Any reaction
+  role requires both RDF and the direction quartet; compound and
+  cross-reference roles remain independently constructible. One supplied
+  group has its group scope, while any mixed group profile has `partial`
+  scope. Explicit paths are normalized to their actual files, and one physical
+  file cannot fill multiple logical roles.
 - `from_release(source)` accepts an extracted directory or zip/tar archive and
   strictly requires all 15 assets in the current official release contract.
 - `from_duckdb(path)` validates a bioextract Rhea publication and opens it as a
@@ -41,7 +41,7 @@ Partial inputs create only meaningful tables. A missing component is represented
 by an absent table, not an empty table that could be mistaken for an observed
 zero-row dataset.
 
-Compression is detected internally. Partial constructors therefore do not
+Compression is detected internally. The explicit-file constructor therefore does not
 encode `.gz` in their method names, and release archives need not be manually
 extracted.
 
@@ -207,6 +207,9 @@ DuckDB or SQL standard namespace and contains no Rhea biological relations.
 
 Source hashing is opt-in because the TrEMBL mapping is large and hashing adds a
 full extra read.
+
+The public `obsolete_reactions` role is recorded under the stable internal and
+provenance logical role `obsoletes`.
 
 Metadata keys use the shared `bioextract.*` namespace, including
 `bioextract.metadata_schema_version`, `bioextract.resource_name`,

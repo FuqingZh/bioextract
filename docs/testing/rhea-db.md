@@ -5,8 +5,10 @@ Status: current
 
 Changes to `RheaDatabase` must verify:
 
-1. Partial constructors reject missing required inputs but accept supported
-   subsets.
+1. `from_files()` has exactly 11 optional keyword-only roles, rejects an empty
+   profile and duplicate physical files across roles, requires RDF and
+   directions for any reaction role, and accepts independent compound and
+   cross-reference roles plus mixed partial profiles.
 2. gzip/plain RDF detection is content-based.
 3. RDF direction, participants, coefficients, locations, compounds, symbolic
    charges, and direction-aware roles survive normalization; `UN` and `BI`
@@ -36,6 +38,10 @@ Changes to `RheaDatabase` must verify:
     `validation_issue` table, and unknown metadata versions are rejected.
 18. `connect()` returns independent native read-only connections and rejects
     persistent writes.
+19. The three superseded explicit-file constructors are absent, all supplied
+    roles appear in provenance with `obsolete_reactions` recorded as
+    `obsoletes`, and one-, two-, and three-group scopes remain stable across
+    write and reopen.
 
 Run the focused suite with:
 
