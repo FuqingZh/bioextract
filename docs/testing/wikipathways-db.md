@@ -6,9 +6,10 @@ Status: current
 
 ## Scope
 
-The WikiPathwaysDatabase tests verify GMT parsing, metadata extraction,
-species filtering, enrichment input extraction, single and grouped selections,
-tidy writing, and error handling.
+The WikiPathwaysDatabase tests verify resource-local source resolution,
+whole-dataset GMT validation, metadata extraction, species filtering,
+enrichment input extraction, single and grouped selections, tidy writing, and
+error handling.
 
 The tests do not cover online WikiPathways APIs, GPML parsing, pathway topology,
 or enrichment p-value calculations.
@@ -25,21 +26,39 @@ Mouse pathway%WikiPathways_20260510%WP1%Mus musculus	https://www.wikipathways.or
 
 ## Unit Tests
 
-- `from_gmt()` accepts an existing GMT file.
-- `from_gmt()` rejects missing and oversized files.
+- `from_gmt()` accepts a literal scalar, a literal sequence, and glob
+  expressions.
+- `**` glob expressions resolve files in nested directories recursively.
+- Resolution freezes normalized actual files in deterministic order.
+- `glob=False` treats scalar and sequence entries literally.
+- Empty input, unmatched patterns, missing paths, directories, and non-files
+  are rejected.
+- Repeated literals, overlapping globs, and symlink aliases that reach the same
+  physical file are rejected.
+- The complete resolved set requires one official Collection and exposes the
+  one Version derived from that Collection.
+- Duplicate `WikiPathwaysId` values within one file or across files are
+  rejected.
 - Malformed pathway headers raise a targeted `ValueError`.
 - `extract_pathway()` parses pathway name, collection, version, identifier,
   species, URL, and gene count.
 - `extract_term2gene()` emits `WikiPathwaysId, GeneId`.
 - `extract_term2name()` emits pathway display metadata.
-- `species=` filters pathway metadata and filters `term2gene` through retained
-  pathway IDs.
+- A single GMT may contain multiple species.
+- `species=` filters pathway metadata and `term2gene` by row content after
+  whole-dataset validation.
 - `select_ids()` trims input IDs and drops blanks.
 - `extract_mapping()` returns selected Entrez IDs joined to pathway metadata.
 - `extract_unmatched_ids()` reports IDs not present in the GMT gene sets.
 - `select_groups()` preserves `GroupId`.
 - `write_duckdb()` writes pathway and pathway-gene relations in one file.
-- `_bioextract` contains source and row-count provenance.
+- `_bioextract` contains every resolved actual source under deterministic
+  unique logical names, including files with no retained rows, plus row-count
+  provenance.
+- `_bioextract.metadata` records the common content-derived Version as
+  `bioextract.release_version` with
+  `bioextract.release_version_source=official_metadata`; the publication test
+  asserts both values.
 
 ## Real-Data Smoke
 

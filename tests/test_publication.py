@@ -524,7 +524,7 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "pathways",
             "relations",
         ),
-        wikipathways.WikiPathwaysDatabase.from_gmt: ("path", "species"),
+        wikipathways.WikiPathwaysDatabase.from_gmt: ("source", "species", "glob"),
         eggnog.EggNOGDatabase.from_sqlite: (
             "source",
             "cog_functions",
@@ -587,3 +587,15 @@ def test_phase_1_constructor_parameter_kinds_are_explicit() -> None:
         parameter.kind is inspect.Parameter.KEYWORD_ONLY
         for parameter in string_parameters.values()
     )
+
+
+def test_phase_2_constructor_parameter_kinds_are_explicit() -> None:
+    parameters = inspect.signature(
+        wikipathways.WikiPathwaysDatabase.from_gmt
+    ).parameters
+    assert parameters["source"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert all(
+        parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+        for name in ("species", "glob")
+    )
+    assert parameters["glob"].default is True

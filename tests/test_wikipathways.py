@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from bioextract.wikipathways import WikiPathwaysDatabase
 
 
+def write_gmt(path: Path, *rows: str) -> Path:
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return path
+
+
 def write_wikipathways_fixture(tmp_path: Path) -> Path:
-    file_gmt = tmp_path / "wikipathways-20260510-gmt-Homo_sapiens.gmt"
+    file_gmt = tmp_path / "wikipathways.gmt"
     file_gmt.write_text(
         "\n".join(
             [
@@ -21,6 +28,151 @@ def write_wikipathways_fixture(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return file_gmt
+
+
+def test_from_gmt_resolves_literal_sequence_and_glob_deterministically(
+    tmp_path: Path,
+) -> None:
+    file_b = write_gmt(
+        tmp_path / "b.gmt",
+        "Mouse pathway%WikiPathways_20260510%WP2%Mus musculus\thttps://example/WP2\t2",
+    )
+    file_a = write_gmt(
+        tmp_path / "a.gmt",
+        "Human pathway%WikiPathways_20260510%WP1%Homo sapiens\thttps://example/WP1\t1",
+    )
+
+    literal = WikiPathwaysDatabase.from_gmt(file_a, glob=False)
+    assert literal.snapshot.files_gmt == (file_a.resolve(),)
+    sequence = WikiPathwaysDatabase.from_gmt([file_b, file_a], glob=False)
+    globbed = WikiPathwaysDatabase.from_gmt(str(tmp_path / "*.gmt"))
+    assert (
+        sequence.snapshot.files_gmt
+        == globbed.snapshot.files_gmt
+        == (
+            file_a.resolve(),
+            file_b.resolve(),
+        )
+    )
+    assert sequence.extract_pathway()["WikiPathwaysId"].to_list() == ["WP1", "WP2"]
+
+
+def test_from_gmt_glob_false_treats_patterns_literally(tmp_path: Path) -> None:
+    write_wikipathways_fixture(tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="file not found"):
+        WikiPathwaysDatabase.from_gmt(tmp_path / "*.gmt", glob=False)
+
+
+def test_from_gmt_double_star_glob_is_recursive(tmp_path: Path) -> None:
+    nested = tmp_path / "nested" / "snapshot"
+    nested.mkdir(parents=True)
+    file_gmt = write_gmt(
+        nested / "pathways.gmt",
+        "Nested%WikiPathways_20260510%WP1%Homo sapiens\thttps://example/WP1\t1",
+    )
+
+    db = WikiPathwaysDatabase.from_gmt(str(tmp_path / "**" / "*.gmt"))
+    assert db.snapshot.files_gmt == (file_gmt.resolve(),)
+
+
+@pytest.mark.parametrize("source", [[], ()])
+def test_from_gmt_rejects_empty_source(
+    source: list[Path] | tuple[Path, ...],
+) -> None:
+    with pytest.raises(ValueError, match="at least one path"):
+        WikiPathwaysDatabase.from_gmt(source)
+
+
+def test_from_gmt_rejects_empty_scalar_path() -> None:
+    with pytest.raises(ValueError, match="paths must be non-empty"):
+        WikiPathwaysDatabase.from_gmt("")
+
+
+def test_from_gmt_rejects_unmatched_missing_directory_and_non_file(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / "directory"
+    directory.mkdir()
+    fifo = tmp_path / "pipe.gmt"
+    os.mkfifo(fifo)
+
+    with pytest.raises(FileNotFoundError, match="matched no files"):
+        WikiPathwaysDatabase.from_gmt(tmp_path / "*.missing")
+    with pytest.raises(FileNotFoundError, match="file not found"):
+        WikiPathwaysDatabase.from_gmt(tmp_path / "missing.gmt", glob=False)
+    with pytest.raises(ValueError, match="not a file"):
+        WikiPathwaysDatabase.from_gmt(directory, glob=False)
+    with pytest.raises(ValueError, match="not a file"):
+        WikiPathwaysDatabase.from_gmt(fifo, glob=False)
+
+
+def test_from_gmt_rejects_duplicate_physical_files(tmp_path: Path) -> None:
+    file_gmt = write_wikipathways_fixture(tmp_path)
+    alias = tmp_path / "alias.gmt"
+    alias.symlink_to(file_gmt)
+
+    duplicate_sources = (
+        [file_gmt, file_gmt],
+        [str(tmp_path / "*.gmt"), file_gmt],
+        [file_gmt, alias],
+    )
+    for source in duplicate_sources:
+        with pytest.raises(ValueError, match="duplicate physical file"):
+            WikiPathwaysDatabase.from_gmt(source)
+
+
+def test_from_gmt_requires_common_collection(
+    tmp_path: Path,
+) -> None:
+    file_a = write_gmt(
+        tmp_path / "a.gmt",
+        "A%WikiPathways_20260510%WP1%Homo sapiens\thttps://example/WP1\t1",
+    )
+    file_b = write_gmt(
+        tmp_path / "b.gmt",
+        "B%WikiPathways_20260511%WP2%Mus musculus\thttps://example/WP2\t2",
+    )
+
+    with pytest.raises(ValueError, match="common Collection"):
+        WikiPathwaysDatabase.from_gmt([file_a, file_b]).extract_pathway()
+
+
+def test_from_gmt_extracts_one_common_version_from_collection(
+    tmp_path: Path,
+) -> None:
+    file_a = write_gmt(
+        tmp_path / "a.gmt",
+        "A%WikiPathways_20260510%WP1%Homo sapiens\thttps://example/WP1\t1",
+    )
+    file_b = write_gmt(
+        tmp_path / "b.gmt",
+        "B%WikiPathways_20260510%WP2%Mus musculus\thttps://example/WP2\t2",
+    )
+
+    pathways = WikiPathwaysDatabase.from_gmt([file_a, file_b]).extract_pathway()
+    assert pathways["Collection"].unique().to_list() == ["WikiPathways_20260510"]
+    assert pathways["Version"].unique().to_list() == ["20260510"]
+
+
+@pytest.mark.parametrize("split_files", [False, True])
+def test_from_gmt_rejects_duplicate_ids_within_or_across_files(
+    tmp_path: Path,
+    split_files: bool,
+) -> None:
+    row_a = "A%WikiPathways_20260510%WP1%Homo sapiens\thttps://example/A\t1"
+    row_b = "B%WikiPathways_20260510%WP1%Mus musculus\thttps://example/B\t2"
+    sources = (
+        [
+            write_gmt(tmp_path / "a.gmt", row_a),
+            write_gmt(tmp_path / "b.gmt", row_b),
+        ]
+        if split_files
+        else write_gmt(tmp_path / "both.gmt", row_a, row_b)
+    )
+
+    with pytest.raises(ValueError, match="WikiPathwaysId must be unique"):
+        WikiPathwaysDatabase.from_gmt(sources).extract_pathway()
 
 
 def test_extract_pathway_term_frames_and_species_filter(tmp_path: Path) -> None:
@@ -105,6 +257,45 @@ def test_build_tidy_writes_duckdb_without_sidecar(tmp_path: Path) -> None:
     result = db.write_duckdb(tmp_path / "wikipathways.duckdb")
     assert result.tables == ("pathway", "pathway_gene")
     assert not (tmp_path / "manifest.json").exists()
+
+
+def test_species_filter_keeps_all_file_provenance(tmp_path: Path) -> None:
+    file_human = write_gmt(
+        tmp_path / "human.gmt",
+        "Human%WikiPathways_20260510%WP1%Homo sapiens\thttps://example/WP1\t1",
+    )
+    file_mouse = write_gmt(
+        tmp_path / "mouse.gmt",
+        "Mouse%WikiPathways_20260510%WP2%Mus musculus\thttps://example/WP2\t2",
+    )
+    db = WikiPathwaysDatabase.from_gmt(
+        [file_mouse, file_human],
+        species="Homo sapiens",
+    )
+
+    assert db.extract_pathway()["WikiPathwaysId"].to_list() == ["WP1"]
+    path_out = tmp_path / "wikipathways.duckdb"
+    db.write_duckdb(path_out)
+    with duckdb.connect(str(path_out), read_only=True) as connection:
+        sources = connection.execute(
+            "SELECT logical_name, display_path "
+            "FROM _bioextract.source_file ORDER BY logical_name"
+        ).fetchall()
+        release_metadata = dict(
+            connection.execute(
+                "SELECT key, value FROM _bioextract.metadata "
+                "WHERE key IN ('bioextract.release_version', "
+                "'bioextract.release_version_source')"
+            ).fetchall()
+        )
+    assert sources == [
+        ("pathway_gmt_001", str(file_human.resolve())),
+        ("pathway_gmt_002", str(file_mouse.resolve())),
+    ]
+    assert release_metadata == {
+        "bioextract.release_version": "20260510",
+        "bioextract.release_version_source": "official_metadata",
+    }
 
 
 def test_from_gmt_rejects_missing_and_malformed_files(

@@ -213,13 +213,17 @@ ReactomeDatabase.from_files(
 ).write_duckdb("out/reactome.duckdb")
 
 WikiPathwaysDatabase.from_gmt(
-    "wikipathways-20260510-gmt-Homo_sapiens.gmt",
+    "wikipathways-20260510-gmt-*.gmt",
     species="Homo sapiens",
 ).write_duckdb("out/wikipathways.duckdb")
 ```
 
 Selection methods such as `select_ids()` retain unmatched inputs and hide
 resource-specific mapping joins. They do not calculate enrichment statistics.
+WikiPathways glob expansion is enabled by default; pass `glob=False` for a
+literal path or sequence. The constructor validates one Collection and Version
+and unique pathway IDs across the complete resolved file set before applying
+the optional species row filter.
 
 ## eggNOG
 
