@@ -143,7 +143,7 @@ from bioextract import GODatabase
 
 go = GODatabase.from_obo("go-basic.obo")
 df_terms = go.select_terms(subset_id="goslim_generic")
-df_subcell = go.extract_subcell()
+df_cellular_components = go.select_terms(namespace="cellular_component")
 result = go.write_duckdb("out/go.duckdb")
 ```
 

@@ -34,7 +34,6 @@ from .ontology.parse import (
 )
 from .ontology.tidy import (
     _build_tidy_frames,  # pyright: ignore[reportPrivateUsage]  # owned ontology helper
-    extract_subcell_frame,
 )
 
 __all__ = ["GODatabase"]
@@ -102,8 +101,7 @@ class GODatabase:
     Polars frames only when an operation requests them.
 
     The default tidy output is a flat ontology snapshot with canonical term and
-    edge tables plus derived graph tables. `extract_subcell()` is a convenience
-    view over cellular component terms for subcellular-location workflows.
+    edge tables plus derived graph tables.
 
     Examples:
         Read a hierarchical edge from a compact local snapshot:
@@ -135,8 +133,7 @@ class GODatabase:
             path: Local Gene Ontology OBO path or supported archive.
 
         Returns:
-            A dataset handle that can build tidy ontology frames and subcellular
-            component exports.
+            A dataset handle that can build tidy ontology frames.
 
         Raises:
             FileNotFoundError: If the OBO file does not exist.
@@ -443,62 +440,6 @@ class GODatabase:
             },
             if_exists=if_exists,
         )
-
-    def extract_subcell(self, *, include_obsolete: bool = False) -> pl.DataFrame:
-        """Extract non-obsolete cellular component terms as a subcell table.
-
-        Args:
-            include_obsolete: Whether to keep obsolete cellular component terms.
-
-        Returns:
-            A DataFrame with GO ID, subcell name, definition, and depth columns.
-
-        Examples:
-            Extract cellular-component IDs from the compact fixture:
-
-            >>> db = GODatabase.from_obo("data/go-basic.obo")
-            >>> db.extract_subcell()["go_id"].to_list()
-            ['GO:0005575', 'GO:0005737']
-        """
-        return extract_subcell_frame(
-            self._collect_frames({"term", "depth"}),
-            include_obsolete=include_obsolete,
-        )
-
-    def write_subcell(
-        self,
-        path: os.PathLike[str] | str,
-        *,
-        include_obsolete: bool = False,
-    ) -> Path:
-        """Write the cellular component subcell table as a parquet file.
-
-        Args:
-            path: Output parquet path.
-            include_obsolete: Whether to keep obsolete cellular component terms.
-
-        Returns:
-            The output path that was written.
-
-        Examples:
-            Write the subcell projection and read back its public columns:
-
-            >>> from tempfile import TemporaryDirectory
-            >>> db = GODatabase.from_obo("data/go-basic.obo")
-            >>> with TemporaryDirectory() as dir_out:
-            ...     path = Path(dir_out) / "subcell.parquet"
-            ...     _ = db.write_subcell(path)
-            ...     pl.read_parquet(path).select(
-            ...         "go_id", "subcell_name"
-            ...     ).to_dicts()
-            [{'go_id': 'GO:0005575', 'subcell_name': 'cellular_component'}, {'go_id': 'GO:0005737', 'subcell_name': 'cytoplasm'}]
-        """
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        self.extract_subcell(include_obsolete=include_obsolete).lazy().sink_parquet(
-            path
-        )
-        return path
 
     def _assert_publication_identity(self) -> None:
         path = self._publication_path

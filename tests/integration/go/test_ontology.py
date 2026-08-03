@@ -162,7 +162,6 @@ def test_go_duckdb_reopen_preserves_domain_and_native_sql_behavior(
         include_obsolete=True,
     )
     expected_subsets = source.list_subsets()
-    expected_subcell = source.extract_subcell()
     source.write_duckdb(publication)
 
     reopened = GODatabase.from_duckdb(publication)
@@ -171,7 +170,6 @@ def test_go_duckdb_reopen_preserves_domain_and_native_sql_behavior(
         include_obsolete=True,
     ).equals(expected_terms)
     assert reopened.list_subsets().equals(expected_subsets)
-    assert reopened.extract_subcell().equals(expected_subcell)
 
     first = reopened.connect()
     second = reopened.connect()
@@ -249,50 +247,3 @@ def test_go_db_select_terms_keeps_one_row_per_term_for_subset(tmp_path: Path) ->
         "GO:0005737",
     ]
     assert df_terms["subset_id"].to_list() == ["goslim_generic"] * 4
-
-
-def test_go_db_extracts_subcell_from_cellular_component(tmp_path: Path) -> None:
-    file_in = tmp_path / "go-basic.obo"
-    write_minimal_obo(file_in)
-
-    df_subcell = GODatabase.from_obo(file_in).extract_subcell()
-
-    assert df_subcell.to_dicts() == [
-        {
-            "go_id": "GO:0005575",
-            "subcell_name": "cellular_component",
-            "definition": "The part of a cell or its extracellular environment.",
-            "min_depth_from_root": 0,
-            "max_depth_from_root": 0,
-        },
-        {
-            "go_id": "GO:0005737",
-            "subcell_name": "cytoplasm",
-            "definition": (
-                "All of the contents of a cell excluding the plasma membrane and "
-                "nucleus."
-            ),
-            "min_depth_from_root": 1,
-            "max_depth_from_root": 1,
-        },
-    ]
-
-    df_subcell_with_obsolete = GODatabase.from_obo(file_in).extract_subcell(
-        include_obsolete=True
-    )
-    assert df_subcell_with_obsolete["go_id"].to_list() == [
-        "GO:0000004",
-        "GO:0005575",
-        "GO:0005737",
-    ]
-
-
-def test_go_db_writes_subcell_parquet(tmp_path: Path) -> None:
-    file_in = tmp_path / "go-basic.obo"
-    path = tmp_path / "subcell.parquet"
-    write_minimal_obo(file_in)
-
-    path_written = GODatabase.from_obo(file_in).write_subcell(path)
-
-    assert path_written == path
-    assert pl.read_parquet(path).height == 2
