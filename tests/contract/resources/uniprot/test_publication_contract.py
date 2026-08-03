@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import gzip
+import json
 import os
 from pathlib import Path
 
@@ -158,6 +159,7 @@ def test_idmapping_duckdb_contract_and_reopen_parity(tmp_path: Path) -> None:
             "uniprot-idmapping-selected-22-column-v1"
         )
         assert metadata["bioextract.capability.mapping"] == "true"
+        assert json.loads(metadata["bioextract.scope"]) == {"all_taxa": True}
         assert {
             row[0]
             for row in first.execute(
@@ -188,7 +190,7 @@ def test_from_duckdb_discriminates_uniprot_profiles(tmp_path: Path) -> None:
             "UPDATE _bioextract.metadata SET value='uniprotkb-flat-file-v1' "
             "WHERE key='bioextract.source_schema_profile'"
         )
-    with pytest.raises(ValueError, match="source schema profile"):
+    with pytest.raises(IntegrityError, match="source schema profile"):
         UniProtDatabase.from_duckdb(path)
 
 
@@ -236,7 +238,44 @@ def test_idmapping_reopen_requires_exact_source_role(tmp_path: Path) -> None:
             "WHERE key='bioextract.sources'",
             ["idmapping_selected", "fabricated_mapping"],
         )
-    with pytest.raises(ValueError, match="source inventory"):
+    with pytest.raises(IntegrityError, match="source inventory"):
+        UniProtDatabase.from_duckdb(path)
+
+
+def test_idmapping_reopen_rejects_fabricated_column_provenance(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "mapping.duckdb"
+    UniProtDatabase.from_idmapping(
+        _write_idmapping(tmp_path / "mapping.tab.gz")
+    ).write_duckdb(path, allow_all_taxa=True)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "INSERT INTO _bioextract.column_mapping VALUES "
+            "('mapping', 'UniProtId', 'fabricated', 'forged')"
+        )
+    with pytest.raises(IntegrityError, match="column provenance"):
+        UniProtDatabase.from_duckdb(path)
+
+
+def test_idmapping_publication_records_and_validates_selected_taxa(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "mapping.duckdb"
+    UniProtDatabase.from_idmapping(
+        _write_idmapping(tmp_path / "mapping.tab.gz")
+    ).write_duckdb(path, taxon_ids=[9606, "10090"])
+    with duckdb.connect(str(path)) as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+        assert json.loads(metadata["bioextract.scope"]) == {
+            "taxon_ids": ["9606", "10090"]
+        }
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value='{}' WHERE key='bioextract.scope'"
+        )
+    with pytest.raises(IntegrityError, match="taxon scope"):
         UniProtDatabase.from_duckdb(path)
 
 
@@ -360,7 +399,7 @@ def test_metadata_v1_requires_validation_issue_table(tmp_path: Path) -> None:
     ).write_duckdb(path)
     with duckdb.connect(str(path)) as connection:
         connection.execute("DROP TABLE _bioextract.validation_issue")
-    with pytest.raises(ValueError, match="validation_issue"):
+    with pytest.raises(IntegrityError, match="validation_issue"):
         UniProtDatabase.from_duckdb(path)
 
 
@@ -407,5 +446,5 @@ def test_from_duckdb_rejects_physical_contract_corruption(
     with duckdb.connect(str(path)) as connection:
         connection.execute(corruption)
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(IntegrityError, match=message):
         UniProtDatabase.from_duckdb(path)

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import duckdb
 import polars as pl
@@ -565,6 +566,36 @@ def validate_publication(path: Path) -> tuple[str, Mapping[str, str]]:
             }
             if source_roles != {"idmapping_selected"}:
                 raise ValueError("Unsupported UniProt idmapping source inventory")
+            column_mapping_count = connection.execute(
+                "SELECT count(*) FROM _bioextract.column_mapping"
+            ).fetchone()
+            if column_mapping_count != (0,):
+                raise ValueError("Unsupported UniProt idmapping column provenance")
+            try:
+                scope = cast(object, json.loads(metadata["bioextract.scope"]))
+            except (KeyError, json.JSONDecodeError) as error:
+                raise ValueError("Unsupported UniProt idmapping taxon scope") from error
+            valid_all_taxa = scope == {"all_taxa": True}
+            scope_mapping = (
+                cast(dict[str, object], scope) if isinstance(scope, dict) else {}
+            )
+            taxon_ids_value = scope_mapping.get("taxon_ids")
+            taxon_ids = (
+                cast(list[object], taxon_ids_value)
+                if isinstance(taxon_ids_value, list)
+                else None
+            )
+            valid_taxon_ids = (
+                taxon_ids is not None
+                and bool(taxon_ids)
+                and all(
+                    isinstance(taxon_id, str) and taxon_id for taxon_id in taxon_ids
+                )
+                and len(taxon_ids) == len(set(taxon_ids))
+                and set(scope_mapping) == {"taxon_ids"}
+            )
+            if not valid_all_taxa and not valid_taxon_ids:
+                raise ValueError("Unsupported UniProt idmapping taxon scope")
         if profile == "knowledgebase" and (
             set(capability_metadata) != expected_capability_keys
             or capability_metadata["bioextract.capability.isoform_sequences"]

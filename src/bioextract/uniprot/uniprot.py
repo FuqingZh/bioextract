@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -127,7 +128,10 @@ class UniProtDatabase:
                 f"UniProt DuckDB publication not found: {publication}"
             )
         identity_before = _file_identity(publication)
-        profile, metadata = validate_publication(publication)
+        try:
+            profile, metadata = validate_publication(publication)
+        except ValueError as error:
+            raise IntegrityError(str(error)) from error
         identity_after = _file_identity(publication)
         if identity_after != identity_before:
             raise IntegrityError("UniProt publication changed during validation")
@@ -228,6 +232,11 @@ class UniProtDatabase:
             build_id_prefix="uniprot-id-mapping",
             assets=(TidyAsset("mapping.parquet", "canonical", "mapping"),),
             release_version=self._release_version,
+            scope=json.dumps(
+                {"taxon_ids": list(normalized)} if normalized else {"all_taxa": True},
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
             extra_metadata={"bioextract.capability.mapping": "true"},
         )
         return dataset.write_duckdb(
