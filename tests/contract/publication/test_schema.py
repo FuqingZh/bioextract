@@ -32,13 +32,6 @@ def test_canonical_publication_normalizes_derived_columns_and_records_mapping(
         ),
     )
 
-    file_parquet = tmp_path / "example.parquet"
-    dataset.write_parquet(file_parquet)
-    assert pl.read_parquet(file_parquet).columns == [
-        "uniprot_id",
-        "reactome_pathway_id",
-    ]
-
     file_duckdb = tmp_path / "example.duckdb"
     dataset.write_duckdb(file_duckdb)
     with duckdb.connect(str(file_duckdb), read_only=True) as connection:

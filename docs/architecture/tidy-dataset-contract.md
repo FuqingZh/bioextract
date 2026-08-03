@@ -13,10 +13,9 @@ materialization is an execution strategy, not the product purpose.
 
 ## Output unit
 
-The biological relation structure determines the container:
+The biological relation structure determines the access strategy:
 
-- one independently useful analytical relation: one Parquet file;
-- multiple related relations normally queried together: one DuckDB file;
+- canonical materialized relations: one DuckDB file;
 - an already efficient official query format: direct access unless
   materialization has an identified benefit.
 
@@ -27,7 +26,6 @@ model and not misleading empty observations.
 Canonical writers are:
 
 ```python
-dataset.write_parquet(path)
 dataset.write_duckdb(path, table_names=...)
 ```
 
@@ -52,28 +50,6 @@ Fields use a source-first rule:
 
 An upstream official header change is therefore a schema change, not silently
 hidden by a broad normalization layer.
-
-## Parquet provenance
-
-Parquet footer key-value metadata carries:
-
-- `bioextract.metadata_schema_version`;
-- `bioextract.resource_name`;
-- `bioextract.resource_schema_version`;
-- `bioextract.source_schema_profile`;
-- optional `bioextract.source_schema_version`;
-- optional `bioextract.release_version`;
-- optional `bioextract.release_version_source`;
-- `bioextract.package_version`;
-- `bioextract.generated_at`;
-- `bioextract.validation_status`;
-- `bioextract.validation_issue_count`;
-- `bioextract.sources`;
-- optional `bioextract.scope`;
-- `bioextract.column_mapping`.
-
-No sidecar file is required. A Parquet publication is complete and
-machine-identifiable as one file.
 
 ## DuckDB provenance
 
@@ -104,10 +80,6 @@ because it is the SQL system catalog.
 
 ## Lazy and atomic write boundary
 
-Lazy relations remain `pl.LazyFrame` until publication. Parquet output uses
-Polars `sink_parquet()`; the public method remains `write_parquet()` because it
-also owns validation, provenance, staging, and commit.
-
 DuckDB publication streams each lazy relation through a short-lived staging
 Parquet, loads it column-wise, writes metadata, checks the database, closes the
 connection, and atomically replaces the destination. Transfer Parquet files
@@ -120,9 +92,8 @@ until a complete new staging file is ready.
 
 `TidyDataset` has no directory writer and resources expose no `write_tidy()`
 compatibility surface. Publications always use an explicit single-file
-`write_parquet(path)` or `write_duckdb(path)` destination.
-Metadata schema v1 is the first supported contract and makes both keys above
-required. It may include
+`write_duckdb(path)` destination. Metadata schema v1 is the first supported
+contract. It may include
 `bioextract.source_schema_version` only when the upstream source declares an
 authoritative schema label. `bioextract.release_version` remains optional.
 Writers never infer either value from paths, basenames, archives, timestamps,
