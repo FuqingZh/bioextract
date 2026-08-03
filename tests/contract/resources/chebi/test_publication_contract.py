@@ -185,7 +185,7 @@ name: duplicate
     assert not list(tmp_path.glob(".preserved.duckdb.*"))
 
 
-def test_chebi_metadata_v1_compatibility_and_unknown_version_rejection(
+def test_chebi_rejects_legacy_and_unknown_metadata_contracts(
     tmp_path: Path,
 ) -> None:
     current = _write_domain_publication(tmp_path)
@@ -201,26 +201,25 @@ def test_chebi_metadata_v1_compatibility_and_unknown_version_rejection(
             "WHERE key='bioextract.resource_schema_version'"
         )
         connection.execute("DROP TABLE _bioextract.validation_issue")
-    assert ChEBIDatabase.from_duckdb(legacy).select_compounds(
-        ["CHEBI:1"], namespace="chebi"
-    ).extract_matches()["ChEBIId"].to_list() == ["CHEBI:1"]
+    with pytest.raises(ValueError, match="five _bioextract relations"):
+        ChEBIDatabase.from_duckdb(legacy)
 
     unknown = tmp_path / "unknown.duckdb"
     unknown.write_bytes(current.read_bytes())
     with duckdb.connect(str(unknown)) as connection:
         connection.execute(
-            "UPDATE _bioextract.metadata SET value='999' "
+            "UPDATE _bioextract.metadata SET value='3' "
             "WHERE key='bioextract.metadata_schema_version'"
         )
     with pytest.raises(ValueError, match="metadata schema version"):
         ChEBIDatabase.from_duckdb(unknown)
 
-    missing_v3_table = tmp_path / "missing-v3-table.duckdb"
-    missing_v3_table.write_bytes(current.read_bytes())
-    with duckdb.connect(str(missing_v3_table)) as connection:
+    missing_v1_table = tmp_path / "missing-v1-table.duckdb"
+    missing_v1_table.write_bytes(current.read_bytes())
+    with duckdb.connect(str(missing_v1_table)) as connection:
         connection.execute("DROP TABLE _bioextract.validation_issue")
-    with pytest.raises(ValueError, match="validation_issue"):
-        ChEBIDatabase.from_duckdb(missing_v3_table)
+    with pytest.raises(ValueError, match="five _bioextract relations"):
+        ChEBIDatabase.from_duckdb(missing_v1_table)
 
     for index, profile in enumerate(("", "unknown-profile")):
         unsupported_profile = tmp_path / f"unsupported-profile-{index}.duckdb"

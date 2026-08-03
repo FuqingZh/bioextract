@@ -22,7 +22,7 @@ caller-declared official release identity with
 supply or validate release identity.
 Entry batches are streamed record by record; excluded large fields are not
 published. The writer stages locally beside the requested destination,
-publishes metadata schema v3, verifies inventory and row counts read-only, and
+publishes metadata schema v1, verifies inventory and row counts read-only, and
 then atomically commits `<resource>.duckdb`.
 
 When a release is supplied as an archive, provenance records the original

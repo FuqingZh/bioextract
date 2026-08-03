@@ -9,17 +9,14 @@ from typing import TYPE_CHECKING, Literal
 import duckdb
 import polars as pl
 
-from bioextract._publication import (
-    validate_duckdb_metadata_v3,
-    validate_duckdb_validation_state,
-)
+from bioextract._publication import validate_duckdb_metadata_v1
 from bioextract._shared import validate_group_ids
 from bioextract.errors import CapabilityError
 
 if TYPE_CHECKING:
     from .chebi import ChEBIDatabase
 
-_METADATA_VERSIONS = {"1", "2", "3"}
+_METADATA_VERSIONS = {"1"}
 SOURCE_SCHEMA_PROFILE = "chebi-release-bundle-v1"
 _BASE_METADATA_TABLES = {
     "metadata",
@@ -636,35 +633,12 @@ def open_chebi_publication(path: str | Path) -> _ChEBIPublication:
             raise ValueError(
                 f"Unsupported ChEBI metadata schema version: {metadata_version!r}"
             )
-        if metadata_version == "3":
-            validate_duckdb_metadata_v3(connection, metadata)
-            required_v3 = {
-                "bioextract.resource_name",
-                "bioextract.resource_schema_version",
-                "bioextract.source_schema_profile",
-                "bioextract.package_version",
-                "bioextract.generated_at",
-                "bioextract.validation_status",
-                "bioextract.validation_issue_count",
-                "bioextract.sources",
-            }
-            missing_v3 = sorted(required_v3 - set(metadata))
-            if missing_v3:
-                raise ValueError(f"ChEBI metadata v3 is missing keys: {missing_v3}")
-            if (
-                metadata.get("bioextract.source_schema_profile")
-                != SOURCE_SCHEMA_PROFILE
-            ):
-                raise ValueError("Unsupported ChEBI source schema profile")
-        if metadata_version == "2":
-            validate_duckdb_validation_state(connection, metadata)
+        validate_duckdb_metadata_v1(connection, metadata)
+        if metadata.get("bioextract.source_schema_profile") != SOURCE_SCHEMA_PROFILE:
+            raise ValueError("Unsupported ChEBI source schema profile")
         if metadata.get("bioextract.resource_name") != "chebi":
             raise ValueError("DuckDB file is not a bioextract ChEBI publication")
-        resource_schema_version = metadata.get(
-            "bioextract.resource_schema_version"
-            if metadata_version == "3"
-            else "bioextract.schema_version"
-        )
+        resource_schema_version = metadata.get("bioextract.resource_schema_version")
         if resource_schema_version != "chebi-duckdb-v1":
             raise ValueError("Unsupported ChEBI resource schema version")
         tables = frozenset(

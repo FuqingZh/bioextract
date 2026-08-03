@@ -205,7 +205,7 @@ SQ   SEQUENCE   3 AA;  307 MW;  6AAEBDB000000000 CRC64;
         )
 
 
-def test_metadata_v3_requires_validation_issue_table(tmp_path: Path) -> None:
+def test_metadata_v1_requires_validation_issue_table(tmp_path: Path) -> None:
     path = tmp_path / "uniprot.duckdb"
     UniProtDatabase.from_knowledgebase(
         entries=_write_dat(tmp_path / "entries.dat.gz")

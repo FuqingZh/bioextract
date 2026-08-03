@@ -193,10 +193,9 @@ The `_bioextract` schema contains:
 - `validation_issue`: non-fatal source-integrity findings; Rhea v1 creates it
   empty because current integrity failures remain fail-fast.
 
-New publications use metadata schema v3. Readers accept legacy metadata v1
-without persisted issue details and metadata v2 with all five tables. Metadata
-v3 additionally requires the explicit resource schema and source profile keys;
-unknown versions fail.
+New publications use the first supported metadata schema v1. Readers require
+all five provenance tables plus the explicit resource schema and source profile
+keys; legacy development shapes and unknown versions fail.
 
 Rhea v1 stores `compound.chebi_id` and `underlying_chebi_id` as complete
 `CHEBI:<number>` CURIE strings. The resource schema version remains

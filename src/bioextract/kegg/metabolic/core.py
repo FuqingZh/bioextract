@@ -15,8 +15,7 @@ import polars as pl
 
 from bioextract._publication import (
     DuckDBWriteResult,
-    validate_duckdb_metadata_v3,
-    validate_duckdb_validation_state,
+    validate_duckdb_metadata_v1,
 )
 from bioextract._shared import validate_group_ids
 from bioextract.errors import CapabilityError
@@ -502,39 +501,29 @@ def open_publication(path: Path) -> MetabolicPublication:
                 "SELECT table_name FROM information_schema.tables WHERE table_schema='_bioextract'"
             ).fetchall()
         }
-        required = {"metadata", "source_file", "table_info", "column_mapping"}
+        required = {
+            "metadata",
+            "source_file",
+            "table_info",
+            "column_mapping",
+            "validation_issue",
+        }
         if not required <= meta_tables:
-            raise ValueError("DuckDB file is missing bioextract metadata tables")
+            missing = sorted(required - meta_tables)
+            raise ValueError(
+                f"DuckDB file is missing bioextract metadata tables: {missing}"
+            )
         metadata: dict[str, str] = {
             str(key): str(value)
             for key, value in con.execute(
                 "SELECT key, value FROM _bioextract.metadata"
             ).fetchall()
         }
-        if metadata.get("bioextract.metadata_schema_version") not in {"1", "2", "3"}:
+        if metadata.get("bioextract.metadata_schema_version") != "1":
             raise ValueError("Unsupported KEGG metadata schema version")
-        if metadata.get("bioextract.metadata_schema_version") == "3":
-            validate_duckdb_metadata_v3(con, metadata)
-            required_v3 = {
-                "bioextract.resource_name",
-                "bioextract.resource_schema_version",
-                "bioextract.source_schema_profile",
-                "bioextract.package_version",
-                "bioextract.generated_at",
-                "bioextract.validation_status",
-                "bioextract.validation_issue_count",
-                "bioextract.sources",
-            }
-            missing_v3 = sorted(required_v3 - set(metadata))
-            if missing_v3:
-                raise ValueError(f"KEGG metadata v3 is missing keys: {missing_v3}")
-            if (
-                metadata.get("bioextract.source_schema_profile")
-                != SOURCE_SCHEMA_PROFILE
-            ):
-                raise ValueError("Unsupported KEGG source schema profile")
-        if metadata.get("bioextract.metadata_schema_version") == "2":
-            validate_duckdb_validation_state(con, metadata)
+        validate_duckdb_metadata_v1(con, metadata)
+        if metadata.get("bioextract.source_schema_profile") != SOURCE_SCHEMA_PROFILE:
+            raise ValueError("Unsupported KEGG source schema profile")
         if (
             metadata.get("bioextract.resource_name") != "kegg"
             or metadata.get("bioextract.scope") != "metabolic"
@@ -542,13 +531,7 @@ def open_publication(path: Path) -> MetabolicPublication:
             raise ValueError(
                 "DuckDB file is not a bioextract KEGG metabolic publication"
             )
-        metadata_version = metadata.get("bioextract.metadata_schema_version")
-        resource_schema_key = (
-            "bioextract.resource_schema_version"
-            if metadata_version == "3"
-            else "bioextract.schema_version"
-        )
-        if metadata.get(resource_schema_key) != SCHEMA_VERSION:
+        if metadata.get("bioextract.resource_schema_version") != SCHEMA_VERSION:
             raise ValueError("Unsupported KEGG metabolic resource schema version")
         tables = {
             r[0]
@@ -572,7 +555,7 @@ def open_publication(path: Path) -> MetabolicPublication:
             for value in metadata.get("bioextract.capabilities", "").split(",")
             if value
         )
-        if metadata.get("bioextract.metadata_schema_version") in {"2", "3"}:
+        if metadata.get("bioextract.metadata_schema_version") == "1":
             if "bioextract.capabilities" not in metadata:
                 raise ValueError(
                     "KEGG metadata v2 publication is missing capability metadata"

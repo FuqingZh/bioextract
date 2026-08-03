@@ -348,7 +348,7 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
         metadata = dict(
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
-        assert metadata["bioextract.metadata_schema_version"] == "3"
+        assert metadata["bioextract.metadata_schema_version"] == "1"
         assert (
             metadata["bioextract.resource_schema_version"]
             == "uniprot-knowledgebase-duckdb-v1"
