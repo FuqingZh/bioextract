@@ -96,7 +96,7 @@ version, scope, package version, and generation time. `source_file` stores
 logical source name, display path, bytes, media type, and optional SHA-256.
 `table_info` stores table name, semantic role, and row count.
 `column_mapping` always exists and is empty when source headers required no
-mapping. `validation_issue` always exists in metadata v2/v3 and records
+mapping. `validation_issue` always exists in metadata v1 and records
 non-fatal validation findings; its row count must match metadata.
 
 The namespace contains no biological facts. `information_schema` is not used
@@ -121,11 +121,12 @@ until a complete new staging file is ready.
 `TidyDataset` has no directory writer and resources expose no `write_tidy()`
 compatibility surface. Publications always use an explicit single-file
 `write_parquet(path)` or `write_duckdb(path)` destination.
-Metadata schema v3 makes both keys above required. It may include
+Metadata schema v1 is the first supported contract and makes both keys above
+required. It may include
 `bioextract.source_schema_version` only when the upstream source declares an
 authoritative schema label. `bioextract.release_version` remains optional.
 Writers never infer either value from paths, basenames, archives, timestamps,
-or modification times. Legacy metadata v1/v2 uses
-`bioextract.schema_version`; v3 never falls back to or dual-writes that name.
+or modification times. Legacy development metadata shapes are rejected; v1
+never falls back to or dual-writes `bioextract.schema_version`.
 An internal `build_id_prefix` may include a path stem for a human-readable
 execution label, but that label is never release or source-schema evidence.

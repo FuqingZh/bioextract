@@ -13,7 +13,14 @@ from pathlib import Path
 import duckdb
 import polars as pl
 
-METADATA_SCHEMA_VERSION = "3"
+METADATA_SCHEMA_VERSION = "1"
+BIOEXTRACT_RELATIONS = {
+    "metadata",
+    "source_file",
+    "table_info",
+    "column_mapping",
+    "validation_issue",
+}
 _SQL_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -74,11 +81,23 @@ class ValidationIssue:
     message: str = ""
 
 
-def validate_duckdb_metadata_v3(
+def validate_duckdb_metadata_v1(
     connection: duckdb.DuckDBPyConnection,
     metadata: Mapping[str, str],
 ) -> None:
-    """Validate required v3 keys and embedded/source-table inventory parity."""
+    """Validate the first supported metadata contract and source parity."""
+    metadata_tables = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema='_bioextract' AND table_type='BASE TABLE'"
+        ).fetchall()
+    }
+    if metadata_tables != BIOEXTRACT_RELATIONS:
+        raise ValueError(
+            "Metadata v1 requires exactly the five _bioextract relations: "
+            f"expected={sorted(BIOEXTRACT_RELATIONS)}, actual={sorted(metadata_tables)}"
+        )
     required = {
         "bioextract.resource_name",
         "bioextract.resource_schema_version",
@@ -91,19 +110,19 @@ def validate_duckdb_metadata_v3(
     }
     missing = sorted(required - set(metadata))
     if missing:
-        raise ValueError(f"Metadata v3 is missing required keys: {missing}")
+        raise ValueError(f"Metadata v1 is missing required keys: {missing}")
     release_version = metadata.get("bioextract.release_version")
     release_version_source = metadata.get("bioextract.release_version_source")
     if (release_version is None) != (release_version_source is None):
         raise ValueError(
-            "Metadata v3 release_version and release_version_source must occur together"
+            "Metadata v1 release_version and release_version_source must occur together"
         )
     if release_version is not None:
         if not release_version.strip():
-            raise ValueError("Metadata v3 release_version must be non-empty")
+            raise ValueError("Metadata v1 release_version must be non-empty")
         if release_version_source not in {"caller", "official_metadata"}:
             raise ValueError(
-                "Metadata v3 release_version_source must be caller or official_metadata"
+                "Metadata v1 release_version_source must be caller or official_metadata"
             )
     validate_duckdb_validation_state(connection, metadata)
     source_rows = connection.execute(
@@ -129,7 +148,7 @@ def validate_duckdb_validation_state(
     connection: duckdb.DuckDBPyConnection,
     metadata: Mapping[str, str],
 ) -> None:
-    """Validate the metadata v2/v3 issue table, count, and status invariant."""
+    """Validate the metadata v1 issue table, count, and status invariant."""
     validation_status = metadata.get("bioextract.validation_status")
     if validation_status not in {"passed", "passed_with_warnings"}:
         raise ValueError(
@@ -570,6 +589,18 @@ def _validate_duckdb_publication(
         metadata = dict(
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
+        metadata_tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema='_bioextract' AND table_type='BASE TABLE'"
+            ).fetchall()
+        }
+        if metadata_tables != BIOEXTRACT_RELATIONS:
+            raise RuntimeError(
+                "DuckDB publication does not contain exactly the five "
+                "_bioextract relations"
+            )
         issue_row = connection.execute(
             "SELECT count(*) FROM _bioextract.validation_issue"
         ).fetchone()
@@ -631,6 +662,17 @@ def _validate_duckdb_publication(
         if metadata_rows != expected:
             raise RuntimeError(
                 "DuckDB table inventory does not match published row counts"
+            )
+        main_tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema='main' AND table_type='BASE TABLE'"
+            ).fetchall()
+        }
+        if main_tables != set(expected):
+            raise RuntimeError(
+                "DuckDB physical table inventory does not match table_info"
             )
         for table_name, expected_count in expected.items():
             count_row = connection.execute(

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import duckdb
 import polars as pl
 
-from bioextract._publication import validate_duckdb_metadata_v3
+from bioextract._publication import validate_duckdb_metadata_v1
 
 from ._knowledgebase import (
     RESOURCE_SCHEMA_VERSION,
@@ -498,9 +498,9 @@ def validate_publication(path: Path) -> Mapping[str, str]:
         metadata = dict(
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
-        if metadata.get("bioextract.metadata_schema_version") != "3":
+        if metadata.get("bioextract.metadata_schema_version") != "1":
             raise ValueError("Unsupported UniProtKB metadata schema version")
-        required_v3 = {
+        required_v1 = {
             "bioextract.resource_name",
             "bioextract.resource_schema_version",
             "bioextract.source_schema_profile",
@@ -510,10 +510,10 @@ def validate_publication(path: Path) -> Mapping[str, str]:
             "bioextract.validation_issue_count",
             "bioextract.sources",
         }
-        missing_v3 = sorted(required_v3 - set(metadata))
-        if missing_v3:
-            raise ValueError(f"UniProtKB metadata v3 is missing keys: {missing_v3}")
-        validate_duckdb_metadata_v3(connection, metadata)
+        missing_v1 = sorted(required_v1 - set(metadata))
+        if missing_v1:
+            raise ValueError(f"UniProtKB metadata v1 is missing keys: {missing_v1}")
+        validate_duckdb_metadata_v1(connection, metadata)
         issue_count = connection.execute(
             "SELECT count(*) FROM _bioextract.validation_issue"
         ).fetchone()

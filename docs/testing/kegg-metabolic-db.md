@@ -19,7 +19,7 @@ fixtures only and verifies:
 - module `--` placeholders, M-number references, reference cycles, and blank
   reaction separators;
 - normalized ChEBI and Rhea cross-references;
-- all canonical global relation roles and metadata schema v3;
+- all canonical global relation roles and metadata schema v1;
 - validated read-only reopening and rejection of wrong resource identity;
 - reaction-centered single and grouped selections, extraction terminals, and
   unmatched-ID accounting;

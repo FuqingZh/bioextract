@@ -35,8 +35,8 @@ Changes to `RheaDatabase` must verify:
     examples.
 16. Rhea ChEBI fields are complete CURIE strings and numeric legacy
     publications are rejected as an incompatible v1 physical layout.
-17. Metadata v1 remains readable, metadata v2/v3 requires the fifth
-    `validation_issue` table, and unknown metadata versions are rejected.
+17. Metadata v1 requires all five provenance tables, and legacy development or
+    unknown metadata contracts are rejected.
 18. `connect()` returns independent native read-only connections and rejects
     persistent writes.
 19. The three superseded explicit-file constructors are absent, all supplied

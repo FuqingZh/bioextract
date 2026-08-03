@@ -12,6 +12,8 @@ from typing import Literal
 import duckdb
 import polars as pl
 
+from bioextract._publication import validate_duckdb_metadata_v1
+
 from .constant import SCHEMA_VERSION, SOURCE_SCHEMA_PROFILE
 from .rhea import RheaWriteResult
 from .util import (
@@ -748,7 +750,7 @@ def _record_metadata(
         for name, display_path, size, media_type, sha256 in source_rows
     ]
     values = {
-        "bioextract.metadata_schema_version": "3",
+        "bioextract.metadata_schema_version": "1",
         "bioextract.resource_name": "rhea",
         "bioextract.resource_schema_version": SCHEMA_VERSION,
         "bioextract.source_schema_profile": SOURCE_SCHEMA_PROFILE,
@@ -816,6 +818,7 @@ def _validate_staged_database(
         metadata = dict(
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
+        validate_duckdb_metadata_v1(connection, metadata)
         required_metadata = {
             "bioextract.metadata_schema_version",
             "bioextract.resource_name",

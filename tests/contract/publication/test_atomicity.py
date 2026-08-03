@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 from pathlib import Path
 
 import polars as pl
@@ -86,3 +87,29 @@ def test_failed_replacement_preserves_existing_publication(
             dataset.write_duckdb(path, if_exists="replace")
 
     assert path.read_bytes() == original
+
+
+def test_duckdb_transfer_parquet_directory_is_cleaned_on_success_and_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    _dataset(tmp_path).write_duckdb(tmp_path / "success.duckdb")
+    assert not list(tmp_path.glob("bioextract-relations-*"))
+
+    source = tmp_path / "bad-transfer-source.tsv"
+    source.write_text("value\nbad\n", encoding="utf-8")
+    failing = TidyDataset(
+        frames={
+            "relation": pl.DataFrame({"value": ["bad"]})
+            .lazy()
+            .select(pl.col("value").cast(pl.Int64))
+        },
+        source=TidySource("source", source, "text/tab-separated-values"),
+        resource_schema_version="bad-v1",
+        source_schema_profile="bad-source-v1",
+        build_id_prefix="bad",
+        assets=(TidyAsset("relation.parquet", "canonical", "relation"),),
+    )
+    with pytest.raises(pl.exceptions.InvalidOperationError):
+        failing.write_duckdb(tmp_path / "failure.duckdb")
+    assert not list(tmp_path.glob("bioextract-relations-*"))

@@ -192,7 +192,7 @@ def test_capability_metadata_matches_actual_inventory(tmp_path: Path) -> None:
         KEGGDatabase.from_duckdb(path)
 
 
-def test_metadata_v3_requires_validation_issue_table(tmp_path: Path) -> None:
+def test_metadata_v1_requires_validation_issue_table(tmp_path: Path) -> None:
     path = _publish(tmp_path)
     with duckdb.connect(str(path)) as connection:
         connection.execute("DROP TABLE _bioextract.validation_issue")
@@ -201,7 +201,7 @@ def test_metadata_v3_requires_validation_issue_table(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("profile", ["", "unknown-profile"])
-def test_metadata_v3_requires_supported_source_schema_profile(
+def test_metadata_v1_requires_supported_source_schema_profile(
     tmp_path: Path, profile: str
 ) -> None:
     path = _publish(tmp_path)

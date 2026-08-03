@@ -7,7 +7,7 @@ import duckdb
 import polars as pl
 import pytest
 
-from bioextract._publication import validate_duckdb_metadata_v3
+from bioextract._publication import validate_duckdb_metadata_v1
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
 
 
@@ -59,6 +59,31 @@ def test_parquet_publication_embeds_provenance_without_sidecar(
     assert metadata[b"bioextract.release_version"] == b"2026-07-29"
 
 
+def test_duckdb_writes_source_schema_version_only_when_authoritative(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "source-schema.duckdb"
+    dataset = _dataset(tmp_path)
+    dataset.source_schema_version = None
+    dataset.write_duckdb(path)
+    with duckdb.connect(str(path), read_only=True) as connection:
+        assert (
+            connection.execute(
+                "SELECT value FROM _bioextract.metadata "
+                "WHERE key='bioextract.source_schema_version'"
+            ).fetchone()
+            is None
+        )
+
+    dataset.source_schema_version = "official-schema-2026"
+    dataset.write_duckdb(path, if_exists="replace")
+    with duckdb.connect(str(path), read_only=True) as connection:
+        assert connection.execute(
+            "SELECT value FROM _bioextract.metadata "
+            "WHERE key='bioextract.source_schema_version'"
+        ).fetchone() == ("official-schema-2026",)
+
+
 @pytest.mark.parametrize(
     ("release_version", "release_version_source", "message"),
     [
@@ -100,7 +125,7 @@ def test_publication_rejects_invalid_release_provenance(
         ),
     ],
 )
-def test_v3_reader_rejects_invalid_release_provenance(
+def test_v1_reader_rejects_invalid_release_provenance(
     tmp_path: Path, corruption: str, message: str
 ) -> None:
     path = tmp_path / "release.duckdb"
@@ -111,10 +136,10 @@ def test_v3_reader_rejects_invalid_release_provenance(
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
         with pytest.raises(ValueError, match=message):
-            validate_duckdb_metadata_v3(connection, metadata)
+            validate_duckdb_metadata_v1(connection, metadata)
 
 
-def test_v3_reader_rejects_release_source_without_release(tmp_path: Path) -> None:
+def test_v1_reader_rejects_release_source_without_release(tmp_path: Path) -> None:
     path = tmp_path / "source-only.duckdb"
     dataset = _dataset(tmp_path)
     dataset.release_version = None
@@ -128,7 +153,7 @@ def test_v3_reader_rejects_release_source_without_release(tmp_path: Path) -> Non
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
         with pytest.raises(ValueError, match="must occur together"):
-            validate_duckdb_metadata_v3(connection, metadata)
+            validate_duckdb_metadata_v1(connection, metadata)
 
 
 @pytest.mark.parametrize(
@@ -140,7 +165,7 @@ def test_v3_reader_rejects_release_source_without_release(tmp_path: Path) -> Non
         ("passed", "1", True, "does not match validation_issue_count"),
     ],
 )
-def test_v3_reader_validates_status_and_issue_count_parity(
+def test_v1_reader_validates_status_and_issue_count_parity(
     tmp_path: Path,
     status: str,
     count: str,
@@ -170,10 +195,10 @@ def test_v3_reader_validates_status_and_issue_count_parity(
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
         with pytest.raises(ValueError, match=message):
-            validate_duckdb_metadata_v3(connection, metadata)
+            validate_duckdb_metadata_v1(connection, metadata)
 
 
-def test_v3_reader_reports_missing_validation_issue_table(tmp_path: Path) -> None:
+def test_v1_reader_reports_missing_validation_issue_table(tmp_path: Path) -> None:
     path = tmp_path / "missing-validation-table.duckdb"
     _dataset(tmp_path).write_duckdb(path)
     with duckdb.connect(str(path)) as connection:
@@ -181,8 +206,8 @@ def test_v3_reader_reports_missing_validation_issue_table(tmp_path: Path) -> Non
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
         connection.execute("DROP TABLE _bioextract.validation_issue")
-        with pytest.raises(ValueError, match="requires _bioextract.validation_issue"):
-            validate_duckdb_metadata_v3(connection, metadata)
+        with pytest.raises(ValueError, match="validation_issue"):
+            validate_duckdb_metadata_v1(connection, metadata)
 
 
 @pytest.mark.parametrize("container", ["parquet", "duckdb"])
@@ -274,7 +299,7 @@ def test_duckdb_publication_has_internal_provenance_schema(
         assert connection.execute(
             "SELECT value FROM _bioextract.metadata "
             "WHERE key = 'bioextract.metadata_schema_version'"
-        ).fetchone() == ("3",)
+        ).fetchone() == ("1",)
         assert connection.execute(
             "SELECT count(*) FROM _bioextract.validation_issue"
         ).fetchone() == (0,)

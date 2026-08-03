@@ -531,24 +531,25 @@ def test_metadata_versions_physical_curie_contract_and_native_connection(
             "WHERE key='bioextract.resource_schema_version'"
         )
         connection.execute("DROP TABLE _bioextract.validation_issue")
-    assert RheaDatabase.from_duckdb(legacy_metadata).connect().close() is None
+    with pytest.raises(ValueError, match="five _bioextract relations"):
+        RheaDatabase.from_duckdb(legacy_metadata)
 
     unknown = tmp_path / "unknown.duckdb"
     unknown.write_bytes(current.read_bytes())
     with duckdb.connect(str(unknown)) as connection:
         connection.execute(
-            "UPDATE _bioextract.metadata SET value='999' "
+            "UPDATE _bioextract.metadata SET value='3' "
             "WHERE key='bioextract.metadata_schema_version'"
         )
     with pytest.raises(ValueError, match="metadata_schema_version"):
         RheaDatabase.from_duckdb(unknown)
 
-    missing_v3_table = tmp_path / "missing-v3-table.duckdb"
-    missing_v3_table.write_bytes(current.read_bytes())
-    with duckdb.connect(str(missing_v3_table)) as connection:
+    missing_v1_table = tmp_path / "missing-v1-table.duckdb"
+    missing_v1_table.write_bytes(current.read_bytes())
+    with duckdb.connect(str(missing_v1_table)) as connection:
         connection.execute("DROP TABLE _bioextract.validation_issue")
-    with pytest.raises(ValueError, match="validation_issue"):
-        RheaDatabase.from_duckdb(missing_v3_table)
+    with pytest.raises(ValueError, match="five _bioextract relations"):
+        RheaDatabase.from_duckdb(missing_v1_table)
 
     for index, profile in enumerate(("", "unknown-profile")):
         unsupported_profile = tmp_path / f"unsupported-profile-{index}.duckdb"

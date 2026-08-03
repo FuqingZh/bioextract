@@ -52,11 +52,10 @@ Missing or duplicate canonical ChEBI IDs fail the build with
 recorded as `foreign_key_violation` warnings in
 `_bioextract.validation_issue`.
 
-Metadata schema v3 has `metadata`, `source_file`, `table_info`,
+Metadata schema v1 has `metadata`, `source_file`, `table_info`,
 `column_mapping`, and `validation_issue`. It records validation status and
-issue count. Readers accept v1 as lacking persisted issue details; v2/v3
-require all five tables, and v3 requires the explicit resource schema and
-source profile keys.
+issue count. Readers accept only this complete v1 shape, including the explicit
+resource schema and source profile keys.
 
 `write_duckdb(path, if_exists="fail")` builds a staging database, verifies it,
 closes DuckDB, and atomically replaces the destination. The artifact has no
