@@ -20,7 +20,9 @@ verifies:
 - many-to-many mapping expansion and stable output columns
 - single and grouped selection with unmapped reporting
 - nullable columns for optional source files
-- flat `mapping.parquet` and manifest output
+- one-table `mapping` DuckDB publication and embedded source inventory
+- metadata/profile/schema/table-role validation, read-only connection freshness,
+  atomic `if_exists`, and source-to-reopened selection parity
 - input-ID kind, snapshot kind, and organism-code validation
 
 The tests use compact local TSV fixtures. They do not call the KEGG API, infer
@@ -31,9 +33,12 @@ missing mappings, or calculate enrichment statistics.
 Run the focused contract with:
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m pytest tests/integration/kegg/test_mapping.py
+pdm run pytest tests/integration/kegg/test_mapping.py \
+  tests/contract/resources/kegg/test_mapping_brite_publication_contract.py \
+  tests/contract/api
 ```
 
 For a real organism snapshot, additionally compare observed source namespaces,
 row counts, and a deterministic identifier sample with the raw files before
-publishing `mapping.parquet`.
+publishing `tidy/data.duckdb`, then reopen it and repeat the selection through
+the publication-backed handle.

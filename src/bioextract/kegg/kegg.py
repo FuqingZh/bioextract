@@ -10,7 +10,10 @@ from typing import Literal, cast, overload
 import duckdb
 import polars as pl
 
-from bioextract._publication import DuckDBWriteResult, ParquetWriteResult
+from bioextract._publication import (
+    DuckDBWriteResult,
+    validate_duckdb_metadata_v1,
+)
 from bioextract._shared import (
     create_group_input_frames,
     create_input_id_frame,
@@ -23,6 +26,7 @@ from .brite.constant import (
 )
 from .brite.constant import (
     MEDIA_TYPE_JSON,
+    SCHEMA_BRITE,
 )
 from .brite.constant import (
     SCHEMA_VERSION as BRITE_SCHEMA_VERSION,
@@ -35,6 +39,7 @@ from .mapping.constant import (
     MEDIA_TYPE_TSV,
     SCHEMA_GROUP_INPUT_IDS,
     SCHEMA_GROUPS,
+    SCHEMA_MAPPING,
     SCHEMA_UNMAPPED,
     KEGGNamespace,
 )
@@ -83,6 +88,8 @@ class _KeggSnapshotKind(StrEnum):
     MAPPING_FILES = "mapping_files"
     METABOLIC_FILES = "metabolic_files"
     METABOLIC_PUBLICATION = "metabolic_publication"
+    BRITE_PUBLICATION = "brite_publication"
+    MAPPING_PUBLICATION = "mapping_publication"
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +139,7 @@ class KEGGDatabase:
     _metabolic_publication: MetabolicPublication | None = field(
         default=None, init=False, repr=False
     )
+    _publication_path: Path | None = field(default=None, init=False, repr=False)
 
     @classmethod
     def from_metabolic_release(
@@ -232,7 +240,7 @@ class KEGGDatabase:
 
     @classmethod
     def from_duckdb(cls, path: os.PathLike[str] | str) -> KEGGDatabase:
-        """Open a validated KEGG metabolic publication for read-only access.
+        """Open a validated KEGG publication for domain and read-only access.
 
         Examples:
             >>> db = KEGGDatabase.from_duckdb("kegg.duckdb")  # doctest: +SKIP
@@ -241,11 +249,19 @@ class KEGGDatabase:
             >>> with db.connect() as connection:  # doctest: +SKIP
             ...     count = connection.sql("SELECT count(*) FROM reaction").fetchone()[0]
         """
-        publication = open_metabolic_publication(Path(path))
-        result = cls(
-            snapshot=_KeggSnapshot(kind=_KeggSnapshotKind.METABOLIC_PUBLICATION)
-        )
-        result._metabolic_publication = publication
+        publication_path = Path(path)
+        profile = _read_publication_profile(publication_path)
+        if profile == "kegg-metabolic-flat-files-v1":
+            publication = open_metabolic_publication(publication_path)
+            result = cls(
+                snapshot=_KeggSnapshot(kind=_KeggSnapshotKind.METABOLIC_PUBLICATION)
+            )
+            result._metabolic_publication = publication
+            result._publication_path = publication_path
+            return result
+        kind = _validate_tidy_publication(publication_path, profile=profile)
+        result = cls(snapshot=_KeggSnapshot(kind=kind))
+        result._publication_path = publication_path
         return result
 
     @classmethod
@@ -399,22 +415,55 @@ class KEGGDatabase:
         """
         self._require_mapping_snapshot("extract KEGG mapping")
         if self._df_mapping is None:
-            self._df_mapping = build_mapping_frame(
-                organism_code=self.snapshot.organism_code or "",
-                df_conv_uniprot=read_conv_uniprot_frame(
-                    self._required_path(self.snapshot.file_conv_uniprot)
-                ),
-                df_conv_ncbi_geneid=read_conv_ncbi_geneid_frame(
-                    self.snapshot.file_conv_ncbi_geneid
-                ),
-                df_gene_ko=read_gene_ko_frame(
-                    self._required_path(self.snapshot.file_gene_ko)
-                ),
-                df_gene_pathway=read_gene_pathway_frame(
-                    self._required_path(self.snapshot.file_gene_pathway)
-                ),
-                df_gene_list=read_gene_list_frame(self.snapshot.file_gene_list),
-            )
+            if self.snapshot.kind == _KeggSnapshotKind.MAPPING_PUBLICATION:
+                with self.connect() as connection:
+                    cursor = connection.execute("SELECT * FROM mapping")
+                    physical_schema = {
+                        "organism_code": SCHEMA_MAPPING["OrganismCode"],
+                        "kegg_gene_id": SCHEMA_MAPPING["KeggGeneId"],
+                        "uniprot_id": SCHEMA_MAPPING["UniProtId"],
+                        "ncbi_gene_id": SCHEMA_MAPPING["NcbiGeneId"],
+                        "ko_id": SCHEMA_MAPPING["KoId"],
+                        "kegg_pathway_id": SCHEMA_MAPPING["KeggPathwayId"],
+                        "pathway_map_id": SCHEMA_MAPPING["PathwayMapId"],
+                        "gene_symbol": SCHEMA_MAPPING["GeneSymbol"],
+                        "gene_description": SCHEMA_MAPPING["GeneDescription"],
+                    }
+                    frame = pl.DataFrame(
+                        cursor.fetchall(),
+                        schema=physical_schema,
+                        orient="row",
+                    )
+                self._df_mapping = frame.rename(
+                    {
+                        "organism_code": "OrganismCode",
+                        "kegg_gene_id": "KeggGeneId",
+                        "uniprot_id": "UniProtId",
+                        "ncbi_gene_id": "NcbiGeneId",
+                        "ko_id": "KoId",
+                        "kegg_pathway_id": "KeggPathwayId",
+                        "pathway_map_id": "PathwayMapId",
+                        "gene_symbol": "GeneSymbol",
+                        "gene_description": "GeneDescription",
+                    }
+                )
+            else:
+                self._df_mapping = build_mapping_frame(
+                    organism_code=self.snapshot.organism_code or "",
+                    df_conv_uniprot=read_conv_uniprot_frame(
+                        self._required_path(self.snapshot.file_conv_uniprot)
+                    ),
+                    df_conv_ncbi_geneid=read_conv_ncbi_geneid_frame(
+                        self.snapshot.file_conv_ncbi_geneid
+                    ),
+                    df_gene_ko=read_gene_ko_frame(
+                        self._required_path(self.snapshot.file_gene_ko)
+                    ),
+                    df_gene_pathway=read_gene_pathway_frame(
+                        self._required_path(self.snapshot.file_gene_pathway)
+                    ),
+                    df_gene_list=read_gene_list_frame(self.snapshot.file_gene_list),
+                )
         return self._df_mapping
 
     @overload
@@ -633,6 +682,7 @@ class KEGGDatabase:
                     for path, kind, frame_name in BRITE_ASSET_SPECS
                 ),
                 resource_name="kegg",
+                scope="brite",
             )
 
         self._require_mapping_snapshot("build KEGG mapping tidy dataset")
@@ -647,25 +697,11 @@ class KEGGDatabase:
                 for path, kind, frame_name in MAPPING_ASSET_SPECS
             ),
             resource_name="kegg",
+            scope="mapping",
+            extra_metadata={
+                "bioextract.organism_code": self.snapshot.organism_code or ""
+            },
         )
-
-    def write_parquet(
-        self,
-        path: os.PathLike[str] | str,
-        *,
-        if_exists: str = "fail",
-    ) -> ParquetWriteResult:
-        """Atomically publish the selected KEGG relation as one Parquet file.
-
-        Examples:
-            >>> from tempfile import TemporaryDirectory
-            >>> db = KEGGDatabase.from_brite_json("data/kegg/tcar00001.json")
-            >>> with TemporaryDirectory() as dir_out:
-            ...     result = db.write_parquet(Path(dir_out) / "kegg.parquet")
-            ...     result.resource_name.startswith("kegg-")
-            True
-        """
-        return self.build_tidy().write_parquet(path, if_exists=if_exists)
 
     def write_duckdb(
         self,
@@ -674,17 +710,20 @@ class KEGGDatabase:
         if_exists: Literal["fail", "replace"] = "fail",
         include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
-        """Atomically publish a KEGG metabolic snapshot as DuckDB.
+        """Atomically publish a KEGG source profile as DuckDB.
 
         Examples:
             >>> result = db.write_duckdb("kegg.duckdb")  # doctest: +SKIP
             >>> result.path.name  # doctest: +SKIP
             'kegg.duckdb'
         """
+        if self.snapshot.kind in {
+            _KeggSnapshotKind.BRITE_JSON,
+            _KeggSnapshotKind.MAPPING_FILES,
+        }:
+            return self.build_tidy().write_duckdb(path, if_exists=if_exists)
         if self.snapshot.kind != _KeggSnapshotKind.METABOLIC_FILES:
-            raise CapabilityError(
-                "write_duckdb() requires a KEGG metabolic source handle"
-            )
+            raise CapabilityError("write_duckdb() requires a KEGG source handle")
         snapshot = self.snapshot.metabolic
         if snapshot is None:
             raise CapabilityError("KEGG metabolic sources are missing")
@@ -704,6 +743,8 @@ class KEGGDatabase:
             >>> count >= 0  # doctest: +SKIP
             True
         """
+        if self._publication_path is not None:
+            return duckdb.connect(str(self._publication_path), read_only=True)
         publication = self._require_metabolic_publication()
         return duckdb.connect(str(publication.path), read_only=True)
 
@@ -765,8 +806,13 @@ class KEGGDatabase:
         return tuple(sources)
 
     def _require_mapping_snapshot(self, action: str) -> None:
-        if self.snapshot.kind != _KeggSnapshotKind.MAPPING_FILES:
-            raise ValueError(f"Cannot {action} from a KEGG BRITE JSON snapshot")
+        if self.snapshot.kind not in {
+            _KeggSnapshotKind.MAPPING_FILES,
+            _KeggSnapshotKind.MAPPING_PUBLICATION,
+        }:
+            raise ValueError(
+                f"Cannot {action} from a KEGG BRITE JSON snapshot or publication"
+            )
 
     @staticmethod
     def _required_path(path: Path | None) -> Path:
@@ -921,3 +967,108 @@ def _validate_file(
     if not file_path.exists():
         raise FileNotFoundError(f"{label} not found: {file_path}")
     return file_path
+
+
+def _read_publication_profile(path: Path) -> str:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    try:
+        with duckdb.connect(str(path), read_only=True) as connection:
+            row = connection.execute(
+                "SELECT value FROM _bioextract.metadata "
+                "WHERE key='bioextract.source_schema_profile'"
+            ).fetchone()
+    except duckdb.Error as error:
+        raise ValueError(f"Cannot open KEGG DuckDB publication: {path}") from error
+    if row is None:
+        raise ValueError("KEGG publication is missing source schema profile")
+    return str(row[0])
+
+
+def _validate_tidy_publication(
+    path: Path,
+    *,
+    profile: str,
+) -> _KeggSnapshotKind:
+    profiles = {
+        "kegg-brite-json-v1": (
+            _KeggSnapshotKind.BRITE_PUBLICATION,
+            "brite",
+            BRITE_SCHEMA_VERSION,
+            {"pathway": "canonical"},
+        ),
+        "kegg-organism-mapping-files-v1": (
+            _KeggSnapshotKind.MAPPING_PUBLICATION,
+            "mapping",
+            MAPPING_SCHEMA_VERSION,
+            {"mapping": "canonical"},
+        ),
+    }
+    expected = profiles.get(profile)
+    if expected is None:
+        raise ValueError(f"Unsupported KEGG source schema profile: {profile}")
+    kind, scope, schema_version, expected_tables = expected
+    with duckdb.connect(str(path), read_only=True) as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+        if metadata.get("bioextract.metadata_schema_version") != "1":
+            raise ValueError("Unsupported KEGG metadata schema version")
+        validate_duckdb_metadata_v1(connection, metadata)
+        if (
+            metadata.get("bioextract.resource_name") != "kegg"
+            or metadata.get("bioextract.scope") != scope
+        ):
+            raise ValueError(
+                f"DuckDB file is not a bioextract KEGG {scope} publication"
+            )
+        if metadata.get("bioextract.resource_schema_version") != schema_version:
+            raise ValueError(f"Unsupported KEGG {scope} resource schema version")
+        if (
+            scope == "mapping"
+            and not metadata.get("bioextract.organism_code", "").strip()
+        ):
+            raise ValueError("KEGG mapping publication requires organism_code")
+        recorded_rows = connection.execute(
+            "SELECT table_name, table_role, row_count FROM _bioextract.table_info"
+        ).fetchall()
+        recorded = {str(row[0]): str(row[1]) for row in recorded_rows}
+        physical = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema='main' AND table_type='BASE TABLE'"
+            ).fetchall()
+        }
+        if recorded != expected_tables or physical != set(expected_tables):
+            raise ValueError(f"KEGG {scope} table inventory does not match metadata")
+        for table_name, _, row_count in recorded_rows:
+            expected_columns = (
+                list(SCHEMA_BRITE)
+                if table_name == "pathway"
+                else [
+                    "organism_code",
+                    "kegg_gene_id",
+                    "uniprot_id",
+                    "ncbi_gene_id",
+                    "ko_id",
+                    "kegg_pathway_id",
+                    "pathway_map_id",
+                    "gene_symbol",
+                    "gene_description",
+                ]
+            )
+            actual_columns = [
+                str(row[1])
+                for row in connection.execute(
+                    f'PRAGMA table_info("{table_name}")'
+                ).fetchall()
+            ]
+            if actual_columns != expected_columns:
+                raise ValueError(f"KEGG {scope} table schema is unsupported")
+            actual = connection.execute(
+                f'SELECT count(*) FROM "{table_name}"'
+            ).fetchone()
+            if actual is None or int(actual[0]) != int(row_count):
+                raise ValueError(f"KEGG {scope} row-count drift: {table_name}")
+    return kind

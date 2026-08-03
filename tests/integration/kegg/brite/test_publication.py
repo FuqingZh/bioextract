@@ -58,9 +58,9 @@ def write_minimal_brite_json(file_in: Path, *, has_leaf: bool = True) -> None:
     )
 
 
-def test_kegg_db_build_tidy_exposes_frames_and_writes_parquet(tmp_path: Path) -> None:
+def test_kegg_db_build_tidy_exposes_frames_and_writes_duckdb(tmp_path: Path) -> None:
     file_in = tmp_path / "tcar00001.json"
-    path = tmp_path / "kegg.parquet"
+    path = tmp_path / "kegg.duckdb"
     write_minimal_brite_json(file_in)
 
     db = KEGGDatabase.from_brite_json(file_in)
@@ -69,13 +69,17 @@ def test_kegg_db_build_tidy_exposes_frames_and_writes_parquet(tmp_path: Path) ->
     assert set(tidy.frames) == {"pathway"}
     assert tidy.frames["pathway"].select(pl.len()).collect().item() == 2
 
-    result = db.write_parquet(path)
+    result = db.write_duckdb(path)
     assert result.path == path
     assert not (tmp_path / "manifest.json").exists()
-    assert pl.read_parquet(path).height == 2
-
-    df_pathway = pl.read_parquet(path)
-    assert df_pathway.to_dicts()[0] == {
+    reopened = KEGGDatabase.from_duckdb(path)
+    with reopened.connect() as connection:
+        columns = connection.sql("FROM pathway").columns
+        rows = connection.execute(
+            "SELECT * FROM pathway WHERE entry_id='U0034_04525'"
+        ).fetchall()
+    assert columns == list(tidy.frames["pathway"].collect_schema())
+    assert dict(zip(columns, rows[0], strict=True)) == {
         "pathway_level1_id": "09100",
         "pathway_level1_name": "Metabolism",
         "pathway_level2_id": "09101",

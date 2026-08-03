@@ -27,8 +27,8 @@ and
 verify:
 
 - pathway-level and entry/KO parsing variants
-- BRITE tidy frame schemas and single-relation Parquet output
-- direct and legacy tidy writers
+- BRITE tidy frame schemas and one-table DuckDB output
+- metadata-v1 profile/table validation and fresh read-only native connections
 
 The tests use compact local fixtures. They do not call remote GO or KEGG
 services and do not calculate enrichment statistics.
@@ -38,8 +38,8 @@ services and do not calculate enrichment statistics.
 Run the focused contract with:
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m pytest \
-  tests/integration/go tests/unit/kegg/brite tests/integration/kegg/brite
+pdm run pytest tests/unit/kegg/brite tests/integration/kegg/brite \
+  tests/contract/resources/kegg/test_mapping_brite_publication_contract.py
 ```
 
 Real-snapshot validation should additionally confirm that produced schemas

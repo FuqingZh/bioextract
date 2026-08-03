@@ -101,6 +101,8 @@ class TidyDataset:
     release_version: str | None = None
     release_version_source: str | None = None
     source_schema_version: str | None = None
+    scope: str | None = None
+    extra_metadata: Mapping[str, str] | None = None
 
     def write_parquet(
         self,
@@ -195,9 +197,11 @@ class TidyDataset:
             source_schema_profile=self.source_schema_profile,
             source_schema_version=self.source_schema_version,
             sources=self._source_records,
+            scope=self.scope,
             release_version=self.release_version,
             release_version_source=self.release_version_source,
             if_exists=if_exists,
+            extra_metadata=self.extra_metadata,
         )
 
     @property

@@ -45,6 +45,7 @@ def test_removed_legacy_writer_apis_are_not_exported() -> None:
     assert not hasattr(TidyDataset, "write")
     assert not hasattr(StringSelection, "with_score_min")
     assert not hasattr(eggnog.EggNOGDatabase, "from_files")
+    assert not hasattr(kegg.KEGGDatabase, "write_parquet")
 
 
 def test_resource_factories_do_not_expose_limits() -> None:
@@ -93,6 +94,7 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "ncbi_gene_conversion",
         ),
         kegg.KEGGDatabase.from_metabolic_release: ("source", "release_version"),
+        kegg.KEGGDatabase.from_duckdb: ("path",),
         reactome.ReactomeDatabase.from_files: (
             "uniprot_mapping",
             "pathways",
