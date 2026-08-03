@@ -324,6 +324,7 @@ def test_xml_profile_rejects_incomplete_mapping_enrichment(
         "UPDATE protein_term SET pfam_id='PF99999'",
         "UPDATE protein_term SET uniprot_id='FORGED'",
         "UPDATE term SET pfam_name=''",
+        "UPDATE term_xref SET interpro_id='IPR999999'",
         "INSERT INTO term SELECT * FROM term LIMIT 1",
     ],
 )

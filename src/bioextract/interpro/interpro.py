@@ -847,7 +847,15 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
                     "WHERE upper(member_db)='PFAM') OR "
                     "EXISTS(SELECT uniprot_id, member_db_id FROM mapping "
                     "WHERE upper(member_db)='PFAM' EXCEPT "
-                    "SELECT uniprot_id, pfam_id FROM protein_term)"
+                    "SELECT uniprot_id, pfam_id FROM protein_term) OR "
+                    "EXISTS(SELECT pfam_id, interpro_id, interpro_name, "
+                    "interpro_type FROM term_xref EXCEPT "
+                    "SELECT member_db_id, interpro_id, interpro_name, "
+                    "interpro_type FROM mapping WHERE upper(member_db)='PFAM') OR "
+                    "EXISTS(SELECT member_db_id, interpro_id, interpro_name, "
+                    "interpro_type FROM mapping WHERE upper(member_db)='PFAM' "
+                    "EXCEPT SELECT pfam_id, interpro_id, interpro_name, "
+                    "interpro_type FROM term_xref)"
                 ).fetchone()
                 if invalid_compact is None or bool(invalid_compact[0]):
                     raise ValueError(
