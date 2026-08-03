@@ -3,9 +3,14 @@ from __future__ import annotations
 import gzip
 import shutil
 import sqlite3
+import warnings
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
+import pytest
+
 from bioextract.eggnog import EggNOGDatabase
+from bioextract.eggnog import util as eggnog_util
 
 
 def write_eggnog_fixture(tmp_path: Path) -> dict[str, Path]:
@@ -50,14 +55,28 @@ def write_eggnog_fixture(tmp_path: Path) -> dict[str, Path]:
     return {"db": file_db, "cog_fun": file_cog_fun}
 
 
-def test_extract_mapping_from_sqlite_expands_og_cog_categories(tmp_path: Path) -> None:
+def test_selected_mapping_from_sqlite_expands_og_cog_categories(
+    tmp_path: Path,
+) -> None:
     files = write_eggnog_fixture(tmp_path)
     db = EggNOGDatabase.from_sqlite(
         files["db"],
         cog_functions=files["cog_fun"],
     )
 
-    df_mapping = db.extract_mapping()
+    df_mapping = (
+        db.select_ids(["9606.ENSP1"])
+        .extract_mapping()
+        .select(
+            "EggnogProteinId",
+            "EggnogOgId",
+            "EggnogLevel",
+            "CogCategory",
+            "CogClass",
+            "CogName",
+            "OgDescription",
+        )
+    )
 
     assert df_mapping.columns == [
         "EggnogProteinId",
@@ -165,6 +184,39 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     ]
 
 
+def test_grouped_selection_queries_one_global_unique_id_set(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    files = write_eggnog_fixture(tmp_path)
+    queried_ids: list[list[str] | None] = []
+    original = eggnog_util.iter_protein_ogs
+
+    def counted_iter_protein_ogs(
+        conn: sqlite3.Connection,
+        eggnog_protein_ids: Iterable[str] | None,
+    ) -> Iterator[tuple[str, str]]:
+        queried = None if eggnog_protein_ids is None else list(eggnog_protein_ids)
+        queried_ids.append(queried)
+        return original(conn, queried)
+
+    monkeypatch.setattr(eggnog_util, "iter_protein_ogs", counted_iter_protein_ogs)
+    selection = EggNOGDatabase.from_sqlite(files["db"]).select_groups(
+        {
+            "up": ["9606.ENSP2", "9606.ENSP1", "9606.ENSP1"],
+            "down": ["9606.ENSP1", "9606.MISSING"],
+        }
+    )
+
+    mapping = selection.extract_mapping()
+    selection.extract_mapping()
+    selection.extract_unmatched_ids()
+    selection.extract_unmatched_ids()
+
+    assert mapping.height == 6
+    assert queried_ids == [["9606.ENSP1", "9606.ENSP2", "9606.MISSING"]]
+
+
 def test_gzip_sqlite_is_decompressed_to_tmp_dir(tmp_path: Path) -> None:
     files = write_eggnog_fixture(tmp_path)
     file_gz = tmp_path / "eggnog.db.gz"
@@ -174,11 +226,13 @@ def test_gzip_sqlite_is_decompressed_to_tmp_dir(tmp_path: Path) -> None:
     ):
         shutil.copyfileobj(handle_in, handle_out)
 
-    db = EggNOGDatabase.from_sqlite(
-        file_gz,
-        cog_functions=files["cog_fun"],
-        temp_dir=tmp_path / "tmp",
-    )
+    scratch = tmp_path / "tmp"
+    with pytest.warns(UserWarning, match="Compressed eggNOG SQLite source detected"):
+        db = EggNOGDatabase.from_sqlite(
+            file_gz,
+            cog_functions=files["cog_fun"],
+            temp_dir=scratch,
+        )
 
     assert (
         db.select_ids(
@@ -188,3 +242,34 @@ def test_gzip_sqlite_is_decompressed_to_tmp_dir(tmp_path: Path) -> None:
         .height
         == 3
     )
+    assert list(scratch.iterdir()) == []
+    assert {path.name for path in tmp_path.iterdir()} == {
+        "cog-24.fun.tab",
+        "eggnog.db",
+        "eggnog.db.gz",
+        "tmp",
+    }
+
+
+def test_gzip_sqlite_cleanup_on_query_failure(tmp_path: Path) -> None:
+    file_gz = tmp_path / "broken.db.gz"
+    with gzip.open(file_gz, "wb") as handle:
+        handle.write(b"not a SQLite database")
+    scratch = tmp_path / "scratch"
+
+    with pytest.warns(UserWarning):
+        db = EggNOGDatabase.from_sqlite(file_gz, temp_dir=scratch)
+    with pytest.raises(sqlite3.DatabaseError):
+        db.select_ids(["9606.ENSP1"]).extract_mapping()
+
+    assert list(scratch.iterdir()) == []
+    assert {path.name for path in tmp_path.iterdir()} == {"broken.db.gz", "scratch"}
+
+
+def test_plain_sqlite_emits_no_warning(tmp_path: Path) -> None:
+    files = write_eggnog_fixture(tmp_path)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        db = EggNOGDatabase.from_sqlite(files["db"])
+        db.select_ids(["9606.ENSP1"]).extract_mapping()

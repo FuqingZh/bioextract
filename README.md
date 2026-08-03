@@ -230,13 +230,16 @@ The official SQLite representation is consumed directly during extraction:
 from bioextract import EggNOGDatabase
 
 db = EggNOGDatabase.from_sqlite(
-    "eggnog.db.gz",
+    "eggnog.db",
     cog_functions="cog-24.fun.tab",
 )
 mapping = db.select_ids(["9606.ENSP00000369497"]).extract_mapping()
 ```
 
-Selections use the same source without requiring a published derivative.
+Selections query plain SQLite directly without requiring a published
+derivative. Gzip-wrapped SQLite is accepted with a warning and is decompressed
+only to temporary scratch storage; for repeated use, decompress it once and
+pass the `.db` file.
 
 ## InterPro and Pfam
 

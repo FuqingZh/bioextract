@@ -7,14 +7,13 @@ Status: current
 ## Goal
 
 `bioextract.eggnog.EggNOGDatabase` provides path-first access to local eggNOG mapper
-resources and exposes a stable protein-to-COG annotation table for downstream
-selection, enrichment-input extraction, and resource publication.
+resources and exposes stable selected protein-to-COG annotations for downstream
+selection and enrichment-input extraction.
 
 The current version covers:
 
 - `eggnog.db.gz` or `eggnog.db` as the primary mapper database
 - optional `cog-24.fun.tab` lookup for COG class and display name
-- full mapping extraction
 - single and grouped selection by eggNOG protein ID
 
 It intentionally does not cover:
@@ -50,23 +49,33 @@ and leaves `CogClass` / `CogName` null.
 from bioextract import EggNOGDatabase
 
 db = EggNOGDatabase.from_sqlite(
-    "eggnog.db.gz",
+    "eggnog.db",
     cog_functions="cog-24.fun.tab",
 )
 
-df_mapping = db.extract_mapping()
-
 selection = db.select_ids(
     ["9606.ENSP00000369497"],
-    namespace="eggnog_protein",
 )
 df_selected = selection.extract_mapping()
 df_unmapped = selection.extract_unmatched_ids()
 ```
 
 Grouped selections prepend `GroupId` in the same style as other resource DBs.
+The namespace is fixed to `eggnog_protein`.
 
-## Output Contract
+Plain SQLite is queried directly and emits no warning. A gzip-wrapped source
+emits one `UserWarning` at construction because it must be fully decompressed
+for each uncached selection lookup. Decompression uses only temporary storage
+under `temp_dir` when supplied, and that temporary content is removed after
+successful and failed queries. Callers with repeated workloads should
+decompress once themselves and pass the resulting `.db` file.
+
+eggNOG remains direct-only: there is no database-level full mapping extractor,
+publication writer, persistent cache, or public unpack helper. A selection
+caches its mapping and unmatched outputs, so repeated extractors on that
+selection do not repeat the SQLite lookup.
+
+## Selected Output Contract
 
 The wide mapping table exposes:
 
@@ -85,7 +94,8 @@ Many-to-many expansion is preserved:
 - one protein may map to multiple OGs
 - one OG may emit multiple `CogCategory` rows
 
-This keeps the output auditable and easy to project into downstream term tables.
+This keeps selected output auditable and easy to project into downstream term
+tables without eagerly loading the complete snapshot.
 
 ## Selection Contract
 

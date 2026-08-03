@@ -10,8 +10,6 @@ from pathlib import Path
 
 import polars as pl
 
-from bioextract._shared import RowWriter, create_tsv_writer
-
 from .constant import (
     COLS_MAPPING,
     NAMESPACE_VALUES,
@@ -51,75 +49,6 @@ def read_cog_fun_frame(file_cog_fun: Path | None) -> pl.DataFrame:
         .unique()
         .sort("CogCategory")
     )
-
-
-def scan_mapping_tsv(file_mapping_tsv: Path) -> pl.LazyFrame:
-    return pl.scan_csv(
-        file_mapping_tsv,
-        separator="\t",
-        has_header=True,
-        schema_overrides=SCHEMA_MAPPING,
-    ).select(COLS_MAPPING)
-
-
-def write_mapping_tsv(
-    *,
-    file_eggnog_db: Path,
-    dir_tmp: Path | None,
-    df_cog_fun: pl.DataFrame,
-    path: Path,
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    map_cog_fun = {
-        row["CogCategory"]: (row["CogClass"], row["CogName"])
-        for row in df_cog_fun.iter_rows(named=True)
-    }
-    with (
-        open_sqlite_path(file_eggnog_db, dir_tmp=dir_tmp) as file_sqlite,
-        sqlite3.connect(file_sqlite) as conn,
-        path.open("w", encoding="utf-8", newline="") as handle,
-    ):
-        writer = create_tsv_writer(handle)
-        writer.writerow(COLS_MAPPING)
-        write_mapping_rows(writer, conn=conn, map_cog_fun=map_cog_fun)
-
-
-def write_mapping_rows(
-    writer: RowWriter,
-    *,
-    conn: sqlite3.Connection,
-    map_cog_fun: dict[str, tuple[str | None, str | None]],
-) -> None:
-    og_cache: dict[tuple[str, str | None], list[dict[str, str | None]]] = {}
-    for protein_id, ogs_text in iter_protein_ogs(conn, None):
-        for og_id, og_level in parse_ogs(ogs_text):
-            key = (og_id, og_level)
-            if key not in og_cache:
-                og_cache[key] = read_og_rows(conn, [key])
-            for og_row in og_cache[key]:
-                for category in parse_cog_categories(og_row["CogCategories"]):
-                    cog_class, cog_name = map_cog_fun.get(category, (None, None))
-                    writer.writerow(
-                        [
-                            protein_id,
-                            og_row["EggnogOgId"] or "",
-                            og_row["EggnogLevel"] or "",
-                            category,
-                            cog_class or "",
-                            cog_name or "",
-                            og_row["OgDescription"] or "",
-                        ]
-                    )
-
-
-def build_mapping_frame(
-    *,
-    file_eggnog_db: Path,
-    dir_tmp: Path | None,
-    df_cog_fun: pl.DataFrame,
-) -> pl.DataFrame:
-    with open_sqlite_path(file_eggnog_db, dir_tmp=dir_tmp) as file_sqlite:
-        return read_mapping_frame_from_sqlite(file_sqlite, df_cog_fun=df_cog_fun)
 
 
 def select_mapping_frame(
@@ -411,7 +340,7 @@ def open_sqlite_path(
     *,
     dir_tmp: Path | None,
 ) -> Generator[Path]:
-    if file_eggnog_db.suffix != ".gz":
+    if not is_gzip_file(file_eggnog_db):
         yield file_eggnog_db
         return
 
@@ -423,6 +352,12 @@ def open_sqlite_path(
         ):
             shutil.copyfileobj(handle_in, handle_out, length=1024 * 1024 * 16)
         yield file_sqlite
+
+
+def is_gzip_file(path: Path) -> bool:
+    """Return whether a file uses gzip transport by inspecting its magic bytes."""
+    with path.open("rb") as handle:
+        return handle.read(2) == b"\x1f\x8b"
 
 
 def chunked(values: list[str], size: int) -> Iterator[list[str]]:
