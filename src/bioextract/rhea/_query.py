@@ -14,6 +14,8 @@ from bioextract._publication import (
     validate_duckdb_metadata_v3,
     validate_duckdb_validation_state,
 )
+from bioextract._shared import validate_group_ids
+from bioextract.errors import CapabilityError
 
 from .constant import SCHEMA_VERSION, SOURCE_SCHEMA_PROFILE, RheaNamespace
 
@@ -57,6 +59,9 @@ _SCHEMA_MATCH: SchemaDict = {
     "RheaId": pl.Int64,
     "MasterId": pl.Int64,
     "Direction": pl.String,
+}
+_SCHEMA_UNIQUE_MATCH: SchemaDict = {
+    name: dtype for name, dtype in _SCHEMA_MATCH.items() if name != "GroupId"
 }
 _SCHEMA_REACTION: SchemaDict = {
     **_SCHEMA_MATCH,
@@ -111,10 +116,9 @@ _SCHEMA_UNMATCHED: SchemaDict = {
     "InputId": pl.String,
     "InputNamespace": pl.String,
 }
-
-
-class RheaCapabilityError(RuntimeError):
-    """Raised when a partial Rhea publication lacks a required relation."""
+_SCHEMA_UNIQUE_UNMATCHED: SchemaDict = {
+    name: dtype for name, dtype in _SCHEMA_UNMATCHED.items() if name != "GroupId"
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,7 +131,6 @@ class _RheaPublication:
 
 @dataclass(frozen=True, slots=True)
 class _InputRow:
-    group_id: str | None
     input_id: str
     lookup_value: str
 
@@ -150,6 +153,10 @@ class RheaReactionSelection:
     namespace: RheaNamespace
     include_obsolete: bool
     _input_rows: tuple[_InputRow, ...] = field(repr=False)
+    _group_ids: tuple[str, ...] = field(repr=False)
+    _group_membership: tuple[tuple[str, str], ...] = field(
+        repr=False,
+    )
     _is_grouped: bool = field(repr=False)
     _matches_cache: pl.DataFrame | None = field(
         default=None,
@@ -235,7 +242,7 @@ class RheaReactionSelection:
             operation="extract reaction participants",
         )
         if "reaction_participant_direction" not in publication.views:
-            raise RheaCapabilityError(
+            raise CapabilityError(
                 "Rhea publication lacks view required to extract reaction "
                 "participants: reaction_participant_direction"
             )
@@ -287,7 +294,7 @@ class RheaReactionSelection:
         has_xref = "reaction_xref" in publication.tables
         has_uniprot = "reaction_uniprot" in publication.tables
         if not has_xref and not has_uniprot:
-            raise RheaCapabilityError(
+            raise CapabilityError(
                 "Rhea publication lacks relations required to extract "
                 "cross-references: reaction_xref or reaction_uniprot"
             )
@@ -423,19 +430,24 @@ class RheaReactionSelection:
             >>> selection.extract_unmatched_ids().columns  # doctest: +SKIP
             ['InputId', 'InputNamespace']
         """
-        matched = self.extract_matches()
-        matched_keys = {
-            (row.get("GroupId"), row["InputId"]) for row in matched.to_dicts()
-        }
+        matched_input_ids = set(self.extract_matches()["InputId"].to_list())
         rows = [
-            (row.group_id, row.input_id, self.namespace)
+            (row.input_id, self.namespace)
             for row in self._input_rows
-            if (row.group_id, row.input_id) not in matched_keys
+            if row.input_id not in matched_input_ids
         ]
-        return self._finalize(
-            pl.DataFrame(rows, schema=_SCHEMA_UNMATCHED, orient="row"),
-            schema=_SCHEMA_UNMATCHED,
+        frame = pl.DataFrame(
+            rows,
+            schema=_SCHEMA_UNIQUE_UNMATCHED,
+            orient="row",
         )
+        frame = self._expand_groups(frame)
+        expected = (
+            list(_SCHEMA_UNMATCHED)
+            if self._is_grouped
+            else list(_SCHEMA_UNIQUE_UNMATCHED)
+        )
+        return frame.select(expected).sort(expected)
 
     def _query_matches(self) -> pl.DataFrame:
         publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
@@ -477,7 +489,6 @@ class RheaReactionSelection:
             """
         query = f"""
             SELECT DISTINCT
-                input.group_id AS "GroupId",
                 input.input_id AS "InputId",
                 '{self.namespace}' AS "InputNamespace",
                 reaction.rhea_id AS "RheaId",
@@ -486,12 +497,29 @@ class RheaReactionSelection:
             FROM _input_id AS input
             {join}
             WHERE true {obsolete_filter}
-            ORDER BY "GroupId", "InputId", "RheaId"
+            ORDER BY "InputId", "RheaId"
         """
         with _connect(publication) as connection:
             _create_input_table(connection, self._input_rows)
-            frame = _fetch_frame(connection, query, schema=_SCHEMA_MATCH)
-        return self._finalize(frame, schema=_SCHEMA_MATCH)
+            frame = _fetch_frame(connection, query, schema=_SCHEMA_UNIQUE_MATCH)
+        frame = self._expand_groups(frame)
+        expected = (
+            list(_SCHEMA_MATCH) if self._is_grouped else list(_SCHEMA_UNIQUE_MATCH)
+        )
+        return frame.select(expected).sort(expected)
+
+    def _expand_groups(self, frame: pl.DataFrame) -> pl.DataFrame:
+        if not self._is_grouped:
+            return frame
+        membership = pl.DataFrame(
+            self._group_membership,
+            schema={"GroupId": pl.String, "InputId": pl.String},
+            orient="row",
+        )
+        return membership.join(frame, on="InputId", how="inner").select(
+            "GroupId",
+            *frame.columns,
+        )
 
     def _query_selected(
         self,
@@ -704,7 +732,7 @@ def create_selection(
         operation=f"select reactions by {normalized_namespace}",
     )
     rows = tuple(
-        _InputRow(group_id=None, input_id=input_id, lookup_value=lookup_value)
+        _InputRow(input_id=input_id, lookup_value=lookup_value)
         for input_id, lookup_value in _normalize_ids(ids, normalized_namespace)
     )
     return RheaReactionSelection(
@@ -712,6 +740,8 @@ def create_selection(
         namespace=normalized_namespace,
         include_obsolete=bool(include_obsolete),
         _input_rows=rows,
+        _group_ids=(),
+        _group_membership=(),
         _is_grouped=False,
     )
 
@@ -730,28 +760,26 @@ def create_group_selection(
         set(_NAMESPACE_CAPABILITIES[normalized_namespace]),
         operation=f"select reactions by {normalized_namespace}",
     )
-    rows: list[_InputRow] = []
+    normalized_group_ids = [str(group_id).strip() for group_id in ids_by_group]
+    validate_group_ids(normalized_group_ids)
+    unique_rows: set[_InputRow] = set()
+    membership: set[tuple[str, str]] = set()
     for raw_group_id, ids in ids_by_group.items():
         group_id = str(raw_group_id).strip()
-        if not group_id:
-            raise ValueError("Rhea group IDs must be non-empty after normalization")
-        rows.extend(
-            _InputRow(
-                group_id=group_id,
-                input_id=input_id,
-                lookup_value=lookup_value,
-            )
-            for input_id, lookup_value in _normalize_ids(ids, normalized_namespace)
-        )
+        for input_id, lookup_value in _normalize_ids(ids, normalized_namespace):
+            unique_rows.add(_InputRow(input_id=input_id, lookup_value=lookup_value))
+            membership.add((group_id, input_id))
     rows = sorted(
-        set(rows),
-        key=lambda row: (row.group_id or "", row.input_id, row.lookup_value),
+        unique_rows,
+        key=lambda row: (row.input_id, row.lookup_value),
     )
     return RheaReactionSelection(
         database=database,
         namespace=normalized_namespace,
         include_obsolete=bool(include_obsolete),
         _input_rows=tuple(rows),
+        _group_ids=tuple(sorted(normalized_group_ids)),
+        _group_membership=tuple(sorted(membership)),
         _is_grouped=True,
     )
 
@@ -812,7 +840,7 @@ def _require_tables(
 ) -> None:
     missing = sorted(required - set(publication.tables))
     if missing:
-        raise RheaCapabilityError(
+        raise CapabilityError(
             f"Rhea publication cannot {operation}; missing relations: {missing}"
         )
 
@@ -830,7 +858,6 @@ def _create_input_table(
     connection.execute(
         """
         CREATE TEMP TABLE _input_id (
-            group_id VARCHAR,
             input_id VARCHAR NOT NULL,
             lookup_value VARCHAR NOT NULL
         )
@@ -838,8 +865,8 @@ def _create_input_table(
     )
     if rows:
         connection.executemany(
-            "INSERT INTO _input_id VALUES (?, ?, ?)",
-            [(row.group_id, row.input_id, row.lookup_value) for row in rows],
+            "INSERT INTO _input_id VALUES (?, ?)",
+            [(row.input_id, row.lookup_value) for row in rows],
         )
 
 

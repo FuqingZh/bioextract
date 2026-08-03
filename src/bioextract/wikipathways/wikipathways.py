@@ -31,7 +31,6 @@ from .util import (
 
 __all__ = [
     "WikiPathwaysDatabase",
-    "WikiPathwaysTidyDataset",
 ]
 
 
@@ -39,9 +38,6 @@ __all__ = [
 class _WikiPathwaysSnapshot:
     files_gmt: tuple[Path, ...]
     species: str | None = None
-
-
-WikiPathwaysTidyDataset = TidyDataset
 
 
 @dataclass(slots=True)
@@ -170,6 +166,7 @@ class WikiPathwaysDatabase:
             dataset=self,
             _df_input_ids=df_input_ids,
             _df_groups=None,
+            _df_group_membership=None,
         )
 
     def select_groups(
@@ -210,6 +207,7 @@ class WikiPathwaysDatabase:
             dataset=self,
             _df_input_ids=grp_in_frames.df_input_ids,
             _df_groups=grp_in_frames.df_groups,
+            _df_group_membership=grp_in_frames.df_group_membership,
         )
 
     def extract_pathway(self) -> pl.DataFrame:
@@ -263,7 +261,7 @@ class WikiPathwaysDatabase:
         """
         return self._lazy_frame("term2name").collect()
 
-    def build_tidy(self) -> WikiPathwaysTidyDataset:
+    def build_tidy(self) -> TidyDataset:
         """Build the lazy WikiPathways tidy dataset for the current scope.
 
         Returns:
@@ -287,7 +285,7 @@ class WikiPathwaysDatabase:
         release_version = self._release_version
         if release_version is None:
             raise RuntimeError("WikiPathways GMT release Version was not parsed")
-        return WikiPathwaysTidyDataset(
+        return TidyDataset(
             frames=frames,
             source=tuple(
                 TidySource(
@@ -333,7 +331,7 @@ class WikiPathwaysDatabase:
             ('pathway', 'pathway_gene')
         """
         dataset = self.build_tidy()
-        canonical = WikiPathwaysTidyDataset(
+        canonical = TidyDataset(
             frames=dataset.frames,
             source=dataset.source,
             resource_schema_version=dataset.resource_schema_version,
@@ -425,8 +423,9 @@ class WikiPathwaysSelection:
     dataset: WikiPathwaysDatabase
     _df_input_ids: pl.DataFrame = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
-    _lf_mapping: pl.LazyFrame | None = field(default=None, repr=False)
-    _lf_unmapped: pl.LazyFrame | None = field(default=None, repr=False)
+    _df_group_membership: pl.DataFrame | None = field(repr=False)
+    _df_mapping: pl.DataFrame | None = field(default=None, repr=False)
+    _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
 
     @property
     def is_grouped(self) -> bool:
@@ -444,11 +443,6 @@ class WikiPathwaysSelection:
         """
         return self._df_groups is not None
 
-    @property
-    def _col_group_id(self) -> tuple[str, ...]:
-        """Return the group ID column when this selection is grouped."""
-        return ("GroupId",) if self.is_grouped else ()
-
     def extract_mapping(self) -> pl.DataFrame:
         """Extract every pathway mapping matched by the selected Entrez IDs.
 
@@ -463,17 +457,14 @@ class WikiPathwaysSelection:
             >>> selection.extract_mapping()["WikiPathwaysId"].to_list()
             ['WP100']
         """
-        return self._lazy_mapping().collect()
-
-    def _lazy_mapping(self) -> pl.LazyFrame:
-        if self._lf_mapping is None:
-            self._lf_mapping = extract_mapping_frame(
+        if self._df_mapping is None:
+            self._df_mapping = extract_mapping_frame(
                 self.dataset._lazy_frame("pathway"),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
                 self.dataset._lazy_frame("term2gene"),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
                 self._df_input_ids,
-                cols_group_id=self._col_group_id,
-            )
-        return self._lf_mapping
+                df_group_membership=self._df_group_membership,
+            ).collect()
+        return self._df_mapping
 
     def extract_unmatched_ids(self) -> pl.DataFrame:
         """Extract normalized input IDs with no WikiPathways mapping.
@@ -491,13 +482,13 @@ class WikiPathwaysSelection:
             >>> selection.extract_unmatched_ids().to_dicts()
             [{'InputId': 'MISSING'}]
         """
-        if self._lf_unmapped is None:
-            self._lf_unmapped = extract_unmatched_ids_frame(
+        if self._df_unmapped is None:
+            self._df_unmapped = extract_unmatched_ids_frame(
                 self._df_input_ids,
-                self._lazy_mapping(),
-                cols_group_id=self._col_group_id,
+                self.extract_mapping(),
+                df_group_membership=self._df_group_membership,
             )
-        return self._lf_unmapped.collect()
+        return self._df_unmapped
 
 
 def _filter_species_frame(lf: pl.LazyFrame, species: str) -> pl.LazyFrame:

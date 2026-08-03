@@ -1,13 +1,7 @@
-from bioextract.go.go import (
-    GODatabase,
-    GoNamespace,
-    GoSubsetId,
-    GoTidyDataset,
-)
+"""Gene Ontology database access."""
+
+from bioextract.go.go import GODatabase
 
 __all__ = [
     "GODatabase",
-    "GoNamespace",
-    "GoSubsetId",
-    "GoTidyDataset",
 ]

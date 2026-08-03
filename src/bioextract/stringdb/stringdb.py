@@ -205,6 +205,7 @@ class STRINGDatabase:
         return StringSelection(
             dataset=self,
             _df_input_ids=df_input_ids,
+            _df_group_membership=None,
             _df_groups=None,
             min_combined_score=0,
         )
@@ -217,9 +218,10 @@ class STRINGDatabase:
 
         Each group key is normalized with `str(...).strip()`. Input IDs within
         each group follow the same normalization rules as :meth:`select_ids`.
-        Grouped extraction keeps groups isolated in the returned flat tables by
-        carrying a `GroupId` column through mapping, unmapped, edge, and metric
-        outputs.
+        Alias resolution and source ranking run once per globally unique
+        normalized ID, then the result is expanded through group membership.
+        Edge extraction remains isolated by group. Returned mapping, unmatched,
+        edge, and metric tables carry `GroupId`.
 
         Args:
             ids_by_group: Mapping from group label to iterable of input
@@ -256,6 +258,7 @@ class STRINGDatabase:
             dataset=self,
             _df_groups=grp_in_frames.df_groups,
             _df_input_ids=grp_in_frames.df_input_ids,
+            _df_group_membership=grp_in_frames.df_group_membership,
             min_combined_score=0,
         )
 
@@ -332,6 +335,7 @@ class StringSelection:
 
     dataset: STRINGDatabase
     _df_input_ids: pl.DataFrame = field(repr=False)
+    _df_group_membership: pl.DataFrame | None = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
     min_combined_score: int = 0
     _df_protein_map: pl.DataFrame | None = field(default=None, repr=False)
@@ -411,6 +415,7 @@ class StringSelection:
         return StringSelection(
             dataset=self.dataset,
             _df_input_ids=self._df_input_ids,
+            _df_group_membership=self._df_group_membership,
             _df_groups=self._df_groups,
             min_combined_score=int(min_combined_score),
             _df_protein_map=self._df_protein_map,
@@ -455,21 +460,33 @@ class StringSelection:
             version=self.dataset.snapshot.parser_version,
         )
         lf_input_ids = self._df_input_ids.lazy()
-        col_group_id = list(self._col_group_id)
-        self._df_protein_map = (
+        df_protein_map = (
             create_string_mapping_lazy_frame(
                 lf_aliases=lf_aliases,
                 lf_input_ids=lf_input_ids,
                 source_rank_map=self.dataset.source_rank_map,
                 col_string_id_aliases=self.dataset._alias_schema.col_string_id,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
                 has_source_aliases=self.dataset._alias_schema.has_source,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-                cols_partition=col_group_id + ["InputId", "StringId"],
-                cols_sort_prefix=col_group_id + ["InputId", "StringId"],
-                cols_select_out=col_group_id + ["InputId", "StringId", "MapSource"],
+                cols_partition=["InputId", "StringId"],
+                cols_sort_prefix=["InputId", "StringId"],
+                cols_select_out=["InputId", "StringId", "MapSource"],
             )
-            .sort(col_group_id + ["InputId", "StringId", "MapSource"])
+            .sort(["InputId", "StringId", "MapSource"])
             .collect()
         )
+        if self.is_grouped:
+            if self._df_group_membership is None:
+                raise RuntimeError("Grouped STRING selection lacks group membership")
+            df_protein_map = (
+                self._df_group_membership.join(
+                    df_protein_map,
+                    on="InputId",
+                    how="inner",
+                )
+                .select(["GroupId", "InputId", "StringId", "MapSource"])
+                .sort(["GroupId", "InputId", "StringId", "MapSource"])
+            )
+        self._df_protein_map = df_protein_map
 
         return self._df_protein_map
 
@@ -496,11 +513,20 @@ class StringSelection:
         """
         if self._df_unmapped is None:
             cols_index = list(self._col_group_id) + ["InputId"]
-            df_mapped_input_ids = self.extract_string_mapping().select(cols_index)
+            df_mapped_input_ids = (
+                self.extract_string_mapping().select("InputId").unique()
+            )
+            df_input_rows = self._df_input_ids
+            if self.is_grouped:
+                if self._df_group_membership is None:
+                    raise RuntimeError(
+                        "Grouped STRING selection lacks group membership"
+                    )
+                df_input_rows = self._df_group_membership
             self._df_unmapped = (
-                self._df_input_ids.join(
-                    df_mapped_input_ids.unique(),
-                    on=cols_index,
+                df_input_rows.join(
+                    df_mapped_input_ids,
+                    on="InputId",
                     how="anti",
                 )
                 .select(cols_index)

@@ -46,8 +46,19 @@ select = [
 
 [tool.pytest.ini_options]
 minversion = "9.0"
-testpaths = ["tests"]
-addopts = ["-ra", "--strict-config", "--strict-markers"]
+testpaths = [
+    "tests/unit",
+    "tests/contract",
+    "tests/integration",
+]
+addopts = [
+    "-ra",
+    "--import-mode=importlib",
+]
+strict = true
+markers = [
+    "external_snapshot: requires explicitly configured host-owned publication files",
+]
 
 [tool.pyright]
 include = ["src", "tests", "scripts"]
@@ -67,7 +78,11 @@ format-check = "ruff format --check ."
 lint = "ruff check ."
 lint-fix = "ruff check --fix ."
 typecheck = "pyright"
-test = {cmd = "pytest", env = {PYTHONPATH = "src"}}
+test-unit = {cmd = "pytest tests/unit", env = {PYTHONPATH = "src", BIOEXTRACT_TEST_THREADS = "4"}}
+test-contract = {cmd = "pytest tests/contract", env = {PYTHONPATH = "src", BIOEXTRACT_TEST_THREADS = "4"}}
+test-integration = {cmd = "pytest tests/integration", env = {PYTHONPATH = "src", BIOEXTRACT_TEST_THREADS = "4"}}
+test-smoke = {cmd = "pytest tests/smoke", env = {PYTHONPATH = "src", BIOEXTRACT_TEST_THREADS = "2"}}
+test = {cmd = "pytest tests/unit tests/contract tests/integration", env = {PYTHONPATH = "src", BIOEXTRACT_TEST_THREADS = "4"}}
 lock-check = "pdm lock --check"
 check = {composite = ["lock-check", "format-check", "lint", "typecheck", "test"]}
 precommit = {composite = ["format", "lint-fix", "typecheck", "test"]}

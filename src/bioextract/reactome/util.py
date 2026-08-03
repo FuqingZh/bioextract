@@ -75,10 +75,9 @@ def extract_mapping_frame(
     df_mapping: pl.DataFrame,
     df_input_ids: pl.DataFrame,
     *,
-    cols_group_id: tuple[str, ...],
+    df_group_membership: pl.DataFrame | None,
 ) -> pl.DataFrame:
-    cols_group = list(cols_group_id)
-    cols_out = cols_group + [
+    cols_out = [
         "InputId",
         "UniProtId",
         "ReactomePathwayId",
@@ -99,21 +98,35 @@ def extract_mapping_frame(
         .unique()
         .sort(cols_out)
     )
-    return df_hits
+    if df_group_membership is None:
+        return df_hits
+    grouped_cols = ["GroupId", *cols_out]
+    return (
+        df_group_membership.join(df_hits, on="InputId", how="inner")
+        .select(grouped_cols)
+        .unique()
+        .sort(grouped_cols)
+    )
 
 
 def extract_unmatched_ids_frame(
     df_input_ids: pl.DataFrame,
     df_mapping: pl.DataFrame,
     *,
-    cols_group_id: tuple[str, ...],
+    df_group_membership: pl.DataFrame | None,
 ) -> pl.DataFrame:
-    cols_index = list(cols_group_id) + ["InputId"]
-    df_mapped_input_ids = df_mapping.select(cols_index).unique().sort(cols_index)
+    df_mapped_input_ids = df_mapping.select("InputId").unique().sort("InputId")
+    df_unmatched = (
+        df_input_ids.join(df_mapped_input_ids, on="InputId", how="anti")
+        .select("InputId")
+        .sort("InputId")
+    )
+    if df_group_membership is None:
+        return df_unmatched
     return (
-        df_input_ids.join(df_mapped_input_ids, on=cols_index, how="anti")
-        .select(cols_index)
-        .sort(cols_index)
+        df_group_membership.join(df_unmatched, on="InputId", how="inner")
+        .select("GroupId", "InputId")
+        .sort("GroupId", "InputId")
     )
 
 

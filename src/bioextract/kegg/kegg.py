@@ -16,6 +16,7 @@ from bioextract._shared import (
     create_input_id_frame,
 )
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
+from bioextract.errors import CapabilityError
 
 from .brite.constant import (
     ASSET_SPECS as BRITE_ASSET_SPECS,
@@ -51,37 +52,30 @@ from .mapping.util import (
     read_gene_pathway_frame,
     validate_namespace,
 )
-from .metabolic import (
-    KEGGMetabolicCapabilityError,
+from .metabolic.core import (
     KEGGMetabolicNamespace,
     KEGGMetabolicSelection,
     MetabolicPublication,
     MetabolicSnapshot,
     validate_selection_namespace,
 )
-from .metabolic import (
+from .metabolic.core import (
     evaluate_modules as evaluate_metabolic_modules,
 )
-from .metabolic import (
+from .metabolic.core import (
     from_metabolic_files as create_metabolic_snapshot,
 )
-from .metabolic import (
+from .metabolic.core import (
     from_metabolic_release as discover_metabolic_snapshot,
 )
-from .metabolic import (
+from .metabolic.core import (
     open_publication as open_metabolic_publication,
 )
-from .metabolic import (
+from .metabolic.core import (
     write_duckdb as write_metabolic_duckdb,
 )
 
-__all__ = [
-    "KEGGDatabase",
-    "KEGGMetabolicCapabilityError",
-    "KEGGMetabolicNamespace",
-    "KEGGMetabolicSelection",
-    "KeggTidyDataset",
-]
+__all__ = ["KEGGDatabase"]
 
 
 class _KeggSnapshotKind(StrEnum):
@@ -102,9 +96,6 @@ class _KeggSnapshot:
     file_gene_list: Path | None = None
     file_conv_ncbi_geneid: Path | None = None
     metabolic: MetabolicSnapshot | None = None
-
-
-KeggTidyDataset = TidyDataset
 
 
 @dataclass(slots=True)
@@ -489,11 +480,11 @@ class KEGGDatabase:
             publication = self._require_metabolic_publication()
             metabolic_namespace = cast("KEGGMetabolicNamespace", namespace)
             validate_selection_namespace(publication, metabolic_namespace)
-            return KEGGMetabolicSelection(
-                publication,
-                tuple((None, str(value)) for value in ids),
-                metabolic_namespace,
-                include_obsolete,
+            return KEGGMetabolicSelection.from_ids(
+                publication=publication,
+                ids=ids,
+                namespace=metabolic_namespace,
+                include_obsolete=include_obsolete,
             )
         self._require_mapping_snapshot("select KEGG IDs")
         mapping_namespace = cast("KEGGNamespace", namespace)
@@ -503,6 +494,7 @@ class KEGGDatabase:
             dataset=self,
             _df_input_ids=df_input_ids,
             _df_groups=None,
+            _df_group_membership=None,
             namespace=mapping_namespace,
         )
 
@@ -570,16 +562,11 @@ class KEGGDatabase:
             publication = self._require_metabolic_publication()
             metabolic_namespace = cast("KEGGMetabolicNamespace", namespace)
             validate_selection_namespace(publication, metabolic_namespace)
-            inputs = tuple(
-                (str(group), str(value))
-                for group, values in ids_by_group.items()
-                for value in values
-            )
-            return KEGGMetabolicSelection(
-                publication,
-                inputs,
-                metabolic_namespace,
-                include_obsolete,
+            return KEGGMetabolicSelection.from_groups(
+                publication=publication,
+                ids_by_group=ids_by_group,
+                namespace=metabolic_namespace,
+                include_obsolete=include_obsolete,
             )
         self._require_mapping_snapshot("select grouped KEGG IDs")
         mapping_namespace = cast("KEGGNamespace", namespace)
@@ -593,10 +580,11 @@ class KEGGDatabase:
             dataset=self,
             _df_input_ids=grp_in_frames.df_input_ids,
             _df_groups=grp_in_frames.df_groups,
+            _df_group_membership=grp_in_frames.df_group_membership,
             namespace=mapping_namespace,
         )
 
-    def build_tidy(self) -> KeggTidyDataset:
+    def build_tidy(self) -> TidyDataset:
         """Build the lazy tidy dataset defined by the snapshot mode.
 
         Returns:
@@ -630,7 +618,7 @@ class KEGGDatabase:
                     file_brite_json
                 ).items()
             }
-            return KeggTidyDataset(
+            return TidyDataset(
                 frames=frames,
                 source=TidySource(
                     logical_name="brite_json",
@@ -648,7 +636,7 @@ class KEGGDatabase:
             )
 
         self._require_mapping_snapshot("build KEGG mapping tidy dataset")
-        return KeggTidyDataset(
+        return TidyDataset(
             frames={"mapping": self.extract_mapping().lazy()},
             source=self._mapping_tidy_sources(),
             resource_schema_version=MAPPING_SCHEMA_VERSION,
@@ -694,12 +682,12 @@ class KEGGDatabase:
             'kegg.duckdb'
         """
         if self.snapshot.kind != _KeggSnapshotKind.METABOLIC_FILES:
-            raise KEGGMetabolicCapabilityError(
+            raise CapabilityError(
                 "write_duckdb() requires a KEGG metabolic source handle"
             )
         snapshot = self.snapshot.metabolic
         if snapshot is None:
-            raise KEGGMetabolicCapabilityError("KEGG metabolic sources are missing")
+            raise CapabilityError("KEGG metabolic sources are missing")
         return write_metabolic_duckdb(
             snapshot,
             Path(path),
@@ -734,7 +722,7 @@ class KEGGDatabase:
 
     def _require_metabolic_publication(self) -> MetabolicPublication:
         if self._metabolic_publication is None:
-            raise KEGGMetabolicCapabilityError(
+            raise CapabilityError(
                 "KEGG metabolic selection requires a publication-backed handle; "
                 "write a DuckDB and reopen it with KEGGDatabase.from_duckdb()"
             )
@@ -817,6 +805,7 @@ class KeggSelection:
     dataset: KEGGDatabase
     _df_input_ids: pl.DataFrame = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
+    _df_group_membership: pl.DataFrame | None = field(repr=False)
     namespace: KEGGNamespace
     _df_mapping: pl.DataFrame | None = field(default=None, repr=False)
     _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
@@ -842,10 +831,6 @@ class KeggSelection:
         """
         return self._df_groups is not None
 
-    @property
-    def _col_group_id(self) -> tuple[str, ...]:
-        return ("GroupId",) if self.is_grouped else ()
-
     def extract_mapping(self) -> pl.DataFrame:
         """Extract every KEGG mapping row matched by the selected input IDs.
 
@@ -863,12 +848,25 @@ class KeggSelection:
             ['hsa:1', 'hsa:1']
         """
         if self._df_mapping is None:
-            self._df_mapping = extract_mapping_frame(
+            mapping = extract_mapping_frame(
                 self.dataset.extract_mapping(),
                 self._df_input_ids,
                 namespace=self.namespace,
-                cols_group_id=self._col_group_id,
+                cols_group_id=(),
             )
+            if self._df_group_membership is not None:
+                columns = ["GroupId", *mapping.columns]
+                mapping = (
+                    self._df_group_membership.join(
+                        mapping,
+                        on="InputId",
+                        how="inner",
+                    )
+                    .select(columns)
+                    .unique()
+                    .sort(columns)
+                )
+            self._df_mapping = mapping
         return self._df_mapping
 
     def extract_unmatched_ids(self) -> pl.DataFrame:
@@ -893,11 +891,24 @@ class KeggSelection:
             [{'InputId': 'MISSING'}]
         """
         if self._df_unmapped is None:
-            self._df_unmapped = extract_unmatched_ids_frame(
-                self._df_input_ids,
-                self.extract_mapping(),
-                cols_group_id=self._col_group_id,
-            )
+            mapping = self.extract_mapping()
+            if self._df_group_membership is None:
+                self._df_unmapped = extract_unmatched_ids_frame(
+                    self._df_input_ids,
+                    mapping,
+                    cols_group_id=(),
+                )
+            else:
+                mapped_input_ids = mapping.select("InputId").unique()
+                self._df_unmapped = (
+                    self._df_group_membership.join(
+                        mapped_input_ids,
+                        on="InputId",
+                        how="anti",
+                    )
+                    .select("GroupId", "InputId")
+                    .sort("GroupId", "InputId")
+                )
         return self._df_unmapped
 
 

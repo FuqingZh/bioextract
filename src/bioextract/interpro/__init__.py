@@ -1,13 +1,7 @@
-from .interpro import (
-    InterProDatabase,
-    InterProSelection,
-    InterProTidyConfig,
-    InterProTidyDataset,
-)
+"""InterPro database access."""
+
+from .interpro import InterProDatabase
 
 __all__ = [
     "InterProDatabase",
-    "InterProSelection",
-    "InterProTidyConfig",
-    "InterProTidyDataset",
 ]

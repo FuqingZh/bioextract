@@ -216,7 +216,8 @@ Purpose: confirm real syntax before implementation hardens assumptions.
 Inputs:
 
 - local Swiss-Prot flat file path above
-- existing tiny `write_uniprot_dat_fixture()` in `tests/test_uniprot.py`
+- existing tiny UniProt DAT fixture builder in
+  `tests/integration/uniprot/test_uniprot.py`
 
 Tasks:
 

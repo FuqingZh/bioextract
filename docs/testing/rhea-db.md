@@ -24,14 +24,15 @@ Changes to `RheaDatabase` must verify:
 10. `from_duckdb()` rejects wrong resource identity, incompatible schema,
     missing metadata tables, inventory drift, and row-count drift.
 11. Partial publications open successfully, while unsupported namespace or
-    extraction operations raise `RheaCapabilityError`.
+    extraction operations raise `bioextract.errors.CapabilityError`.
 12. Rhea, ChEBI, UniProt, and external-xref selections preserve exact reaction
     ID, master ID, direction, input namespace, unmatched IDs, and group
     isolation.
 13. ChEBI selection performs no implicit pH 7.3 conversion.
 14. Domain extraction agrees row-for-row with direct DuckDB SQL for reaction,
     participant, cross-reference, publication, and hierarchy relations.
-15. All public classes and methods provide direct, observable examples.
+15. Database methods and returned behavior types provide direct, observable
+    examples.
 16. Rhea ChEBI fields are complete CURIE strings and numeric legacy
     publications are rejected as an incompatible v1 physical layout.
 17. Metadata v1 remains readable, metadata v2/v3 requires the fifth
@@ -49,7 +50,8 @@ Changes to `RheaDatabase` must verify:
 Run the focused suite with:
 
 ```bash
-PYTHONPATH=src pytest tests/test_rhea.py tests/test_docstring_examples.py
+PYTHONPATH=src pytest tests/contract/resources/rhea tests/integration/rhea \
+  tests/contract/api/test_behavior_docstrings.py
 ```
 
 Before publication, also run the full project checks and a real-snapshot smoke

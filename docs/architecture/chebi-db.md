@@ -48,8 +48,9 @@ thin `sql()`/`query()` wrappers, a shared connection, or a write option.
 ## Integrity And Publication
 
 Missing or duplicate canonical ChEBI IDs fail the build with
-`ChEBIIntegrityError`. Orphan dependent records are skipped and recorded as
-`foreign_key_violation` warnings in `_bioextract.validation_issue`.
+`bioextract.errors.IntegrityError`. Orphan dependent records are skipped and
+recorded as `foreign_key_violation` warnings in
+`_bioextract.validation_issue`.
 
 Metadata schema v3 has `metadata`, `source_file`, `table_info`,
 `column_mapping`, and `validation_issue`. It records validation status and

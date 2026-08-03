@@ -1,4 +1,4 @@
-"""Public resource namespaces exposed through lazy package attributes.
+"""Public database handles exposed through lazy package attributes.
 
 Importing :mod:`bioextract` does not import Polars-backed resource modules.
 Each name in ``__all__`` is loaded on first attribute access and then cached in
@@ -7,64 +7,63 @@ the package globals. Keep this boundary lazy so callers can inspect or package
 """
 
 from importlib import import_module
-from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 __all__ = [
-    "chebi",
-    "eggnog",
-    "go",
-    "interpro",
-    "kegg",
-    "omnipath",
-    "reactome",
-    "rhea",
-    "stringdb",
-    "uniprot",
-    "wikipathways",
+    "ChEBIDatabase",
+    "EggNOGDatabase",
+    "GODatabase",
+    "InterProDatabase",
+    "KEGGDatabase",
+    "OmniPathDatabase",
+    "ReactomeDatabase",
+    "RheaDatabase",
+    "STRINGDatabase",
+    "UniProtDatabase",
+    "WikiPathwaysDatabase",
 ]
 
 if TYPE_CHECKING:
-    import bioextract.chebi as chebi
-    import bioextract.eggnog as eggnog
-    import bioextract.go as go
-    import bioextract.interpro as interpro
-    import bioextract.kegg as kegg
-    import bioextract.omnipath as omnipath
-    import bioextract.reactome as reactome
-    import bioextract.rhea as rhea
-    import bioextract.stringdb as stringdb
-    import bioextract.uniprot as uniprot
-    import bioextract.wikipathways as wikipathways
+    from bioextract.chebi import ChEBIDatabase
+    from bioextract.eggnog import EggNOGDatabase
+    from bioextract.go import GODatabase
+    from bioextract.interpro import InterProDatabase
+    from bioextract.kegg import KEGGDatabase
+    from bioextract.omnipath import OmniPathDatabase
+    from bioextract.reactome import ReactomeDatabase
+    from bioextract.rhea import RheaDatabase
+    from bioextract.stringdb import STRINGDatabase
+    from bioextract.uniprot import UniProtDatabase
+    from bioextract.wikipathways import WikiPathwaysDatabase
 
-_ALIAS_MODULES: dict[str, str] = {
-    "chebi": "bioextract.chebi",
-    "eggnog": "bioextract.eggnog",
-    "go": "bioextract.go",
-    "interpro": "bioextract.interpro",
-    "kegg": "bioextract.kegg",
-    "omnipath": "bioextract.omnipath",
-    "reactome": "bioextract.reactome",
-    "rhea": "bioextract.rhea",
-    "stringdb": "bioextract.stringdb",
-    "uniprot": "bioextract.uniprot",
-    "wikipathways": "bioextract.wikipathways",
+_DATABASE_MODULES: dict[str, str] = {
+    "ChEBIDatabase": "bioextract.chebi",
+    "EggNOGDatabase": "bioextract.eggnog",
+    "GODatabase": "bioextract.go",
+    "InterProDatabase": "bioextract.interpro",
+    "KEGGDatabase": "bioextract.kegg",
+    "OmniPathDatabase": "bioextract.omnipath",
+    "ReactomeDatabase": "bioextract.reactome",
+    "RheaDatabase": "bioextract.rhea",
+    "STRINGDatabase": "bioextract.stringdb",
+    "UniProtDatabase": "bioextract.uniprot",
+    "WikiPathwaysDatabase": "bioextract.wikipathways",
 }
 
 
 def __getattr__(name: str) -> Any:
-    """Load one declared resource namespace on first attribute access.
+    """Load one declared database class on first attribute access.
 
     Raises:
-        AttributeError: If ``name`` is not one of the namespaces in ``__all__``.
+        AttributeError: If ``name`` is not one of the classes in ``__all__``.
     """
-    module_name = _ALIAS_MODULES.get(name)
+    module_name = _DATABASE_MODULES.get(name)
     if module_name is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-    module_loaded: ModuleType = import_module(module_name)
-    globals()[name] = module_loaded
-    return module_loaded
+    database_class = getattr(import_module(module_name), name)
+    globals()[name] = database_class
+    return database_class
 
 
 def __dir__() -> list[str]:

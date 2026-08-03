@@ -144,15 +144,28 @@ def _concat_matched_frames(
     *,
     lf_left: pl.LazyFrame,
     lf_right: pl.LazyFrame,
-    cols_unique: list[str],
-    cols_sort: list[str],
-    cols_select: list[str],
+    relation_columns: list[str],
+    df_group_membership: pl.DataFrame | None,
 ) -> pl.DataFrame:
-    return (
+    lf_matched = (
         pl.concat([lf_left, lf_right], how="vertical_relaxed")
-        .unique(subset=cols_unique)
-        .select(cols_select)
-        .sort(cols_sort)
+        .unique(subset=["InputId", *relation_columns])
+        .select(["InputId", *relation_columns])
+    )
+    if df_group_membership is not None:
+        columns_out = ["GroupId", *relation_columns]
+        return (
+            df_group_membership.lazy()
+            .join(lf_matched, on="InputId", how="inner")
+            .select(columns_out)
+            .unique(subset=columns_out)
+            .sort(columns_out)
+            .collect()
+        )
+    return (
+        lf_matched.select(relation_columns)
+        .unique(subset=relation_columns)
+        .sort(relation_columns)
         .collect()
     )
 
@@ -161,11 +174,13 @@ def extract_enzsub_frame(
     *,
     file_enzsub: Path,
     df_input_ids: pl.DataFrame,
-    cols_group_id: tuple[str, ...] = (),
+    df_group_membership: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     if df_input_ids.height == 0:
         return pl.DataFrame(
-            schema=SCHEMA_GROUP_ENZSUB if cols_group_id else SCHEMA_ENZSUB
+            schema=SCHEMA_GROUP_ENZSUB
+            if df_group_membership is not None
+            else SCHEMA_ENZSUB
         )
 
     lf_base = _create_validated_enzsub_base_lazy_frame(file_enzsub)
@@ -175,19 +190,18 @@ def extract_enzsub_frame(
         lf_input_ids.rename({"InputId": "SourceId"}),
         on="SourceId",
         how="inner",
-    )
+    ).with_columns(pl.col("SourceId").alias("InputId"))
     lf_target = lf_base.join(
         lf_input_ids.rename({"InputId": "TargetId"}),
         on="TargetId",
         how="inner",
-    )
-    cols_group = list(cols_group_id)
+    ).with_columns(pl.col("TargetId").alias("InputId"))
+    relation_columns = ["SourceId", "TargetId", "TargetSite", "Modification"]
     return _concat_matched_frames(
         lf_left=lf_source,
         lf_right=lf_target,
-        cols_unique=cols_group + ["SourceId", "TargetId", "TargetSite", "Modification"],
-        cols_sort=cols_group + ["SourceId", "TargetId", "TargetSite", "Modification"],
-        cols_select=cols_group + ["SourceId", "TargetId", "TargetSite", "Modification"],
+        relation_columns=relation_columns,
+        df_group_membership=df_group_membership,
     )
 
 
@@ -195,11 +209,13 @@ def extract_interactions_frame(
     *,
     file_interactions: Path,
     df_input_ids: pl.DataFrame,
-    cols_group_id: tuple[str, ...] = (),
+    df_group_membership: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     if df_input_ids.height == 0:
         return pl.DataFrame(
-            schema=SCHEMA_GROUP_INTERACTIONS if cols_group_id else SCHEMA_INTERACTIONS
+            schema=SCHEMA_GROUP_INTERACTIONS
+            if df_group_membership is not None
+            else SCHEMA_INTERACTIONS
         )
 
     lf_base = _create_validated_interactions_base_lazy_frame(file_interactions)
@@ -209,38 +225,22 @@ def extract_interactions_frame(
         lf_input_ids.rename({"InputId": "SourceId"}),
         on="SourceId",
         how="inner",
-    )
+    ).with_columns(pl.col("SourceId").alias("InputId"))
     lf_target = lf_base.join(
         lf_input_ids.rename({"InputId": "TargetId"}),
         on="TargetId",
         how="inner",
-    )
-    cols_group = list(cols_group_id)
+    ).with_columns(pl.col("TargetId").alias("InputId"))
+    relation_columns = [
+        "SourceId",
+        "TargetId",
+        "IsDirected",
+        "IsStimulation",
+        "IsInhibition",
+    ]
     return _concat_matched_frames(
         lf_left=lf_source,
         lf_right=lf_target,
-        cols_unique=cols_group
-        + [
-            "SourceId",
-            "TargetId",
-            "IsDirected",
-            "IsStimulation",
-            "IsInhibition",
-        ],
-        cols_sort=cols_group
-        + [
-            "SourceId",
-            "TargetId",
-            "IsDirected",
-            "IsStimulation",
-            "IsInhibition",
-        ],
-        cols_select=cols_group
-        + [
-            "SourceId",
-            "TargetId",
-            "IsDirected",
-            "IsStimulation",
-            "IsInhibition",
-        ],
+        relation_columns=relation_columns,
+        df_group_membership=df_group_membership,
     )

@@ -41,9 +41,6 @@ from .util import (
 
 __all__ = [
     "InterProDatabase",
-    "InterProSelection",
-    "InterProTidyConfig",
-    "InterProTidyDataset",
 ]
 
 
@@ -51,9 +48,6 @@ __all__ = [
 class _InterProSnapshot:
     file_protein2ipr: Path
     file_interpro_xml: Path | None = None
-
-
-InterProTidyDataset = TidyDataset
 
 
 @dataclass(slots=True)
@@ -163,6 +157,7 @@ class InterProDatabase:
             dataset=self,
             _df_input_ids=df_input_ids,
             _df_groups=None,
+            _df_group_membership=None,
         )
 
     def select_groups(
@@ -204,6 +199,7 @@ class InterProDatabase:
             dataset=self,
             _df_input_ids=grp_in_frames.df_input_ids,
             _df_groups=grp_in_frames.df_groups,
+            _df_group_membership=grp_in_frames.df_group_membership,
         )
 
     def extract_mapping(self) -> pl.DataFrame:
@@ -237,7 +233,7 @@ class InterProDatabase:
         self,
         *,
         config: InterProTidyConfig = "mapping",
-    ) -> InterProTidyDataset:
+    ) -> TidyDataset:
         """Build one configured lazy tidy dataset.
 
         Args:
@@ -296,7 +292,7 @@ class InterProDatabase:
                 df_interpro_entry=self.xml_frame("entry"),
                 df_interpro_member=self.xml_frame("member"),
             )
-        return InterProTidyDataset(
+        return TidyDataset(
             frames={
                 "mapping": scan_mapping_frame(
                     self.snapshot.file_protein2ipr,
@@ -451,6 +447,7 @@ class InterProSelection:
     dataset: InterProDatabase
     _df_input_ids: pl.DataFrame = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
+    _df_group_membership: pl.DataFrame | None = field(repr=False)
     namespace: InterProNamespace = field(default="uniprot", init=False)
     _df_mapping: pl.DataFrame | None = field(default=None, repr=False)
     _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
@@ -469,10 +466,6 @@ class InterProSelection:
             True
         """
         return self._df_groups is not None
-
-    @property
-    def _col_group_id(self) -> tuple[str, ...]:
-        return ("GroupId",) if self.is_grouped else ()
 
     def extract_mapping(self) -> pl.DataFrame:
         """Extract mapping rows for the normalized selection.
@@ -498,8 +491,8 @@ class InterProSelection:
             self._df_mapping = select_mapping_frame(
                 self.dataset.snapshot.file_protein2ipr,
                 self._df_input_ids,
+                df_group_membership=self._df_group_membership,
                 namespace=self.namespace,
-                cols_group_id=self._col_group_id,
                 df_interpro_entry=self.dataset.xml_frame("entry"),
                 df_interpro_member=self.dataset.xml_frame("member"),
             )
@@ -526,7 +519,7 @@ class InterProSelection:
             self._df_unmapped = extract_unmatched_ids_frame(
                 self._df_input_ids,
                 self.extract_mapping(),
-                cols_group_id=self._col_group_id,
+                df_group_membership=self._df_group_membership,
             )
         return self._df_unmapped
 

@@ -1,5 +1,3 @@
-from bioextract.kegg.brite.tidy import build_tidy_frames
+"""Private KEGG BRITE parsing and tidy-building implementation."""
 
-__all__ = [
-    "build_tidy_frames",
-]
+__all__: list[str] = []

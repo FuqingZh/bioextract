@@ -42,7 +42,7 @@ property, and relation schema. SDF only supplements molfile records; optional
 ChemOnt remains a separate `chemont_*` graph in the same container:
 
 ```python
-from bioextract.chebi import ChEBIDatabase
+from bioextract import ChEBIDatabase
 
 result = ChEBIDatabase.from_release(
     "chebi/database/2026-07-07/raw",
@@ -83,7 +83,7 @@ plain, gzip, zip, and tar inputs are detected internally where applicable.
 Build one query-ready database from a complete extracted release or archive:
 
 ```python
-from bioextract.rhea import RheaDatabase
+from bioextract import RheaDatabase
 
 result = RheaDatabase.from_release("rhea-release.zip").write_duckdb(
     "out/rhea.duckdb"
@@ -95,7 +95,7 @@ Explicit files accept incomplete or mixed capabilities while retaining the same
 DuckDB container:
 
 ```python
-from bioextract.rhea import RheaDatabase
+from bioextract import RheaDatabase
 
 RheaDatabase.from_files(
     rdf="rhea.rdf.gz",
@@ -141,7 +141,7 @@ hierarchy, table, and provenance contracts.
 GO is a multi-relation ontology and is published as one DuckDB:
 
 ```python
-from bioextract.go import GODatabase
+from bioextract import GODatabase
 
 go = GODatabase.from_obo("go-basic.obo")
 df_terms = go.select_terms(subset_id="goslim_generic")
@@ -157,7 +157,7 @@ Tables include `term`, `term_relation`, `term_synonym`, `term_xref`,
 An independent KEGG mapping or BRITE relation is published as Parquet:
 
 ```python
-from bioextract.kegg import KEGGDatabase
+from bioextract import KEGGDatabase
 
 KEGGDatabase.from_brite_json("br08901.json").write_parquet(
     "out/kegg.parquet"
@@ -200,8 +200,7 @@ read-only DuckDB SQL.
 Pathway entities and membership relations are published together:
 
 ```python
-from bioextract.reactome import ReactomeDatabase
-from bioextract.wikipathways import WikiPathwaysDatabase
+from bioextract import ReactomeDatabase, WikiPathwaysDatabase
 
 ReactomeDatabase.from_files(
     uniprot_mapping="UniProt2Reactome.txt",
@@ -227,7 +226,7 @@ the optional species row filter.
 The canonical protein-to-orthologous-group mapping is one Parquet:
 
 ```python
-from bioextract.eggnog import EggNOGDatabase
+from bioextract import EggNOGDatabase
 
 EggNOGDatabase.from_sqlite(
     "eggnog.db.gz",
@@ -244,7 +243,7 @@ The independent InterPro mapping is Parquet. The related Pfam term, xref, and
 protein-term relations share one DuckDB:
 
 ```python
-from bioextract.interpro import InterProDatabase
+from bioextract import InterProDatabase
 
 db = InterProDatabase.from_mapping_files(
     protein_to_interpro="108.0/raw/protein2ipr.dat.gz",
@@ -259,7 +258,7 @@ db.write_duckdb("out/interpro_pfam.duckdb", config="pfam")
 UniProt idmapping remains a separate lazy Parquet product:
 
 ```python
-from bioextract.uniprot import UniProtDatabase
+from bioextract import UniProtDatabase
 
 UniProtDatabase.from_idmapping(
     "idmapping_selected.tab.gz",
@@ -302,7 +301,7 @@ idmapping export requires `allow_all_taxa=True`.
 IDs, group isolation, and edge mapping:
 
 ```python
-from bioextract.stringdb import STRINGDatabase
+from bioextract import STRINGDatabase
 
 selection = (
     STRINGDatabase.from_files(
@@ -329,7 +328,7 @@ measurement.
 ## OmniPath
 
 ```python
-from bioextract.omnipath import OmniPathDatabase
+from bioextract import OmniPathDatabase
 
 selection = (
     OmniPathDatabase.from_files(
@@ -352,6 +351,26 @@ Public resource handles use complete `*Database` names, including
 `InterProDatabase`, `UniProtDatabase`, `STRINGDatabase`, and
 `OmniPathDatabase`.
 
+Import database handles from the lazy top-level API:
+
+```python
+from bioextract import ChEBIDatabase, RheaDatabase
+```
+
+The corresponding resource-subpackage path, such as
+`from bioextract.rhea import RheaDatabase`, remains stable. Prefer the
+top-level form when importing handles from multiple resources.
+
+Catch public operational categories through `bioextract.errors`:
+
+```python
+from bioextract.errors import CapabilityError, IntegrityError
+```
+
+Selection, result, namespace, configuration, and tidy implementation types are
+returned or consumed by database methods but are not stable package exports.
+Do not depend on their deep module paths for compatibility.
+
 There are no abbreviated `*Db` aliases, legacy score-filter names, or
 directory writers. Use `with_min_combined_score()`, `write_parquet()`, and
 `write_duckdb()` directly.
@@ -368,11 +387,21 @@ embedded metadata.
 ## Development
 
 - Documentation is indexed in [docs/README.md](docs/README.md).
+- Test layers and fixture ownership are defined in
+  [docs/testing/README.md](docs/testing/README.md).
 - `pdm run format`
 - `pdm run lint`
 - `pdm run typecheck`
+- `pdm run test-unit`
+- `pdm run test-contract`
+- `pdm run test-integration`
 - `pdm run test`
-- `pdm run precommit` runs the complete local gate in that order.
+- `pdm run test-smoke` runs only explicitly configured host publications.
+- `pdm run precommit` applies formatting and lint fixes, then runs strict
+  typing and the complete hermetic suite.
+
+Hermetic tests limit DuckDB, Polars, and Rayon-backed work to four threads by
+default. Set `BIOEXTRACT_TEST_THREADS=1` when sharing a constrained host.
 
 ## Release
 

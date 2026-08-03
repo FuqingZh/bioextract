@@ -48,7 +48,7 @@ and leaves `CogClass` / `CogName` null.
 ## Public API
 
 ```python
-from bioextract.eggnog import EggNOGDatabase
+from bioextract import EggNOGDatabase
 
 db = EggNOGDatabase.from_sqlite(
     "eggnog.db.gz",

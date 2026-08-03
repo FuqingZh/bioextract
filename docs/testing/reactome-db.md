@@ -136,7 +136,7 @@ Example command:
 ```bash
 PYTHONPATH=src .venv/bin/python - <<'PY'
 from pathlib import Path
-from bioextract.reactome import ReactomeDatabase
+from bioextract import ReactomeDatabase
 
 base = Path("/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/reactome/mapping/v96/raw")
 db = ReactomeDatabase.from_files(

@@ -304,8 +304,9 @@ Any policy-valid candidate wins. Otherwise precedence is invalid target,
 obsolete exclusion, star-rating exclusion, then no candidate.
 
 Canonical compound IDs are fail-fast invariants. Missing or duplicate primary
-IDs raise `ChEBIIntegrityError`; staging files and WAL are removed and an old
-destination is preserved. Orphan secondary IDs, cross-references, relations,
+IDs raise `bioextract.errors.IntegrityError`; staging files and WAL are removed
+and an old destination is preserved. Orphan secondary IDs, cross-references,
+relations,
 structures, and WURCS rows are skipped and persisted as
 `foreign_key_violation` warnings in `_bioextract.validation_issue`.
 

@@ -1,17 +1,7 @@
-from bioextract.kegg.kegg import (
-    KEGGDatabase,
-    KEGGMetabolicCapabilityError,
-    KEGGMetabolicNamespace,
-    KEGGMetabolicSelection,
-    KeggTidyDataset,
-)
-from bioextract.kegg.mapping.constant import KEGGNamespace
+"""KEGG database access."""
+
+from bioextract.kegg.kegg import KEGGDatabase
 
 __all__ = [
     "KEGGDatabase",
-    "KEGGMetabolicCapabilityError",
-    "KEGGMetabolicNamespace",
-    "KEGGMetabolicSelection",
-    "KEGGNamespace",
-    "KeggTidyDataset",
 ]

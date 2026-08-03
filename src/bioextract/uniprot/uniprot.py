@@ -30,6 +30,8 @@ from .util import (
     validate_mapping_schema,
 )
 
+__all__ = ["UniProtDatabase"]
+
 
 @dataclass(slots=True)
 class UniProtDatabase:

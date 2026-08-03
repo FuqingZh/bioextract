@@ -1,7 +1,7 @@
 # bioextract Documentation
 
 Version: v1.0
-Date: 2026-07-30
+Date: 2026-08-03
 Status: current
 
 This directory contains durable architecture, data contracts, test standards,
@@ -18,15 +18,16 @@ when a domain does not yet have a dedicated architecture document.
    before changing generated Parquet, DuckDB, or embedded provenance behavior.
 3. Read the resource-specific architecture document before changing a public DB
    handle, schema, selection rule, or write contract.
-4. Read the corresponding test standard and, where present, the real-snapshot
+4. Read the repository-wide [Test Standard](testing/README.md), then the
+   corresponding resource test standard and, where present, the real-snapshot
    benchmark before changing validation or publication behavior.
 
 ## Authority Map
 
 | Area | Architecture or contract | Test standard | Benchmark |
 | --- | --- | --- | --- |
-| Repository purpose and boundaries | [Domain Access Architecture](architecture/20260729-v1.0-domain-access-architecture.md) | Full pytest suite | — |
-| Shared publication output | [Materialized Dataset Contract](architecture/tidy-dataset-contract.md) | Full pytest suite | — |
+| Repository purpose and boundaries | [Domain Access Architecture](architecture/20260729-v1.0-domain-access-architecture.md) | [Repository test standard](testing/README.md) | — |
+| Shared publication output | [Materialized Dataset Contract](architecture/tidy-dataset-contract.md) | [Repository test standard](testing/README.md) | — |
 | ChEBI and ChemOnt | [ChEBIDatabase](architecture/chebi-db.md) | [ChEBIDatabase](testing/chebi-db.md) | — |
 | GO ontology and KEGG BRITE | [GO and KEGG Tidy](architecture/go-kegg-tidy.md) | [GO and KEGG Tidy](testing/go-kegg-tidy.md) | — |
 | KEGG organism mapping | [KEGG Mapping DB](architecture/kegg-mapping-db.md) | [KEGG Mapping DB](testing/kegg-mapping-db.md) | — |
@@ -37,9 +38,30 @@ when a domain does not yet have a dedicated architecture document.
 | InterPro and Pfam | [InterProDatabase](architecture/interpro-db.md) | [InterProDatabase](testing/interpro-db.md) | [108.0 baseline](benchmarks/20260714-v1.0-interpro-108-benchmark.md) |
 | UniProt | [UniProtDatabase](architecture/uniprot-db.md) | [UniProtDatabase](testing/uniprot-db.md) | [2026_01 baseline](benchmarks/20260731-uniprot-kb-2026_01-benchmark.md) |
 | Rhea | [RheaDatabase](architecture/rhea-db.md) | [RheaDatabase](testing/rhea-db.md) | — |
-| STRINGdb and OmniPath | Root [README](../README.md), source code, and tests | [`test_stringdb.py`](../tests/test_stringdb.py), [`test_omnipath.py`](../tests/test_omnipath.py) | — |
+| STRINGdb and OmniPath | Root [README](../README.md), source code, and tests | [`STRINGdb integration`](../tests/integration/stringdb/test_database.py), [`OmniPath integration`](../tests/integration/omnipath/test_database.py) | — |
 
 ## Plans And History
+
+The current
+[Storage And Publication Convergence Plan](implementation-plan/20260803-v1.0-storage-publication-convergence-implementation-plan.md)
+defines the accepted direct-access versus materialization boundary, DuckDB-only
+bioextract publication contract, metadata v1 reset, former-Parquet resource
+migrations, eggNOG SQLite behavior, GO subcell cleanup, and formal rebuild
+gates. Until its slices land, it supersedes older documents only as the target
+storage and migration direction; current code and resource documents continue
+to describe implemented behavior.
+
+The current
+[Test Suite Layering Plan](implementation-plan/20260731-v1.0-test-suite-layering.md)
+defines the unit, contract, integration, and external-snapshot smoke
+boundaries, fixture ownership, migration slices, and unchanged 482-case
+baseline.
+
+The completed
+[Public API And Grouped Selection Convergence Plan](implementation-plan/20260731-v1.0-public-api-grouped-selection-convergence.md)
+records the top-level database import contract, shared unique-ID resolution and
+group fan-out model, internal behavior-type boundary, and unchanged
+publication schemas.
 
 The current
 [Constructor Source Convergence Plan](implementation-plan/20260731-v1.0-constructor-source-convergence.md)

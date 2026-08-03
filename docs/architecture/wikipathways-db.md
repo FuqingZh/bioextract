@@ -56,7 +56,7 @@ Glutathione metabolism%WikiPathways_20260510%WP100%Homo sapiens	https://www.wiki
 ## Public API
 
 ```python
-from bioextract.wikipathways import WikiPathwaysDatabase
+from bioextract import WikiPathwaysDatabase
 
 db = WikiPathwaysDatabase.from_gmt(
     "wikipathways-20260510-gmt-*.gmt",

@@ -12,7 +12,8 @@ in [KEGG Mapping DB Architecture](../architecture/kegg-mapping-db.md).
 
 ## Automated Tests
 
-[`tests/test_kegg_mapping.py`](../../tests/test_kegg_mapping.py) verifies:
+[`tests/integration/kegg/test_mapping.py`](../../tests/integration/kegg/test_mapping.py)
+verifies:
 
 - normalization of UniProt, KEGG gene, KO, pathway, and optional NCBI Gene ID
   inputs
@@ -30,7 +31,7 @@ missing mappings, or calculate enrichment statistics.
 Run the focused contract with:
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m pytest tests/test_kegg_mapping.py
+PYTHONPATH=src .venv/bin/python -m pytest tests/integration/kegg/test_mapping.py
 ```
 
 For a real organism snapshot, additionally compare observed source namespaces,

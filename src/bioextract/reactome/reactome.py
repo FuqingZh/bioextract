@@ -36,7 +36,6 @@ from .util import (
 
 __all__ = [
     "ReactomeDatabase",
-    "ReactomeTidyDataset",
 ]
 
 
@@ -45,9 +44,6 @@ class _ReactomeSnapshot:
     file_uniprot2reactome: Path | None = None
     file_pathways: Path | None = None
     file_relations: Path | None = None
-
-
-ReactomeTidyDataset = TidyDataset
 
 
 @dataclass(slots=True)
@@ -218,6 +214,7 @@ class ReactomeDatabase:
             dataset=self,
             _df_input_ids=df_input_ids,
             _df_groups=None,
+            _df_group_membership=None,
         )
 
     def select_groups(
@@ -263,6 +260,7 @@ class ReactomeDatabase:
             dataset=self,
             _df_input_ids=grp_in_frames.df_input_ids,
             _df_groups=grp_in_frames.df_groups,
+            _df_group_membership=grp_in_frames.df_group_membership,
         )
 
     def extract_term2gene(self) -> pl.DataFrame:
@@ -358,7 +356,7 @@ class ReactomeDatabase:
                 )
         return self._df_relations
 
-    def build_tidy(self) -> ReactomeTidyDataset:
+    def build_tidy(self) -> TidyDataset:
         """Build a lazy Reactome tidy dataset from the available source files.
 
         Returns:
@@ -395,7 +393,7 @@ class ReactomeDatabase:
             frames[frame_name] = self._build_tidy_frame(frame_name)
             assets.append(TidyAsset(path=path, kind=kind, frame_name=frame_name))
 
-        return ReactomeTidyDataset(
+        return TidyDataset(
             frames={frame_name: frame.lazy() for frame_name, frame in frames.items()},
             source=self._tidy_sources(),
             resource_schema_version=SCHEMA_VERSION,
@@ -432,7 +430,7 @@ class ReactomeDatabase:
             for asset in dataset.assets
             if asset.frame_name not in {"term2gene", "term2name"}
         )
-        canonical = ReactomeTidyDataset(
+        canonical = TidyDataset(
             frames=dataset.frames,
             source=dataset.source,
             resource_schema_version=dataset.resource_schema_version,
@@ -579,6 +577,7 @@ class ReactomeSelection:
     dataset: ReactomeDatabase
     _df_input_ids: pl.DataFrame = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
+    _df_group_membership: pl.DataFrame | None = field(repr=False)
     _df_mapping: pl.DataFrame | None = field(default=None, repr=False)
     _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
 
@@ -598,11 +597,6 @@ class ReactomeSelection:
         """
         return self._df_groups is not None
 
-    @property
-    def _col_group_id(self) -> tuple[str, ...]:
-        """Return the group ID column when this selection is grouped."""
-        return ("GroupId",) if self.is_grouped else ()
-
     def extract_mapping(self) -> pl.DataFrame:
         """Extract every pathway mapping matched by the selected UniProt IDs.
 
@@ -620,7 +614,7 @@ class ReactomeSelection:
             self._df_mapping = extract_mapping_frame(
                 self.dataset._mapping_frame(),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
                 self._df_input_ids,
-                cols_group_id=self._col_group_id,
+                df_group_membership=self._df_group_membership,
             )
         return self._df_mapping
 
@@ -644,7 +638,7 @@ class ReactomeSelection:
             self._df_unmapped = extract_unmatched_ids_frame(
                 self._df_input_ids,
                 self.extract_mapping(),
-                cols_group_id=self._col_group_id,
+                df_group_membership=self._df_group_membership,
             )
         return self._df_unmapped
 

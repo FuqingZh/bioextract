@@ -227,6 +227,7 @@ class OmniPathDatabase:
         return OmniPathSelection(
             dataset=self,
             _df_input_ids=df_input_ids,
+            _df_group_membership=None,
             _df_groups=None,
             resources_selected=self.available_resources,
         )
@@ -238,6 +239,8 @@ class OmniPathDatabase:
         """Create a grouped selection that preserves ``GroupId`` in outputs.
 
         The selection initially enables every resource backed by this snapshot.
+        Relation endpoints are matched once against globally unique normalized
+        IDs, then matched relations are expanded through group membership.
 
         Args:
             ids_by_group: Group labels mapped to protein identifiers. Labels
@@ -268,6 +271,7 @@ class OmniPathDatabase:
             dataset=self,
             _df_groups=grp_in_frames.df_groups,
             _df_input_ids=grp_in_frames.df_input_ids,
+            _df_group_membership=grp_in_frames.df_group_membership,
             resources_selected=self.available_resources,
         )
 
@@ -289,6 +293,7 @@ class OmniPathSelection:
 
     dataset: OmniPathDatabase
     _df_input_ids: pl.DataFrame = field(repr=False)
+    _df_group_membership: pl.DataFrame | None = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
     resources_selected: frozenset[OmniPathResourceName]
     _df_enzsub: pl.DataFrame | None = field(default=None, repr=False)
@@ -359,6 +364,7 @@ class OmniPathSelection:
         return OmniPathSelection(
             dataset=self.dataset,
             _df_input_ids=self._df_input_ids,
+            _df_group_membership=self._df_group_membership,
             _df_groups=self._df_groups,
             resources_selected=resources_selected,
             _df_enzsub=self._df_enzsub if "enzsub" in resources_selected else None,
@@ -438,7 +444,7 @@ class OmniPathSelection:
             self._df_enzsub = extract_enzsub_frame(
                 file_enzsub=self.dataset.snapshot.file_enzsub,
                 df_input_ids=self._df_input_ids,
-                cols_group_id=self._col_group_id,
+                df_group_membership=self._df_group_membership,
             )
         return self._df_enzsub
 
@@ -479,7 +485,7 @@ class OmniPathSelection:
             self._df_interactions = extract_interactions_frame(
                 file_interactions=self.dataset.snapshot.file_interactions,
                 df_input_ids=self._df_input_ids,
-                cols_group_id=self._col_group_id,
+                df_group_membership=self._df_group_membership,
             )
         return self._df_interactions
 
@@ -505,6 +511,13 @@ class OmniPathSelection:
         if self._df_unmapped is None:
             col_group_id = list(self._col_group_id)
             cols_index = col_group_id + ["InputId"]
+            df_input_rows = self._df_input_ids
+            if self.is_grouped:
+                if self._df_group_membership is None:
+                    raise RuntimeError(
+                        "Grouped OmniPath selection lacks group membership"
+                    )
+                df_input_rows = self._df_group_membership
 
             df_matched_parts: list[pl.DataFrame] = []
             if "enzsub" in self.resources_selected:
@@ -535,12 +548,12 @@ class OmniPathSelection:
 
             df_matched_input_ids = (
                 pl.concat(df_matched_parts, how="vertical_relaxed")
-                .join(self._df_input_ids, on=cols_index, how="inner")
+                .join(df_input_rows, on=cols_index, how="inner")
                 .unique(subset=cols_index)
                 .sort(cols_index)
             )
             self._df_unmapped = (
-                self._df_input_ids.join(
+                df_input_rows.join(
                     df_matched_input_ids,
                     on=cols_index,
                     how="anti",
