@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 
 import polars as pl
 
@@ -8,7 +8,6 @@ from .constant import (
     SCHEMA_ANCESTOR,
     SCHEMA_DEPTH,
     SCHEMA_EDGE,
-    SCHEMA_SUBCELL,
     SCHEMA_SUBSET_DEFINITION,
     SCHEMA_SUBSET_MEMBERSHIP,
     SCHEMA_SYNONYM,
@@ -214,47 +213,6 @@ def _build_tidy_frames(  # pyright: ignore[reportUnusedFunction]  # consumed by 
         "ancestor_all": df_ancestor,
         "depth": df_depth,
     }
-
-
-def extract_subcell_frame(
-    frames: Mapping[str, pl.DataFrame],
-    *,
-    include_obsolete: bool = False,
-) -> pl.DataFrame:
-    """Project GO cellular-component terms into the subcell output schema.
-
-    Args:
-        frames: Tidy frame mapping containing `term` and `depth`.
-        include_obsolete: Whether to retain obsolete cellular-component terms.
-
-    Returns:
-        A table sorted by `go_id` with subcell names, definitions, and minimum
-        and maximum depths from an ontology root.
-
-    Raises:
-        KeyError: If either required frame is absent.
-    """
-    df_term = frames["term"]
-    df_depth = frames["depth"]
-    df_subcell = (
-        df_term.filter(pl.col("namespace") == "cellular_component")
-        .join(
-            df_depth.select("go_id", "min_depth_from_root", "max_depth_from_root"),
-            on="go_id",
-            how="left",
-        )
-        .select(
-            "go_id",
-            pl.col("term_name").alias("subcell_name"),
-            "definition",
-            "is_obsolete",
-            "min_depth_from_root",
-            "max_depth_from_root",
-        )
-    )
-    if not include_obsolete:
-        df_subcell = df_subcell.filter(~pl.col("is_obsolete"))
-    return df_subcell.select(SCHEMA_SUBCELL.keys()).sort("go_id")
 
 
 # #endregion

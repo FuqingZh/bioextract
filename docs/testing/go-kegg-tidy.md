@@ -18,10 +18,10 @@ verifies:
 - ontology, relation, synonym, subset, ancestor, and depth frame contracts
 - subset discovery and term selection by namespace, subset, primary ID, and
   alternate ID
-- obsolete-term defaults and subcellular-component compatibility output
+- obsolete-term defaults and official cellular-component term selection
 - direct and legacy tidy writers
 - source-build to DuckDB reopen parity for term selection, subset discovery,
-  subcell extraction, fresh native SQL connections, and read-only enforcement
+  fresh native SQL connections, and read-only enforcement
 - bounded metadata-v1 GO identity, profile, exact inventory, physical-schema,
   and pinned-file validation
 

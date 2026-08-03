@@ -69,7 +69,7 @@ BEHAVIOR_CLASSES = (
 
 BEHAVIOR_FUNCTIONS = (("kegg.brite.build_tidy_frames", build_kegg_tidy_frames),)
 
-EXPECTED_BEHAVIOR_TARGET_COUNT = 187
+EXPECTED_BEHAVIOR_TARGET_COUNT = 185
 
 
 class _FunctionDescriptor(Protocol):
