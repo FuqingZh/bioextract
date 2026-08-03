@@ -216,6 +216,29 @@ def test_profile_capabilities_and_selection_honor_pinned_identity(
     with pytest.raises(IntegrityError, match="replaced"):
         knowledgebase.select_ids(["P12345"], namespace="uniprot").extract_proteins()
 
+    vanished = UniProtDatabase.from_duckdb(mapping_path)
+    mapping_path.unlink()
+    with pytest.raises(IntegrityError, match="unavailable"):
+        vanished.connect()
+
+
+def test_idmapping_reopen_requires_exact_source_role(tmp_path: Path) -> None:
+    path = tmp_path / "mapping.duckdb"
+    UniProtDatabase.from_idmapping(
+        _write_idmapping(tmp_path / "mapping.tab.gz")
+    ).write_duckdb(path, allow_all_taxa=True)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "UPDATE _bioextract.source_file SET logical_name='fabricated_mapping'"
+        )
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value=replace(value, ?, ?) "
+            "WHERE key='bioextract.sources'",
+            ["idmapping_selected", "fabricated_mapping"],
+        )
+    with pytest.raises(ValueError, match="source inventory"):
+        UniProtDatabase.from_duckdb(path)
+
 
 def test_reopened_mapping_lazy_frame_owns_and_releases_connection(
     tmp_path: Path,

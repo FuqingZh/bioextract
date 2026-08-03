@@ -376,5 +376,10 @@ def _mapping_media_type(kind: str) -> str:
 
 
 def _file_identity(path: Path) -> tuple[int, int, int, int, int]:
-    stat = path.stat()
+    try:
+        stat = path.stat()
+    except OSError as error:
+        raise IntegrityError(
+            "UniProt publication is unavailable; reopen it with from_duckdb()"
+        ) from error
     return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns

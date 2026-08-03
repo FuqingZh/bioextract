@@ -556,6 +556,15 @@ def validate_publication(path: Path) -> tuple[str, Mapping[str, str]]:
             raise ValueError("Unsupported UniProt capability metadata")
         if profile == "idmapping" and capability_metadata != required_capabilities:
             raise ValueError("Unsupported UniProt idmapping capability inventory")
+        if profile == "idmapping":
+            source_roles = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT logical_name FROM _bioextract.source_file"
+                ).fetchall()
+            }
+            if source_roles != {"idmapping_selected"}:
+                raise ValueError("Unsupported UniProt idmapping source inventory")
         if profile == "knowledgebase" and (
             set(capability_metadata) != expected_capability_keys
             or capability_metadata["bioextract.capability.isoform_sequences"]
