@@ -3,12 +3,15 @@ from __future__ import annotations
 import inspect
 import os
 from pathlib import Path
+from typing import Any
 
 import duckdb
+import polars as pl
 import pytest
 
 from bioextract import RheaDatabase
 from bioextract.errors import CapabilityError
+from bioextract.rhea import _duckdb
 
 RDF_FIXTURE = """\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -343,6 +346,32 @@ def test_xref_only_publication_reports_reaction_capability_failure(
     assert database.snapshot.scope == "publication"
     with pytest.raises(CapabilityError, match="missing relations"):
         database.select_reactions(["1.1.1.1"], namespace="ec")
+
+
+def test_rhea_publication_connections_share_the_polars_thread_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = _write_release(tmp_path / "release")
+    original_connect = duckdb.connect
+    calls: list[tuple[bool, dict[str, Any] | None]] = []
+
+    def connect(
+        database: str | Path = ":memory:",
+        read_only: bool = False,
+        config: dict[str, Any] | None = None,
+    ) -> duckdb.DuckDBPyConnection:
+        calls.append((read_only, config))
+        return original_connect(database=database, read_only=read_only, config=config)
+
+    monkeypatch.setattr(_duckdb.duckdb, "connect", connect)
+
+    RheaDatabase.from_files(xrefs=release / "raw" / "rhea2xrefs.tsv").write_duckdb(
+        tmp_path / "rhea.duckdb"
+    )
+
+    expected_config = {"threads": str(pl.thread_pool_size())}
+    assert calls == [(False, expected_config), (True, expected_config)]
 
 
 def test_reaction_xref_publication_persists_partial_construction_scope(
