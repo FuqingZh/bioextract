@@ -15,6 +15,7 @@ def _source(
     *,
     with_xml: bool = True,
     mapping_rows: tuple[str, ...] = ("P12345\tIPR000001\tKringle\tPF00051\t10\t80",),
+    xml_entries: str | None = None,
 ) -> InterProDatabase:
     mapping = tmp_path / "protein2ipr.dat.gz"
     with gzip.open(mapping, "wt", encoding="utf-8") as handle:
@@ -24,7 +25,8 @@ def _source(
     xml = tmp_path / "interpro.xml.gz"
     with gzip.open(xml, "wt", encoding="utf-8") as handle:
         handle.write(
-            """<interprodb>
+            xml_entries
+            or """<interprodb>
 <release><dbinfo dbname="INTERPRO" version="108.0"/></release>
 <interpro id="IPR000001" type="Domain">
 <name>Kringle</name><member_list>
@@ -320,6 +322,7 @@ def test_xml_profile_rejects_incomplete_mapping_enrichment(
     "statement",
     [
         "UPDATE protein_term SET pfam_id='PF99999'",
+        "UPDATE protein_term SET uniprot_id='FORGED'",
         "UPDATE term SET pfam_name=''",
         "INSERT INTO term SELECT * FROM term LIMIT 1",
     ],
@@ -339,6 +342,33 @@ def test_xml_profile_rejects_inconsistent_compact_pfam_relations(
 
     with pytest.raises(IntegrityError, match="compact Pfam relations"):
         InterProDatabase.from_duckdb(path)
+
+
+def test_xml_profile_reopens_multiple_distinct_xrefs_for_one_pfam(
+    tmp_path: Path,
+) -> None:
+    xml = """<interprodb>
+<release><dbinfo dbname="INTERPRO" version="108.0"/></release>
+<interpro id="IPR000001" type="Domain"><name>First</name><member_list>
+<db_xref db="PFAM" dbkey="PF00051" name="Kringle"/>
+</member_list></interpro>
+<interpro id="IPR000002" type="Family"><name>Second</name><member_list>
+<db_xref db="PFAM" dbkey="PF00051" name="Kringle"/>
+</member_list></interpro></interprodb>"""
+    source = _source(
+        tmp_path,
+        mapping_rows=(
+            "P12345\tIPR000001\tFirst\tPF00051\t10\t80",
+            "P12345\tIPR000002\tSecond\tPF00051\t10\t80",
+        ),
+        xml_entries=xml,
+    )
+    path = tmp_path / "interpro.duckdb"
+    source.write_duckdb(path)
+
+    reopened = InterProDatabase.from_duckdb(path)
+    with reopened.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM term_xref").fetchone() == (2,)
 
 
 @pytest.mark.parametrize("value", ["null", "{}"])
