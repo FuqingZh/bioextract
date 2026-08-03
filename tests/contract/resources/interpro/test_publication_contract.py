@@ -6,13 +6,19 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from bioextract.errors import CapabilityError
 from bioextract.interpro import InterProDatabase
 
 
-def _source(tmp_path: Path, *, with_xml: bool = True) -> InterProDatabase:
+def _source(
+    tmp_path: Path,
+    *,
+    with_xml: bool = True,
+    mapping_rows: tuple[str, ...] = ("P12345\tIPR000001\tKringle\tPF00051\t10\t80",),
+) -> InterProDatabase:
     mapping = tmp_path / "protein2ipr.dat.gz"
     with gzip.open(mapping, "wt", encoding="utf-8") as handle:
-        handle.write("P12345\tIPR000001\tKringle\tPF00051\t10\t80\n")
+        handle.write("\n".join(mapping_rows) + "\n")
     if not with_xml:
         return InterProDatabase.from_mapping_files(protein_to_interpro=mapping)
     xml = tmp_path / "interpro.xml.gz"
@@ -119,6 +125,40 @@ def test_reopened_grouped_selection_preserves_unique_fan_out_and_unmatched(
     ]
 
 
+def test_reopened_selection_queries_only_unique_input_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    reopened = InterProDatabase.from_duckdb(path)
+
+    selection = reopened.select_ids(["P12345"])
+
+    def reject_full_mapping(_database: InterProDatabase) -> None:
+        raise AssertionError("selection must not extract the full mapping")
+
+    monkeypatch.setattr(InterProDatabase, "extract_mapping", reject_full_mapping)
+    assert selection.extract_mapping().height == 1
+
+
+def test_reopened_full_mapping_preserves_source_deduplication_and_order(
+    tmp_path: Path,
+) -> None:
+    duplicate = "P12345\tIPR000001\tKringle\tPF00051\t10\t80"
+    source = _source(tmp_path, mapping_rows=(duplicate, duplicate))
+    expected = source.extract_mapping()
+    path = tmp_path / "interpro.duckdb"
+    source.write_duckdb(path)
+
+    assert InterProDatabase.from_duckdb(path).extract_mapping().equals(expected)
+
+
+def test_source_handle_connect_reports_missing_capability(tmp_path: Path) -> None:
+    with pytest.raises(CapabilityError, match="from_duckdb"):
+        _source(tmp_path).connect()
+
+
 @pytest.mark.parametrize(
     ("statement", "message"),
     [
@@ -182,3 +222,38 @@ def test_atomic_if_exists_preserves_previous_publication(tmp_path: Path) -> None
     with pytest.raises(FileExistsError):
         source.write_duckdb(path)
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "DELETE FROM _bioextract.metadata WHERE key LIKE 'bioextract.release_version%'",
+        "UPDATE _bioextract.metadata SET value='caller' "
+        "WHERE key='bioextract.release_version_source'",
+    ],
+)
+def test_xml_profile_requires_official_release_metadata(
+    tmp_path: Path,
+    statement: str,
+) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(statement)
+
+    with pytest.raises(ValueError, match="official release metadata"):
+        InterProDatabase.from_duckdb(path)
+
+
+def test_mapping_only_profile_rejects_forged_release_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path, with_xml=False).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "INSERT INTO _bioextract.metadata VALUES "
+            "('bioextract.release_version', '108.0'), "
+            "('bioextract.release_version_source', 'caller')"
+        )
+
+    with pytest.raises(ValueError, match="mapping-only publication"):
+        InterProDatabase.from_duckdb(path)

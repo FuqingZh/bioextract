@@ -23,14 +23,17 @@ from bioextract._tidy import (
     TidyDataset,
     TidySource,
 )
+from bioextract.errors import CapabilityError
 
 from ._pfam import build_pfam_tidy_dataset, read_interpro_release_version
 from .constant import (
     ASSET_SPECS,
+    COLS_MAPPING,
     MEDIA_TYPE_TSV_GZIP,
     MEDIA_TYPE_XML_GZIP,
     SCHEMA_GROUP_INPUT_IDS,
     SCHEMA_GROUPS,
+    SCHEMA_MAPPING,
     SCHEMA_UNMAPPED,
     SCHEMA_VERSION,
     InterProNamespace,
@@ -168,7 +171,7 @@ class InterProDatabase:
             True
         """
         if self._publication_path is None:
-            raise ValueError("connect() requires InterProDatabase.from_duckdb()")
+            raise CapabilityError("connect() requires InterProDatabase.from_duckdb()")
         return duckdb.connect(str(self._publication_path), read_only=True)
 
     def select_ids(
@@ -268,10 +271,15 @@ class InterProDatabase:
         if self._df_mapping is None:
             if self._publication_path is not None:
                 with self.connect() as connection:
-                    self._df_mapping = pl.read_database(  # pyright: ignore[reportUnknownMemberType]  # Polars-DuckDB boundary
-                        "SELECT * FROM mapping", connection
-                    ).rename(
-                        {name: source for source, name in _MAPPING_COLUMNS.items()}
+                    self._df_mapping = (
+                        pl.read_database(  # pyright: ignore[reportUnknownMemberType]  # Polars-DuckDB boundary
+                            "SELECT * FROM mapping", connection
+                        )
+                        .rename(
+                            {name: source for source, name in _MAPPING_COLUMNS.items()}
+                        )
+                        .unique()
+                        .sort(COLS_MAPPING)
                     )
             else:
                 self._df_mapping = read_mapping_frame(
@@ -523,10 +531,30 @@ class InterProSelection:
         """
         if self._df_mapping is None:
             if self.dataset._publication_path is not None:  # pyright: ignore[reportPrivateUsage]
+                with self.dataset.connect() as connection:
+                    connection.execute(
+                        "CREATE TEMP TABLE _interpro_input_id(InputId VARCHAR PRIMARY KEY)"
+                    )
+                    connection.executemany(
+                        "INSERT INTO _interpro_input_id VALUES (?)",
+                        self._df_input_ids.iter_rows(),
+                    )
+                    rows = connection.execute(
+                        "SELECT mapping.* FROM mapping INNER JOIN "
+                        "_interpro_input_id AS input "
+                        'ON mapping.uniprot_id=input."InputId"'
+                    ).fetchall()
+                    selected_mapping = (
+                        (
+                            pl.DataFrame(rows, schema=SCHEMA_MAPPING, orient="row")
+                            if rows
+                            else pl.DataFrame(schema=SCHEMA_MAPPING)
+                        )
+                        .unique()
+                        .sort(COLS_MAPPING)
+                    )
                 selected = extract_mapping_frame(
-                    self.dataset.extract_mapping(),
-                    self._df_input_ids,
-                    namespace=self.namespace,
+                    selected_mapping, self._df_input_ids, namespace=self.namespace
                 )
                 if self._df_group_membership is None:
                     self._df_mapping = selected
@@ -674,6 +702,21 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
             expected_capabilities, expected_tables, expected_sources = expected
             if capabilities != expected_capabilities:
                 raise ValueError("InterPro capability inventory is unsupported")
+            release_version = metadata.get("bioextract.release_version")
+            release_source = metadata.get("bioextract.release_version_source")
+            if "pfam" in capabilities:
+                if (
+                    not isinstance(release_version, str)
+                    or not release_version.strip()
+                    or release_source != "official_metadata"
+                ):
+                    raise ValueError(
+                        "InterPro XML publication requires official release metadata"
+                    )
+            elif release_version is not None or release_source is not None:
+                raise ValueError(
+                    "InterPro mapping-only publication cannot declare release metadata"
+                )
 
             source_rows = connection.execute(
                 "SELECT logical_name, display_path, bytes, media_type, sha256 "
@@ -762,7 +805,7 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
             }
             if observed_mappings != expected_mappings:
                 raise ValueError("InterPro column provenance inventory is unsupported")
-            return capabilities, metadata.get("bioextract.release_version")
+            return capabilities, release_version
     except duckdb.Error as error:
         raise ValueError(f"Cannot open InterPro DuckDB publication: {path}") from error
 
