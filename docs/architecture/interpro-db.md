@@ -130,7 +130,9 @@ without forcing a full materialized DataFrame before write.
 resource identity, resource schema version, source profile, capability list,
 source-role inventory, table names and roles, physical column types, row
 counts, and column provenance. `connect()` returns a new caller-owned read-only
-DuckDB connection on every call.
+DuckDB connection on every call. Source-build content validation is persisted
+as the profile-bound `bioextract.interpro_content_validation` result; reopen
+checks that bounded result and does not rescan billion-row biological tables.
 
 ## Pfam Compact Contract
 
@@ -171,7 +173,9 @@ InterPro reference.
 
 The publication resource schema is `interpro-v1`. The source profile and
 `bioextract.capabilities` distinguish mapping-only from mapping-plus-Pfam
-publications. Source hashes remain an optional writer cost.
+publications. The corresponding persisted validation results are
+`mapping-v1` and `mapping-pfam-v1`. Source hashes remain an optional writer
+cost.
 
 All three published frames remain lazy. XML parsing materializes one compact
 Pfam metadata index, and a streaming raw-file aggregation materializes one

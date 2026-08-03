@@ -304,44 +304,18 @@ def test_mapping_only_profile_rejects_forged_release_metadata(tmp_path: Path) ->
         InterProDatabase.from_duckdb(path)
 
 
-@pytest.mark.parametrize("column", ["interpro_type", "member_db"])
-def test_xml_profile_rejects_incomplete_mapping_enrichment(
+def test_xml_profile_requires_persisted_content_validation_result(
     tmp_path: Path,
-    column: str,
 ) -> None:
     path = tmp_path / "interpro.duckdb"
     _source(tmp_path).write_duckdb(path)
     with duckdb.connect(str(path)) as connection:
-        connection.execute(f'UPDATE mapping SET "{column}"=NULL')
-
-    with pytest.raises(IntegrityError, match="incomplete mapping enrichment"):
-        InterProDatabase.from_duckdb(path)
-
-
-@pytest.mark.parametrize(
-    "statement",
-    [
-        "UPDATE term SET pfam_name=''",
-        "UPDATE mapping SET member_db_id='INVALID' WHERE member_db='PFAM'; "
-        "UPDATE protein_term SET pfam_id='INVALID'; "
-        "UPDATE term SET pfam_id='INVALID'; "
-        "UPDATE term_xref SET pfam_id='INVALID'",
-    ],
-)
-def test_xml_profile_rejects_inconsistent_compact_pfam_relations(
-    tmp_path: Path,
-    statement: str,
-) -> None:
-    path = tmp_path / "interpro.duckdb"
-    _source(tmp_path).write_duckdb(path)
-    with duckdb.connect(str(path)) as connection:
-        connection.execute(statement)
         connection.execute(
-            "UPDATE _bioextract.table_info SET row_count=(SELECT count(*) FROM term) "
-            "WHERE table_name='term'"
+            "UPDATE _bioextract.metadata SET value='mapping-v1' "
+            "WHERE key='bioextract.interpro_content_validation'"
         )
 
-    with pytest.raises(IntegrityError, match="compact Pfam relations"):
+    with pytest.raises(IntegrityError, match="content-validation result"):
         InterProDatabase.from_duckdb(path)
 
 
@@ -399,16 +373,6 @@ def test_from_duckdb_rejects_unrecorded_main_schema_view(tmp_path: Path) -> None
         InterProDatabase.from_duckdb(path)
 
 
-def test_mapping_only_profile_rejects_xml_derived_enrichment(tmp_path: Path) -> None:
-    path = tmp_path / "interpro.duckdb"
-    _source(tmp_path, with_xml=False).write_duckdb(path)
-    with duckdb.connect(str(path)) as connection:
-        connection.execute("UPDATE mapping SET member_db='PFAM'")
-
-    with pytest.raises(IntegrityError, match="XML-derived enrichment"):
-        InterProDatabase.from_duckdb(path)
-
-
 def test_from_duckdb_rejects_duplicate_metadata_keys(tmp_path: Path) -> None:
     path = tmp_path / "interpro.duckdb"
     _source(tmp_path).write_duckdb(path)
@@ -423,4 +387,21 @@ def test_from_duckdb_rejects_duplicate_metadata_keys(tmp_path: Path) -> None:
         )
 
     with pytest.raises(IntegrityError, match="duplicate metadata keys"):
+        InterProDatabase.from_duckdb(path)
+
+
+def test_from_duckdb_rejects_duplicate_table_info_keys(tmp_path: Path) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "CREATE TABLE table_info_copy AS SELECT * FROM _bioextract.table_info; "
+            "DROP TABLE _bioextract.table_info; "
+            "CREATE TABLE _bioextract.table_info AS SELECT * FROM table_info_copy; "
+            "INSERT INTO _bioextract.table_info "
+            "SELECT * FROM table_info_copy WHERE table_name='mapping'; "
+            "DROP TABLE table_info_copy"
+        )
+
+    with pytest.raises(IntegrityError, match="duplicate table-info keys"):
         InterProDatabase.from_duckdb(path)

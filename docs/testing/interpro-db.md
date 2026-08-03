@@ -37,7 +37,8 @@ It does not cover:
   `term_xref` in one DuckDB.
 - `from_duckdb()` rejects non-v1 metadata and forged resource, profile,
   capability, source-role, table-role, schema/type, row-count, and column
-  provenance inventories.
+  provenance inventories, including an incompatible persisted InterPro
+  content-validation result.
 - `connect()` returns distinct caller-owned read-only connections.
 - reopened selections preserve normalization, unique lookup, grouped fan-out,
   and unmatched behavior.

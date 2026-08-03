@@ -366,7 +366,12 @@ class InterProDatabase:
                     "mapping,pfam"
                     if self.snapshot.file_interpro_xml is not None
                     else "mapping"
-                )
+                ),
+                "bioextract.interpro_content_validation": (
+                    "mapping-pfam-v1"
+                    if self.snapshot.file_interpro_xml is not None
+                    else "mapping-v1"
+                ),
             },
         )
         if self.snapshot.file_interpro_xml is None:
@@ -716,6 +721,16 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
             expected_capabilities, expected_tables, expected_sources = expected
             if capabilities != expected_capabilities:
                 raise ValueError("InterPro capability inventory is unsupported")
+            expected_content_validation = (
+                "mapping-pfam-v1" if "pfam" in capabilities else "mapping-v1"
+            )
+            if (
+                metadata.get("bioextract.interpro_content_validation")
+                != expected_content_validation
+            ):
+                raise ValueError(
+                    "InterPro publication content-validation result is unsupported"
+                )
             release_version = metadata.get("bioextract.release_version")
             release_source = metadata.get("bioextract.release_version_source")
             if "pfam" in capabilities:
@@ -782,6 +797,8 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
                 "SELECT table_name, table_role, row_count FROM _bioextract.table_info"
             ).fetchall()
             recorded = {str(row[0]): (str(row[1]), int(row[2])) for row in rows}
+            if len(recorded) != len(rows):
+                raise ValueError("InterPro publication has duplicate table-info keys")
             expected_relations = {(table, "BASE TABLE") for table in expected_tables}
             if (
                 set(recorded) != expected_tables
@@ -807,47 +824,6 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
                 ).fetchone()
                 if actual_count is None or int(actual_count[0]) != row_count:
                     raise ValueError(f"InterPro row-count drift: {table_name}")
-            if "pfam" in capabilities:
-                incomplete_enrichment = connection.execute(
-                    "SELECT count(*) FROM mapping WHERE "
-                    "interpro_type IS NULL OR trim(interpro_type)='' OR "
-                    "member_db IS NULL OR trim(member_db)=''"
-                ).fetchone()
-                if incomplete_enrichment is None or int(incomplete_enrichment[0]):
-                    raise ValueError(
-                        "InterPro XML publication has incomplete mapping enrichment"
-                    )
-                invalid_compact = connection.execute(
-                    "SELECT "
-                    "EXISTS(SELECT 1 FROM protein_term WHERE "
-                    "uniprot_id IS NULL OR trim(uniprot_id)='' OR "
-                    "pfam_id IS NULL OR trim(pfam_id)='' OR "
-                    "NOT regexp_full_match(pfam_id, 'PF[0-9]{5}')) OR "
-                    "EXISTS(SELECT 1 FROM term WHERE "
-                    "pfam_id IS NULL OR trim(pfam_id)='' OR "
-                    "NOT regexp_full_match(pfam_id, 'PF[0-9]{5}') OR "
-                    "pfam_name IS NULL OR trim(pfam_name)='') OR "
-                    "EXISTS(SELECT 1 FROM term_xref WHERE "
-                    "pfam_id IS NULL OR trim(pfam_id)='' OR "
-                    "NOT regexp_full_match(pfam_id, 'PF[0-9]{5}') OR "
-                    "interpro_id IS NULL OR trim(interpro_id)='' OR "
-                    "interpro_name IS NULL OR trim(interpro_name)='' OR "
-                    "interpro_type IS NULL OR trim(interpro_type)='')"
-                ).fetchone()
-                if invalid_compact is None or bool(invalid_compact[0]):
-                    raise ValueError(
-                        "InterPro publication has inconsistent compact Pfam relations"
-                    )
-            else:
-                unexpected_enrichment = connection.execute(
-                    "SELECT count(*) FROM mapping WHERE "
-                    "interpro_type IS NOT NULL OR member_db IS NOT NULL"
-                ).fetchone()
-                if unexpected_enrichment is None or int(unexpected_enrichment[0]):
-                    raise ValueError(
-                        "InterPro mapping-only publication has XML-derived enrichment"
-                    )
-
             observed_mappings = {
                 tuple(str(value) for value in row)
                 for row in connection.execute(
