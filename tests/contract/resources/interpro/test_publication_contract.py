@@ -142,6 +142,28 @@ def test_reopened_selection_queries_only_unique_input_ids(
     assert selection.extract_mapping().height == 1
 
 
+def test_reopened_empty_selections_preserve_source_typed_outputs(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    path = tmp_path / "interpro.duckdb"
+    source.write_duckdb(path)
+    reopened = InterProDatabase.from_duckdb(path)
+
+    for ids in ([], ["", "  "]):
+        expected = source.select_ids(ids)
+        actual = reopened.select_ids(ids)
+        assert actual.extract_mapping().equals(expected.extract_mapping())
+        assert actual.extract_unmatched_ids().equals(expected.extract_unmatched_ids())
+
+    expected_grouped = source.select_groups({"empty": ["", "  "]})
+    actual_grouped = reopened.select_groups({"empty": ["", "  "]})
+    assert actual_grouped.extract_mapping().equals(expected_grouped.extract_mapping())
+    assert actual_grouped.extract_unmatched_ids().equals(
+        expected_grouped.extract_unmatched_ids()
+    )
+
+
 def test_reopened_full_mapping_preserves_source_deduplication_and_order(
     tmp_path: Path,
 ) -> None:
@@ -157,6 +179,19 @@ def test_reopened_full_mapping_preserves_source_deduplication_and_order(
 def test_source_handle_connect_reports_missing_capability(tmp_path: Path) -> None:
     with pytest.raises(CapabilityError, match="from_duckdb"):
         _source(tmp_path).connect()
+
+
+def test_reopened_handle_reports_missing_publication_source_capability(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    reopened = InterProDatabase.from_duckdb(path)
+
+    with pytest.raises(CapabilityError, match="mapping source"):
+        reopened.build_tidy()
+    with pytest.raises(CapabilityError, match="mapping source"):
+        reopened.write_duckdb(tmp_path / "copy.duckdb")
 
 
 @pytest.mark.parametrize(

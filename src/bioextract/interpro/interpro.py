@@ -463,7 +463,7 @@ class InterProDatabase:
 
     def _require_mapping_source(self, *, action: str) -> Path:
         if self.snapshot.file_protein2ipr is None:
-            raise ValueError(f"InterPro mapping source is required to {action}")
+            raise CapabilityError(f"InterPro mapping source is required to {action}")
         return self.snapshot.file_protein2ipr
 
 
@@ -531,24 +531,27 @@ class InterProSelection:
         """
         if self._df_mapping is None:
             if self.dataset._publication_path is not None:  # pyright: ignore[reportPrivateUsage]
-                with self.dataset.connect() as connection:
-                    connection.execute(
-                        "CREATE TEMP TABLE _interpro_input_id(InputId VARCHAR PRIMARY KEY)"
-                    )
-                    connection.executemany(
-                        "INSERT INTO _interpro_input_id VALUES (?)",
-                        self._df_input_ids.iter_rows(),
-                    )
-                    rows = connection.execute(
-                        "SELECT mapping.* FROM mapping INNER JOIN "
-                        "_interpro_input_id AS input "
-                        'ON mapping.uniprot_id=input."InputId"'
-                    ).fetchall()
+                selected_mapping = pl.DataFrame(schema=SCHEMA_MAPPING)
+                if not self._df_input_ids.is_empty():
+                    with self.dataset.connect() as connection:
+                        connection.execute(
+                            "CREATE TEMP TABLE _interpro_input_id("
+                            "InputId VARCHAR PRIMARY KEY)"
+                        )
+                        connection.executemany(
+                            "INSERT INTO _interpro_input_id VALUES (?)",
+                            self._df_input_ids.iter_rows(),
+                        )
+                        rows = connection.execute(
+                            "SELECT mapping.* FROM mapping INNER JOIN "
+                            "_interpro_input_id AS input "
+                            'ON mapping.uniprot_id=input."InputId"'
+                        ).fetchall()
                     selected_mapping = (
                         (
                             pl.DataFrame(rows, schema=SCHEMA_MAPPING, orient="row")
                             if rows
-                            else pl.DataFrame(schema=SCHEMA_MAPPING)
+                            else selected_mapping
                         )
                         .unique()
                         .sort(COLS_MAPPING)

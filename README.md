@@ -242,8 +242,8 @@ publication is optional and exists for repeated analytical scans.
 
 ## InterPro and Pfam
 
-The independent InterPro mapping is Parquet. The related Pfam term, xref, and
-protein-term relations share one DuckDB:
+InterPro mapping and every Pfam term, xref, and protein-term relation available
+from the configured source files share one DuckDB publication:
 
 ```python
 from bioextract import InterProDatabase
