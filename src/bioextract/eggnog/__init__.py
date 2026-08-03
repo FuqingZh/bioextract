@@ -1,7 +1,7 @@
-from .eggnog import EggNOGDatabase, EggnogSelection, EggnogTidyDataset
+"""eggNOG database access."""
+
+from .eggnog import EggNOGDatabase
 
 __all__ = [
     "EggNOGDatabase",
-    "EggnogSelection",
-    "EggnogTidyDataset",
 ]

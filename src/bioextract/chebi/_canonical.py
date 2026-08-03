@@ -15,6 +15,7 @@ from typing import TextIO
 import polars as pl
 
 from bioextract._publication import RelationSpec, ValidationIssue
+from bioextract.errors import IntegrityError
 
 _CHEBI_ID = re.compile(r"^CHEBI:[0-9]+$")
 _QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
@@ -30,10 +31,6 @@ _RELATION_NAMES = {
     "RO:0018039": "is_enantiomer_of",
     "RO:0018040": "has_parent_hydride",
 }
-
-
-class ChEBIIntegrityError(RuntimeError):
-    """Raised when canonical ChEBI entities cannot be published safely."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,9 +99,7 @@ def _read_chebi_obo(
         if stanza_kind != "Term":
             return
         if not _CHEBI_ID.fullmatch(stanza_id):
-            raise ChEBIIntegrityError(
-                f"Canonical ChEBI term has invalid id: {stanza_id!r}"
-            )
+            raise IntegrityError(f"Canonical ChEBI term has invalid id: {stanza_id!r}")
         properties = _properties(stanza.get("property_value", []))
         subsets = stanza.get("subset", [])
         compounds.append(
@@ -203,10 +198,10 @@ def _read_chebi_obo(
 
     ids = [str(row["chebi_id"]) for row in compounds]
     if not ids:
-        raise ChEBIIntegrityError("Core ChEBI OBO contains no canonical compounds")
+        raise IntegrityError("Core ChEBI OBO contains no canonical compounds")
     duplicates = sorted(value for value, count in Counter(ids).items() if count > 1)
     if duplicates:
-        raise ChEBIIntegrityError(
+        raise IntegrityError(
             f"Core ChEBI OBO contains duplicate canonical IDs: {duplicates[:5]}"
         )
     canonical_ids = set(ids)

@@ -55,7 +55,7 @@ organism namespace when the raw files are non-empty.
 ## Public API
 
 ```python
-from bioextract.kegg import KEGGDatabase
+from bioextract import KEGGDatabase
 
 db = KEGGDatabase.from_mapping_files(
     uniprot_conversion="conv_uniprot.tsv",

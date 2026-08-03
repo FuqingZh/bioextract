@@ -30,12 +30,7 @@ from .ontology.tidy import (
     extract_subcell_frame,
 )
 
-__all__ = [
-    "GODatabase",
-    "GoNamespace",
-    "GoSubsetId",
-    "GoTidyDataset",
-]
+__all__ = ["GODatabase"]
 
 
 GoNamespace = Literal[
@@ -75,9 +70,6 @@ class _GoSnapshot:
     file_obo: Path
 
 
-GoTidyDataset = TidyDataset
-
-
 @dataclass(slots=True)
 class GODatabase:
     """Path-first access to a local Gene Ontology OBO snapshot.
@@ -103,7 +95,7 @@ class GODatabase:
     """
 
     snapshot: _GoSnapshot
-    _tidy: GoTidyDataset | None = field(default=None, init=False, repr=False)
+    _tidy: TidyDataset | None = field(default=None, init=False, repr=False)
 
     @classmethod
     def from_obo(
@@ -132,7 +124,7 @@ class GODatabase:
         source_path = _resolve_obo_input(Path(path))
         return cls(snapshot=_GoSnapshot(file_obo=source_path))
 
-    def build_tidy(self) -> GoTidyDataset:
+    def build_tidy(self) -> TidyDataset:
         """Build the GO tidy dataset.
 
         Returns:
@@ -159,7 +151,7 @@ class GODatabase:
                 subset_definitions=subset_definitions,
             ).items()
         }
-        self._tidy = GoTidyDataset(
+        self._tidy = TidyDataset(
             frames=frames,
             source=TidySource(
                 logical_name="go_obo",

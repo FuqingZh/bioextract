@@ -1,15 +1,7 @@
 """ChEBI and ChemOnt parsing and DuckDB publication."""
 
-from .chebi import (
-    ChEBICapabilityError,
-    ChEBICompoundSelection,
-    ChEBIDatabase,
-    ChEBIIntegrityError,
-)
+from .chebi import ChEBIDatabase
 
 __all__ = [
-    "ChEBICapabilityError",
-    "ChEBICompoundSelection",
     "ChEBIDatabase",
-    "ChEBIIntegrityError",
 ]

@@ -30,8 +30,7 @@ The MVP intentionally does not cover:
 ## Public API
 
 ```python
-from bioextract.go import GODatabase
-from bioextract.kegg import KEGGDatabase
+from bioextract import GODatabase, KEGGDatabase
 
 go = GODatabase.from_obo("go-basic.obo")
 go_tidy = go.build_tidy()

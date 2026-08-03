@@ -12,8 +12,9 @@ from typing import Literal
 
 import duckdb
 
+from bioextract.errors import CapabilityError
+
 from ._query import (
-    RheaCapabilityError,
     RheaReactionSelection,
     _RheaPublication,  # pyright: ignore[reportPrivateUsage]  # sibling publication type
     create_group_selection,
@@ -29,13 +30,7 @@ from .constant import (
     RheaNamespace,
 )
 
-__all__ = [
-    "RheaCapabilityError",
-    "RheaDatabase",
-    "RheaNamespace",
-    "RheaReactionSelection",
-    "RheaWriteResult",
-]
+__all__ = ["RheaDatabase"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,7 +273,7 @@ class RheaDatabase:
             An immutable query plan with eager ``extract_*`` terminals.
 
         Raises:
-            RheaCapabilityError: If this is not a publication-backed handle or
+            CapabilityError: If this is not a publication-backed handle or
                 its partial publication lacks the required relations.
             ValueError: If ``namespace`` or an identifier is invalid.
 
@@ -404,7 +399,7 @@ class RheaDatabase:
 
     def _require_publication(self) -> _RheaPublication:
         if self._publication is None:
-            raise RheaCapabilityError(
+            raise CapabilityError(
                 "Rhea domain selection requires a publication-backed handle; "
                 "write a DuckDB publication and open it with "
                 "RheaDatabase.from_duckdb()"

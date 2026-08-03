@@ -22,11 +22,11 @@ from bioextract._publication import (
     SourceFileRecord,
     write_duckdb_publication,
 )
+from bioextract.errors import CapabilityError
 
-from ._canonical import ChEBIIntegrityError, build_canonical_relations
+from ._canonical import build_canonical_relations
 from ._query import (
     SOURCE_SCHEMA_PROFILE,
-    ChEBICapabilityError,
     ChEBICompoundSelection,
     _ChEBIPublication,  # pyright: ignore[reportPrivateUsage]  # sibling publication type
     create_group_selection,
@@ -34,12 +34,7 @@ from ._query import (
     open_chebi_publication,
 )
 
-__all__ = [
-    "ChEBICapabilityError",
-    "ChEBICompoundSelection",
-    "ChEBIDatabase",
-    "ChEBIIntegrityError",
-]
+__all__ = ["ChEBIDatabase"]
 
 _SCHEMA_VERSION = "chebi-duckdb-v1"
 _TABLE_FILES = {
@@ -408,7 +403,7 @@ class ChEBIDatabase:
 
     def _require_publication(self) -> _ChEBIPublication:
         if self._publication is None:
-            raise ChEBICapabilityError(
+            raise CapabilityError(
                 "ChEBI domain selection requires a publication-backed handle; "
                 "write a DuckDB publication and open it with "
                 "ChEBIDatabase.from_duckdb()"

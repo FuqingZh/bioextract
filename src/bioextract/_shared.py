@@ -12,9 +12,10 @@ RE_UNIPROT_PIPE = re.compile(r"^[^|]+\|([^|]+)\|")
 
 @dataclass(frozen=True, slots=True)
 class GroupInputFrames:
-    """Carry a normalized group registry and its deduplicated input-ID rows."""
+    """Carry normalized groups, membership, and globally unique input IDs."""
 
     df_groups: pl.DataFrame
+    df_group_membership: pl.DataFrame
     df_input_ids: pl.DataFrame
 
 
@@ -109,8 +110,9 @@ def create_group_input_frames(
     """Build canonical group and grouped-input tables.
 
     Group labels are stripped and must remain non-empty and unique. Input IDs
-    use `normalize_input_id()` and are deduplicated within each group. Groups
-    with no retained IDs remain present in the group registry.
+    use `normalize_input_id()`. Membership rows are deduplicated within each
+    group, while the input table contains one globally unique row per normalized
+    ID. Groups with no retained IDs remain present in the group registry.
 
     Args:
         ids_by_group: Mapping of raw group labels to raw identifiers.
@@ -119,7 +121,7 @@ def create_group_input_frames(
             `InputId`.
 
     Returns:
-        Sorted group-registry and grouped-input tables.
+        Sorted group-registry, group-membership, and unique-input tables.
 
     Raises:
         ValueError: If a normalized group label is empty or duplicated.
@@ -147,12 +149,14 @@ def create_group_input_frames(
         df_groups = pl.DataFrame(schema=schema_groups)
 
     if not input_ids_col:
+        df_group_membership = pl.DataFrame(schema=schema_group_input_ids)
         return GroupInputFrames(
             df_groups=df_groups,
-            df_input_ids=pl.DataFrame(schema=schema_group_input_ids),
+            df_group_membership=df_group_membership,
+            df_input_ids=df_group_membership.select("InputId"),
         )
 
-    df_group_input_ids = (
+    df_group_membership = (
         pl.DataFrame(
             {"GroupId": group_ids_col, "InputId": input_ids_col},
             schema=schema_group_input_ids,
@@ -160,4 +164,9 @@ def create_group_input_frames(
         .unique()
         .sort("GroupId", "InputId")
     )
-    return GroupInputFrames(df_groups=df_groups, df_input_ids=df_group_input_ids)
+    df_input_ids = df_group_membership.select("InputId").unique().sort("InputId")
+    return GroupInputFrames(
+        df_groups=df_groups,
+        df_group_membership=df_group_membership,
+        df_input_ids=df_input_ids,
+    )

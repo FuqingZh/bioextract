@@ -47,7 +47,7 @@ If XML is absent, those columns remain null.
 ## Public API
 
 ```python
-from bioextract.interpro import InterProDatabase
+from bioextract import InterProDatabase
 
 db = InterProDatabase.from_mapping_files(
     protein_to_interpro="protein2ipr.dat.gz",
@@ -66,7 +66,7 @@ Grouped selections mirror the other DB contracts by prepending `GroupId`.
 Compact Pfam publication is an InterPro tidy configuration:
 
 ```python
-from bioextract.interpro import InterProDatabase
+from bioextract import InterProDatabase
 
 db = InterProDatabase.from_mapping_files(
     protein_to_interpro="108.0/raw/protein2ipr.dat.gz",

@@ -164,25 +164,24 @@ def select_mapping_frame(
     file_protein2ipr: Path,
     df_input_ids: pl.DataFrame,
     *,
+    df_group_membership: pl.DataFrame | None,
     namespace: InterProNamespace,
-    cols_group_id: tuple[str, ...],
     df_interpro_entry: pl.DataFrame,
     df_interpro_member: pl.DataFrame,
 ) -> pl.DataFrame:
     validate_namespace(namespace)
     if df_input_ids.height == 0:
-        cols_out = list(cols_group_id) + ["InputId", "InputNamespace"] + COLS_MAPPING
+        cols_group = ["GroupId"] if df_group_membership is not None else []
+        cols_out = cols_group + ["InputId", "InputNamespace"] + COLS_MAPPING
         return pl.DataFrame(
             schema={
-                **dict.fromkeys(
-                    list(cols_group_id) + ["InputId", "InputNamespace"], pl.String
-                ),
+                **dict.fromkeys(cols_group + ["InputId", "InputNamespace"], pl.String),
                 **SCHEMA_MAPPING,
             }
         ).select(cols_out)
 
     input_ids = set(df_input_ids.get_column("InputId").to_list())
-    return extract_mapping_frame(
+    df_selected = extract_mapping_frame(
         build_mapping_frame(
             iter_protein2ipr_records(file_protein2ipr, input_ids=input_ids),
             df_interpro_entry=df_interpro_entry,
@@ -190,8 +189,8 @@ def select_mapping_frame(
         ),
         df_input_ids,
         namespace=namespace,
-        cols_group_id=cols_group_id,
     )
+    return _expand_group_membership(df_selected, df_group_membership)
 
 
 def build_mapping_frame(
@@ -310,11 +309,9 @@ def extract_mapping_frame(
     df_input_ids: pl.DataFrame,
     *,
     namespace: InterProNamespace,
-    cols_group_id: tuple[str, ...],
 ) -> pl.DataFrame:
     validate_namespace(namespace)
-    cols_group = list(cols_group_id)
-    cols_out = cols_group + ["InputId", "InputNamespace"] + COLS_MAPPING
+    cols_out = ["InputId", "InputNamespace"] + COLS_MAPPING
     return (
         df_input_ids.join(
             df_mapping,
@@ -336,14 +333,35 @@ def extract_unmatched_ids_frame(
     df_input_ids: pl.DataFrame,
     df_mapping: pl.DataFrame,
     *,
-    cols_group_id: tuple[str, ...],
+    df_group_membership: pl.DataFrame | None,
 ) -> pl.DataFrame:
-    cols_index = list(cols_group_id) + ["InputId"]
-    df_mapped_input_ids = df_mapping.select(cols_index).unique().sort(cols_index)
+    df_mapped_input_ids = df_mapping.select("InputId").unique().sort("InputId")
+    df_unmatched = (
+        df_input_ids.join(df_mapped_input_ids, on="InputId", how="anti")
+        .select("InputId")
+        .sort("InputId")
+    )
+    if df_group_membership is None:
+        return df_unmatched
     return (
-        df_input_ids.join(df_mapped_input_ids, on=cols_index, how="anti")
-        .select(cols_index)
-        .sort(cols_index)
+        df_group_membership.join(df_unmatched, on="InputId", how="inner")
+        .select("GroupId", "InputId")
+        .sort("GroupId", "InputId")
+    )
+
+
+def _expand_group_membership(
+    df_mapping: pl.DataFrame,
+    df_group_membership: pl.DataFrame | None,
+) -> pl.DataFrame:
+    if df_group_membership is None:
+        return df_mapping
+    cols_out = ["GroupId", *df_mapping.columns]
+    return (
+        df_group_membership.join(df_mapping, on="InputId", how="inner")
+        .select(cols_out)
+        .unique()
+        .sort(cols_out)
     )
 
 

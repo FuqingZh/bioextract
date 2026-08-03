@@ -75,7 +75,7 @@ largest current input is `UniProt2Reactome.txt`, about 43 MB and 322,435 rows.
 ## Public API
 
 ```python
-from bioextract.reactome import ReactomeDatabase
+from bioextract import ReactomeDatabase
 
 db = ReactomeDatabase.from_files(
     uniprot_mapping="UniProt2Reactome.txt",

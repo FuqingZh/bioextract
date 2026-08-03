@@ -49,11 +49,24 @@ class UniProtSelection:
 
     database: UniProtDatabase = field(repr=False)
     namespace: str
-    input_rows: tuple[tuple[str | None, str], ...]
+    input_ids: tuple[str, ...]
+    group_membership: tuple[tuple[str | None, str], ...]
+    group_ids: tuple[str, ...] = ()
     taxon_ids: tuple[str, ...] = ()
+    _is_grouped: bool = field(default=False, repr=False)
+    _matches_cache: pl.DataFrame | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def extract_proteins(self) -> pl.DataFrame:
-        """Return matched protein facts in stable selection/accession order."""
+        """Return matched protein facts in stable selection/accession order.
+
+        Examples:
+            >>> selection.extract_proteins().select(  # doctest: +SKIP
+            ...     "UniProtId", "EntryName", "TaxonId"
+            ... ).columns
+            ['UniProtId', 'EntryName', 'TaxonId']
+        """
         return self._extract(
             "protein",
             "p.entry_name AS EntryName, p.is_reviewed AS IsReviewed, "
@@ -67,7 +80,14 @@ class UniProtSelection:
         )
 
     def extract_accessions(self) -> pl.DataFrame:
-        """Return ordered primary and secondary accessions for every match."""
+        """Return ordered primary and secondary accessions for every match.
+
+        Examples:
+            >>> selection.extract_accessions().select(  # doctest: +SKIP
+            ...     "Accession", "IsPrimaryAccession"
+            ... ).columns
+            ['Accession', 'IsPrimaryAccession']
+        """
         return self._extract(
             "protein_accession",
             "r.accession AS Accession, r.accession_order AS AccessionOrder, "
@@ -77,7 +97,14 @@ class UniProtSelection:
         )
 
     def extract_protein_names(self) -> pl.DataFrame:
-        """Return official protein names in source-defined name order."""
+        """Return official protein names in source-defined name order.
+
+        Examples:
+            >>> selection.extract_protein_names().select(  # doctest: +SKIP
+            ...     "NameType", "ProteinName"
+            ... ).columns
+            ['NameType', 'ProteinName']
+        """
         return self._extract(
             "protein_name",
             "r.name_type AS NameType, r.name AS ProteinName, r.name_order AS NameOrder",
@@ -86,7 +113,14 @@ class UniProtSelection:
         )
 
     def extract_gene_names(self) -> pl.DataFrame:
-        """Return parsed gene names in source-defined name order."""
+        """Return parsed gene names in source-defined name order.
+
+        Examples:
+            >>> selection.extract_gene_names().select(  # doctest: +SKIP
+            ...     "NameType", "GeneName"
+            ... ).columns
+            ['NameType', 'GeneName']
+        """
         return self._extract(
             "gene_name",
             "r.name_type AS NameType, r.name AS GeneName, r.name_order AS NameOrder",
@@ -95,7 +129,12 @@ class UniProtSelection:
         )
 
     def extract_ec_numbers(self) -> pl.DataFrame:
-        """Return distinct EC annotations ordered by EC number."""
+        """Return distinct EC annotations ordered by EC number.
+
+        Examples:
+            >>> selection.extract_ec_numbers().select("EcNumber").columns  # doctest: +SKIP
+            ['EcNumber']
+        """
         return self._extract(
             "protein_ec_number",
             "r.ec_number AS ECNumber",
@@ -104,7 +143,14 @@ class UniProtSelection:
         )
 
     def extract_go_annotations(self) -> pl.DataFrame:
-        """Return GO annotations ordered by GO identifier and aspect."""
+        """Return GO annotations ordered by GO identifier and aspect.
+
+        Examples:
+            >>> selection.extract_go_annotations().select(  # doctest: +SKIP
+            ...     "GOId", "Aspect", "EvidenceCode"
+            ... ).columns
+            ['GOId', 'Aspect', 'EvidenceCode']
+        """
         return self._extract(
             "protein_go_annotation",
             "r.go_id AS GOId, r.aspect AS Aspect, r.term_name AS TermName, "
@@ -116,7 +162,14 @@ class UniProtSelection:
     def extract_cross_references(
         self, databases: Iterable[str] | None = None
     ) -> pl.DataFrame:
-        """Return cross-references, optionally limited to database names."""
+        """Return cross-references, optionally limited to database names.
+
+        Examples:
+            >>> selection.extract_cross_references(["PDB"]).select(  # doctest: +SKIP
+            ...     "Database", "ExternalId"
+            ... ).columns
+            ['Database', 'ExternalId']
+        """
         values = tuple(dict.fromkeys(databases or ()))
         condition = ""
         parameters: list[object] = []
@@ -136,7 +189,14 @@ class UniProtSelection:
     def extract_comments(
         self, comment_types: Iterable[str] | None = None
     ) -> pl.DataFrame:
-        """Return comments, optionally limited to exact comment types."""
+        """Return comments, optionally limited to exact comment types.
+
+        Examples:
+            >>> selection.extract_comments(["FUNCTION"]).select(  # doctest: +SKIP
+            ...     "CommentType", "CommentText"
+            ... ).columns
+            ['CommentType', 'CommentText']
+        """
         values = tuple(dict.fromkeys(comment_types or ()))
         condition = ""
         parameters: list[object] = []
@@ -154,7 +214,14 @@ class UniProtSelection:
         )
 
     def extract_subcellular_locations(self) -> pl.DataFrame:
-        """Return individually parsed locations and their optional notes."""
+        """Return individually parsed locations and their optional notes.
+
+        Examples:
+            >>> selection.extract_subcellular_locations().select(  # doctest: +SKIP
+            ...     "SubcellularLocation", "SubcellularLocationNote"
+            ... ).columns
+            ['SubcellularLocation', 'SubcellularLocationNote']
+        """
         return self._extract(
             "protein_subcellular_location",
             "r.location AS SubcellularLocation, r.note AS SubcellularLocationNote",
@@ -163,7 +230,14 @@ class UniProtSelection:
         )
 
     def extract_keywords(self) -> pl.DataFrame:
-        """Return keywords in source-defined keyword order."""
+        """Return keywords in source-defined keyword order.
+
+        Examples:
+            >>> selection.extract_keywords().select(  # doctest: +SKIP
+            ...     "Keyword", "KeywordOrder"
+            ... ).columns
+            ['Keyword', 'KeywordOrder']
+        """
         return self._extract(
             "protein_keyword",
             "r.keyword AS Keyword, r.keyword_order AS KeywordOrder",
@@ -172,7 +246,14 @@ class UniProtSelection:
         )
 
     def extract_sequences(self, sequence_type: str = "canonical") -> pl.DataFrame:
-        """Return canonical, isoform, or all sequences in stable type order."""
+        """Return canonical, isoform, or all sequences in stable type order.
+
+        Examples:
+            >>> selection.extract_sequences("all").select(  # doctest: +SKIP
+            ...     "SequenceId", "SequenceType", "SHA256"
+            ... ).columns
+            ['SequenceId', 'SequenceType', 'SHA256']
+        """
         if sequence_type not in {"canonical", "isoform", "all"}:
             raise ValueError("sequence_type must be canonical, isoform, or all")
         condition = "" if sequence_type == "all" else " WHERE r.sequence_type = ?"
@@ -191,7 +272,14 @@ class UniProtSelection:
         )
 
     def extract_isoforms(self) -> pl.DataFrame:
-        """Return isoform definitions with normalized status and sequence link."""
+        """Return isoform definitions with normalized status and sequence link.
+
+        Examples:
+            >>> selection.extract_isoforms().select(  # doctest: +SKIP
+            ...     "IsoformId", "SequenceStatus", "SequenceId"
+            ... ).columns
+            ['IsoformId', 'SequenceStatus', 'SequenceId']
+        """
         return self._extract(
             "protein_isoform",
             "r.isoform_id AS IsoformId, r.name AS IsoformName, "
@@ -202,7 +290,14 @@ class UniProtSelection:
         )
 
     def extract_isoform_identifiers(self) -> pl.DataFrame:
-        """Return every current or old official IsoId for each product."""
+        """Return every current or old official IsoId for each product.
+
+        Examples:
+            >>> selection.extract_isoform_identifiers().select(  # doctest: +SKIP
+            ...     "IsoformId", "Identifier", "IsMain"
+            ... ).columns
+            ['IsoformId', 'Identifier', 'IsMain']
+        """
         return self._extract(
             "protein_isoform_identifier",
             "r.isoform_id AS IsoformId, r.identifier AS Identifier, "
@@ -212,7 +307,14 @@ class UniProtSelection:
         )
 
     def extract_sequence_variations(self) -> pl.DataFrame:
-        """Return DAT VAR_SEQ features ordered by coordinates and VSP ID."""
+        """Return DAT VAR_SEQ features ordered by coordinates and VSP ID.
+
+        Examples:
+            >>> selection.extract_sequence_variations().select(  # doctest: +SKIP
+            ...     "VariationId", "StartPosition", "EndPosition"
+            ... ).columns
+            ['VariationId', 'StartPosition', 'EndPosition']
+        """
         return self._extract(
             "protein_sequence_variation",
             "r.variation_id AS VariationId, r.start_position AS StartPosition, "
@@ -222,7 +324,14 @@ class UniProtSelection:
         )
 
     def extract_isoform_variations(self) -> pl.DataFrame:
-        """Return ordered isoform-to-VSP relationships."""
+        """Return ordered isoform-to-VSP relationships.
+
+        Examples:
+            >>> selection.extract_isoform_variations().select(  # doctest: +SKIP
+            ...     "IsoformId", "VariationId", "VariationOrder"
+            ... ).columns
+            ['IsoformId', 'VariationId', 'VariationOrder']
+        """
         return self._extract(
             "protein_isoform_variation",
             "r.isoform_id AS IsoformId, r.variation_id AS VariationId, "
@@ -232,8 +341,15 @@ class UniProtSelection:
         )
 
     def extract_unmatched_ids(self) -> pl.DataFrame:
-        """Return requested identifiers that matched no protein after filtering."""
-        frame = self._matches()
+        """Return requested identifiers that matched no protein after filtering.
+
+        Examples:
+            >>> selection.extract_unmatched_ids().select(  # doctest: +SKIP
+            ...     "InputId", "InputNamespace", "Reason"
+            ... ).columns
+            ['InputId', 'InputNamespace', 'Reason']
+        """
+        frame = self._identifier_matches()
         matched: set[str] = (
             set(frame["InputId"].cast(pl.String).to_list()) if frame.height else set()
         )
@@ -244,10 +360,10 @@ class UniProtSelection:
                 "InputNamespace": self.namespace,
                 "Reason": "not_found",
             }
-            for group, input_id in self.input_rows
+            for group, input_id in self.group_membership
             if input_id not in matched
         ]
-        return pl.DataFrame(
+        frame = pl.DataFrame(
             rows,
             schema={
                 "GroupId": pl.String,
@@ -256,6 +372,7 @@ class UniProtSelection:
                 "Reason": pl.String,
             },
         )
+        return frame if self._is_grouped else frame.drop("GroupId")
 
     def _extract(
         self,
@@ -289,24 +406,50 @@ class UniProtSelection:
                 f"{order_by}",
                 parameters or [],
             )
-            return _cursor_frame(cursor)
+            frame = _cursor_frame(cursor)
+        return frame if self._is_grouped else frame.drop("GroupId")
 
     def _matches(self) -> pl.DataFrame:
+        matches = self._identifier_matches()
+        membership = pl.DataFrame(
+            self.group_membership,
+            schema={"GroupId": pl.String, "InputId": pl.String},
+            orient="row",
+        )
+        if membership.is_empty() or matches.is_empty():
+            return pl.DataFrame(
+                schema={
+                    "GroupId": pl.String,
+                    "InputId": pl.String,
+                    "InputNamespace": pl.String,
+                    "primary_accession": pl.String,
+                }
+            )
+        return (
+            membership.join(matches, on="InputId", how="inner")
+            .select("GroupId", "InputId", "InputNamespace", "primary_accession")
+            .sort("GroupId", "InputId", "primary_accession")
+        )
+
+    def _identifier_matches(self) -> pl.DataFrame:
+        cached = self._matches_cache
+        if cached is not None:
+            return cached
+        matches = self._query_identifier_matches()
+        object.__setattr__(self, "_matches_cache", matches)
+        return matches
+
+    def _query_identifier_matches(self) -> pl.DataFrame:
         database = self.database
         path = database._duckdb_path  # pyright: ignore[reportPrivateUsage]
-        rows = [
-            {"GroupId": group, "InputId": input_id}
-            for group, input_id in self.input_rows
-        ]
-        inputs = pl.DataFrame(rows, schema={"GroupId": pl.String, "InputId": pl.String})
+        inputs = pl.DataFrame(
+            {"InputId": self.input_ids},
+            schema={"InputId": pl.String},
+        )
         with duckdb.connect(str(path), read_only=True) as connection:
-            connection.execute(
-                "CREATE TEMP TABLE _inputs(GroupId VARCHAR, InputId VARCHAR)"
-            )
+            connection.execute("CREATE TEMP TABLE _inputs(InputId VARCHAR)")
             if inputs.height:
-                connection.executemany(
-                    "INSERT INTO _inputs VALUES (?, ?)", inputs.rows()
-                )
+                connection.executemany("INSERT INTO _inputs VALUES (?)", inputs.rows())
             taxon_filter = ""
             parameters: list[object] = [self.namespace, self.namespace]
             if self.taxon_ids:
@@ -316,14 +459,14 @@ class UniProtSelection:
                 parameters.extend(self.taxon_ids)
             cursor = connection.execute(
                 f"""
-                SELECT DISTINCT i.GroupId, i.InputId, ? AS InputNamespace,
+                SELECT DISTINCT i.InputId, ? AS InputNamespace,
                        p.primary_accession
                 FROM _inputs i
                 JOIN protein_identifier p
                   ON p.identifier = i.InputId AND p.namespace = ?
                 JOIN protein pr USING (primary_accession)
                 {taxon_filter}
-                ORDER BY i.GroupId, i.InputId, p.primary_accession
+                ORDER BY i.InputId, p.primary_accession
                 """,
                 parameters,
             )
@@ -447,7 +590,9 @@ def make_selection(
     if namespace not in _NAMESPACES:
         raise ValueError(f"Unsupported UniProt identifier namespace: {namespace}")
     if groups is None:
-        rows = tuple((None, value) for value in _normalize_ids(ids))
+        input_ids = _normalize_ids(ids)
+        membership = tuple((None, value) for value in input_ids)
+        group_ids: tuple[str, ...] = ()
     else:
         normalized_groups: dict[str, Iterable[str]] = {}
         for group, values in groups.items():
@@ -459,13 +604,25 @@ def make_selection(
                     "UniProt group labels must be unique after normalization"
                 )
             normalized_groups[normalized_group] = values
-        rows = tuple(
-            (group, value)
-            for group, values in normalized_groups.items()
-            for value in _normalize_ids(values)
+        group_ids = tuple(sorted(normalized_groups))
+        membership = tuple(
+            sorted(
+                (group, value)
+                for group, values in normalized_groups.items()
+                for value in _normalize_ids(values)
+            )
         )
+        input_ids = tuple(sorted({value for _, value in membership}))
     normalized_taxa = normalize_taxids(tuple(taxon_ids or ()))
-    return UniProtSelection(database, namespace, rows, normalized_taxa)
+    return UniProtSelection(
+        database=database,
+        namespace=namespace,
+        input_ids=input_ids,
+        group_membership=membership,
+        group_ids=group_ids,
+        taxon_ids=normalized_taxa,
+        _is_grouped=groups is not None,
+    )
 
 
 def _normalize_ids(ids: Iterable[str]) -> tuple[str, ...]:

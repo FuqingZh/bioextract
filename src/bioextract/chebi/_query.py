@@ -13,6 +13,8 @@ from bioextract._publication import (
     validate_duckdb_metadata_v3,
     validate_duckdb_validation_state,
 )
+from bioextract._shared import validate_group_ids
+from bioextract.errors import CapabilityError
 
 if TYPE_CHECKING:
     from .chebi import ChEBIDatabase
@@ -35,10 +37,6 @@ _REASONS = {
 }
 
 
-class ChEBICapabilityError(RuntimeError):
-    """Raised when a ChEBI publication lacks data required by an operation."""
-
-
 @dataclass(frozen=True, slots=True)
 class _ChEBIPublication:
     path: Path
@@ -49,7 +47,6 @@ class _ChEBIPublication:
 
 @dataclass(frozen=True, slots=True)
 class _InputRow:
-    group_id: str | None
     input_id: str
     lookup_value: str
 
@@ -70,8 +67,13 @@ class ChEBICompoundSelection:
     min_star_rating: int
     include_obsolete: bool
     _input_rows: tuple[_InputRow, ...] = field(repr=False)
+    _group_ids: tuple[str, ...] = field(repr=False)
+    _group_membership: tuple[tuple[str, str], ...] = field(repr=False)
     _is_grouped: bool = field(repr=False)
     _candidate_cache: pl.DataFrame | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
+    _invalid_target_cache: frozenset[str] | None = field(
         default=None, init=False, repr=False, compare=False
     )
 
@@ -88,7 +90,6 @@ class ChEBICompoundSelection:
         if candidates.is_empty():
             frame = pl.DataFrame(
                 schema={
-                    "GroupId": pl.String,
                     "InputId": pl.String,
                     "InputNamespace": pl.String,
                     "ChEBIId": pl.String,
@@ -107,7 +108,6 @@ class ChEBICompoundSelection:
                     & (pl.col("_star_rating").fill_null(0) >= self.min_star_rating)
                 )
                 .select(
-                    "GroupId",
                     "InputId",
                     pl.lit(self.namespace).alias("InputNamespace"),
                     pl.col("_chebi_id").alias("ChEBIId"),
@@ -115,9 +115,18 @@ class ChEBICompoundSelection:
                     pl.col("_matched_value").alias("MatchedValue"),
                 )
                 .unique()
-                .sort(["GroupId", "InputId", "ChEBIId"])
+                .sort(["InputId", "ChEBIId"])
             )
-        return self._finalize(frame)
+        frame = self._expand_groups(frame)
+        sort_cols = (
+            ["GroupId", "InputId", "ChEBIId"]
+            if self._is_grouped
+            else [
+                "InputId",
+                "ChEBIId",
+            ]
+        )
+        return frame.sort(sort_cols)
 
     def extract_unmatched_ids(self) -> pl.DataFrame:
         """Return inputs without a policy-accepted match and a stable reason.
@@ -129,31 +138,18 @@ class ChEBICompoundSelection:
             >>> "Reason" in unmatched.columns  # doctest: +SKIP
             True
         """
-        matches = (
-            {
-                (row.get("GroupId"), row["InputId"])
-                for row in self.extract_matches()
-                .with_columns(pl.lit(None, dtype=pl.String).alias("GroupId"))
-                .to_dicts()
-            }
-            if not self._is_grouped
-            else {
-                (row["GroupId"], row["InputId"])
-                for row in self.extract_matches().to_dicts()
-            }
-        )
+        matches = set(self.extract_matches().get_column("InputId").to_list())
         candidate_rows = self._candidates().to_dicts()
-        by_input: dict[tuple[str | None, str], list[dict[str, object]]] = {}
+        by_input: dict[str, list[dict[str, object]]] = {}
         for row in candidate_rows:
-            by_input.setdefault((row["GroupId"], str(row["InputId"])), []).append(row)
+            by_input.setdefault(str(row["InputId"]), []).append(row)
         issue_inputs = self._invalid_target_inputs()
-        output: list[dict[str, str | None]] = []
+        output: list[dict[str, str]] = []
         for row in self._input_rows:
-            key = (row.group_id, row.input_id)
-            if key in matches:
+            if row.input_id in matches:
                 continue
-            candidates = by_input.get(key, [])
-            if key in issue_inputs or any(
+            candidates = by_input.get(row.input_id, [])
+            if row.input_id in issue_inputs or any(
                 not bool(candidate["_target_exists"]) for candidate in candidates
             ):
                 reason = "invalid_canonical_target"
@@ -168,7 +164,6 @@ class ChEBICompoundSelection:
                 reason = "not_found"
             output.append(
                 {
-                    "GroupId": row.group_id,
                     "InputId": row.input_id,
                     "InputNamespace": self.namespace,
                     "Reason": reason,
@@ -177,13 +172,14 @@ class ChEBICompoundSelection:
         frame = pl.DataFrame(
             output,
             schema={
-                "GroupId": pl.String,
                 "InputId": pl.String,
                 "InputNamespace": pl.String,
                 "Reason": pl.Enum(sorted(_REASONS)),
             },
         )
-        return self._finalize(frame)
+        frame = self._expand_groups(frame)
+        sort_cols = ["GroupId", "InputId"] if self._is_grouped else ["InputId"]
+        return frame.sort(sort_cols)
 
     def extract_compounds(self) -> pl.DataFrame:
         """Return one canonical compound row per accepted match.
@@ -454,14 +450,14 @@ class ChEBICompoundSelection:
             _create_input_table(connection, self._input_rows)
             if self.namespace == "chebi":
                 source = """
-                    SELECT input.group_id, input.input_id,
+                    SELECT input.input_id,
                            compound.chebi_id, 'primary_id' AS match_type,
                            input.lookup_value AS matched_value
                     FROM _input_id AS input
                     LEFT JOIN compound
                       ON compound.chebi_id = input.lookup_value
                     UNION ALL
-                    SELECT input.group_id, input.input_id,
+                    SELECT input.input_id,
                            secondary.chebi_id, 'secondary_id' AS match_type,
                            input.lookup_value AS matched_value
                     FROM _input_id AS input
@@ -471,7 +467,7 @@ class ChEBICompoundSelection:
             elif self.namespace in {"inchi", "inchi_key"}:
                 column = self.namespace
                 source = f"""
-                    SELECT input.group_id, input.input_id,
+                    SELECT input.input_id,
                            compound.chebi_id, '{column}' AS match_type,
                            input.lookup_value AS matched_value
                     FROM _input_id AS input
@@ -480,7 +476,7 @@ class ChEBICompoundSelection:
                 """
             else:
                 source = """
-                    SELECT input.group_id, input.input_id,
+                    SELECT input.input_id,
                            xref.chebi_id, 'cross_reference' AS match_type,
                            input.lookup_value AS matched_value
                     FROM _input_id AS input
@@ -495,7 +491,6 @@ class ChEBICompoundSelection:
                 f"""
                 WITH candidates AS ({source})
                 SELECT
-                    candidates.group_id,
                     candidates.input_id,
                     candidates.chebi_id,
                     candidates.match_type,
@@ -511,7 +506,6 @@ class ChEBICompoundSelection:
         frame = pl.DataFrame(
             rows,
             schema={
-                "GroupId": pl.String,
                 "InputId": pl.String,
                 "_chebi_id": pl.String,
                 "_match_type": pl.String,
@@ -525,7 +519,10 @@ class ChEBICompoundSelection:
         object.__setattr__(self, "_candidate_cache", frame)
         return frame.clone()
 
-    def _invalid_target_inputs(self) -> set[tuple[str | None, str]]:
+    def _invalid_target_inputs(self) -> frozenset[str]:
+        cached = self._invalid_target_cache
+        if cached is not None:
+            return cached
         publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         with duckdb.connect(str(publication.path), read_only=True) as connection:
             metadata_tables = {
@@ -538,11 +535,13 @@ class ChEBICompoundSelection:
                 ).fetchall()
             }
             if "validation_issue" not in metadata_tables:
-                return set()
+                result = frozenset[str]()
+                object.__setattr__(self, "_invalid_target_cache", result)
+                return result
             _create_input_table(connection, self._input_rows)
             rows = connection.execute(
                 """
-                SELECT DISTINCT input.group_id, input.input_id
+                SELECT DISTINCT input.input_id
                 FROM _input_id AS input
                 JOIN _bioextract.validation_issue AS issue
                   ON issue.issue_code = 'foreign_key_violation'
@@ -551,7 +550,9 @@ class ChEBICompoundSelection:
                 """,
                 [self.namespace],
             ).fetchall()
-        return {(row[0], str(row[1])) for row in rows}
+        result = frozenset(str(row[0]) for row in rows)
+        object.__setattr__(self, "_invalid_target_cache", result)
+        return result
 
     def _extract_joined(self, query: str) -> pl.DataFrame:
         matches = self.extract_matches()
@@ -573,9 +574,21 @@ class ChEBICompoundSelection:
         publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         missing = sorted(required - set(publication.tables))
         if missing:
-            raise ChEBICapabilityError(
+            raise CapabilityError(
                 f"ChEBI publication cannot {operation}; missing relations: {missing}"
             )
+
+    def _expand_groups(self, frame: pl.DataFrame) -> pl.DataFrame:
+        if not self._is_grouped:
+            return frame
+        membership = pl.DataFrame(
+            self._group_membership,
+            schema={"GroupId": pl.String, "InputId": pl.String},
+            orient="row",
+        )
+        return membership.join(frame, on="InputId", how="inner").select(
+            "GroupId", *frame.columns
+        )
 
     def _finalize(self, frame: pl.DataFrame) -> pl.DataFrame:
         if not self._is_grouped and "GroupId" in frame.columns:
@@ -748,6 +761,7 @@ def create_selection(
         min_star_rating=min_star_rating,
         include_obsolete=include_obsolete,
         grouped=False,
+        group_ids=(),
     )
 
 
@@ -759,17 +773,21 @@ def create_group_selection(
     min_star_rating: int,
     include_obsolete: bool,
 ) -> ChEBICompoundSelection:
+    group_ids: list[str] = []
+    inputs: list[tuple[str, str]] = []
+    for raw_group_id, values in ids_by_group.items():
+        group_id = str(raw_group_id).strip()
+        group_ids.append(group_id)
+        inputs.extend((group_id, value) for value in values)
+    validate_group_ids(group_ids)
     return _selection(
         database,
-        (
-            (str(group_id), value)
-            for group_id, values in ids_by_group.items()
-            for value in values
-        ),
+        inputs,
         namespace=namespace,
         min_star_rating=min_star_rating,
         include_obsolete=include_obsolete,
         grouped=True,
+        group_ids=tuple(sorted(group_ids)),
     )
 
 
@@ -781,6 +799,7 @@ def _selection(
     min_star_rating: int,
     include_obsolete: bool,
     grouped: bool,
+    group_ids: tuple[str, ...],
 ) -> ChEBICompoundSelection:
     publication = database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
     normalized_namespace = str(namespace).strip().lower()
@@ -791,20 +810,22 @@ def _selection(
         )
     if not 1 <= min_star_rating <= 3:
         raise ValueError("min_star_rating must be between 1 and 3")
-    rows: set[tuple[str | None, str, str]] = set()
+    rows: set[tuple[str, str]] = set()
+    group_membership: set[tuple[str, str]] = set()
     for group_id, value in inputs:
         text = str(value).strip()
         if not text:
             continue
         lookup = _normalize_lookup(text, normalized_namespace)
-        rows.add(
-            (group_id, lookup if normalized_namespace == "chebi" else text, lookup)
-        )
+        input_id = lookup if normalized_namespace == "chebi" else text
+        rows.add((input_id, lookup))
+        if grouped:
+            if group_id is None:
+                raise AssertionError("grouped ChEBI input lacks GroupId")
+            group_membership.add((group_id, input_id))
     input_rows = tuple(
-        _InputRow(group_id, input_id, lookup)
-        for group_id, input_id, lookup in sorted(
-            rows, key=lambda row: (row[0] or "", row[1], row[2])
-        )
+        _InputRow(input_id, lookup)
+        for input_id, lookup in sorted(rows, key=lambda row: (row[0], row[1]))
     )
     return ChEBICompoundSelection(
         database=database,
@@ -812,6 +833,8 @@ def _selection(
         min_star_rating=min_star_rating,
         include_obsolete=bool(include_obsolete),
         _input_rows=input_rows,
+        _group_ids=group_ids,
+        _group_membership=tuple(sorted(group_membership)),
         _is_grouped=grouped,
     )
 
@@ -837,7 +860,6 @@ def _create_input_table(
     connection.execute(
         """
         CREATE TEMP TABLE _input_id (
-            group_id VARCHAR,
             input_id VARCHAR NOT NULL,
             lookup_value VARCHAR NOT NULL
         )
@@ -845,8 +867,8 @@ def _create_input_table(
     )
     if rows:
         connection.executemany(
-            "INSERT INTO _input_id VALUES (?, ?, ?)",
-            [(row.group_id, row.input_id, row.lookup_value) for row in rows],
+            "INSERT INTO _input_id VALUES (?, ?)",
+            [(row.input_id, row.lookup_value) for row in rows],
         )
 
 

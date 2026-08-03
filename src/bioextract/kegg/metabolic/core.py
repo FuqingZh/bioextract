@@ -18,6 +18,8 @@ from bioextract._publication import (
     validate_duckdb_metadata_v3,
     validate_duckdb_validation_state,
 )
+from bioextract._shared import validate_group_ids
+from bioextract.errors import CapabilityError
 
 SCHEMA_VERSION = "kegg-metabolic-v0.1"
 SOURCE_SCHEMA_PROFILE = "kegg-metabolic-flat-files-v1"
@@ -87,16 +89,6 @@ _CAPABILITY_TABLES: Mapping[str, frozenset[str]] = {
     ),
     **{role: frozenset({role}) for role in RELATION_ROLES},
 }
-
-
-class KEGGMetabolicCapabilityError(RuntimeError):
-    """Raised when a partial KEGG publication lacks a required relation.
-
-    Examples:
-        >>> error = KEGGMetabolicCapabilityError("reaction_ko is unavailable")
-        >>> "reaction_ko" in str(error)
-        True
-    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -631,19 +623,107 @@ class KEGGMetabolicSelection:
     """
 
     publication: MetabolicPublication
-    inputs: tuple[tuple[str | None, str], ...]
+    input_ids: tuple[str, ...]
+    group_membership: tuple[tuple[str, str], ...] | None
+    group_ids: tuple[str, ...]
     namespace: KEGGMetabolicNamespace
     include_obsolete: bool = False
+    _matches_unique: pl.DataFrame | None = field(default=None, init=False, repr=False)
     _matches: pl.DataFrame | None = field(default=None, init=False, repr=False)
+    _lineage: pl.DataFrame | None = field(default=None, init=False, repr=False)
+    _unmatched_unique: pl.DataFrame | None = field(default=None, init=False, repr=False)
+
+    @classmethod
+    def from_ids(
+        cls,
+        publication: MetabolicPublication,
+        ids: Iterable[str],
+        namespace: KEGGMetabolicNamespace,
+        include_obsolete: bool = False,
+    ) -> KEGGMetabolicSelection:
+        """Create a selection whose normalized identifiers are globally unique.
+
+        Examples:
+            Collapse prefixed and unprefixed forms before querying:
+
+            >>> selection = KEGGMetabolicSelection.from_ids(  # doctest: +SKIP
+            ...     publication,
+            ...     ["cpd:C00001", "C00001"],
+            ...     "kegg_compound",
+            ... )
+            >>> selection.input_ids  # doctest: +SKIP
+            ('C00001',)
+        """
+        input_ids = tuple(
+            sorted(
+                {
+                    normalized
+                    for value in ids
+                    if (normalized := _normalize_input(str(value), namespace))
+                }
+            )
+        )
+        return cls(
+            publication=publication,
+            input_ids=input_ids,
+            group_membership=None,
+            group_ids=(),
+            namespace=namespace,
+            include_obsolete=include_obsolete,
+        )
+
+    @classmethod
+    def from_groups(
+        cls,
+        publication: MetabolicPublication,
+        ids_by_group: Mapping[str, Iterable[str]],
+        namespace: KEGGMetabolicNamespace,
+        include_obsolete: bool = False,
+    ) -> KEGGMetabolicSelection:
+        """Create a grouped selection with one lookup row per normalized ID.
+
+        Examples:
+            Retain both group memberships while deduplicating the lookup ID:
+
+            >>> selection = KEGGMetabolicSelection.from_groups(  # doctest: +SKIP
+            ...     publication,
+            ...     {"case": ["cpd:C00001"], "control": ["C00001"]},
+            ...     "kegg_compound",
+            ... )
+            >>> selection.input_ids  # doctest: +SKIP
+            ('C00001',)
+        """
+        group_ids = [str(group_id).strip() for group_id in ids_by_group]
+        validate_group_ids(group_ids)
+        membership = {
+            (group_id, normalized)
+            for group_id, values in zip(group_ids, ids_by_group.values(), strict=True)
+            for value in values
+            if (normalized := _normalize_input(str(value), namespace))
+        }
+        return cls(
+            publication=publication,
+            input_ids=tuple(sorted({input_id for _, input_id in membership})),
+            group_membership=tuple(sorted(membership)),
+            group_ids=tuple(sorted(group_ids)),
+            namespace=namespace,
+            include_obsolete=include_obsolete,
+        )
 
     @property
     def is_grouped(self) -> bool:
-        return any(group is not None for group, _ in self.inputs)
+        """Report whether extracted rows retain caller group labels.
+
+        Examples:
+            >>> selection.is_grouped  # doctest: +SKIP
+            True
+        """
+        return self.group_membership is not None
 
     def _require(self, *tables: str) -> None:
         missing = [x for x in tables if x not in self.publication.tables]
         if missing:
-            raise KEGGMetabolicCapabilityError(
+            raise CapabilityError(
                 f"KEGG metabolic publication lacks required relations: {missing}"
             )
 
@@ -653,10 +733,18 @@ class KEGGMetabolicSelection:
         Examples:
             >>> selection.extract_matches().select(  # doctest: +SKIP
             ...     "InputId", "EntityId"
-            ... ).head(1)
+            ... ).columns
+            ['InputId', 'EntityId']
         """
         if self._matches is not None:
             return self._matches
+        matches = self._resolve_unique_matches()
+        self._matches = self._expand_groups(matches)
+        return self._matches
+
+    def _resolve_unique_matches(self) -> pl.DataFrame:
+        if self._matches_unique is not None:
+            return self._matches_unique
         ns = self.namespace
         if ns not in NAMESPACES:
             raise ValueError(
@@ -664,6 +752,33 @@ class KEGGMetabolicSelection:
                     list(NAMESPACES)
                 }"
             )
+        columns = pl.Schema(
+            {
+                "InputId": pl.String,
+                "InputNamespace": pl.String,
+                "MatchType": pl.String,
+                "EntityType": pl.String,
+                "EntityId": pl.String,
+            }
+        )
+        if not self.input_ids:
+            self._matches_unique = _empty(columns)
+            return self._matches_unique
+
+        with duckdb.connect(str(self.publication.path), read_only=True) as connection:
+            _create_selection_input_table(connection, self.input_ids)
+            self._matches_unique = (
+                self._query_unique_matches(connection)
+                .cast(columns)
+                .unique()
+                .sort(list(columns))
+            )
+        return self._matches_unique
+
+    def _query_unique_matches(
+        self, connection: duckdb.DuckDBPyConnection
+    ) -> pl.DataFrame:
+        ns = self.namespace
         direct = {
             "kegg_compound": ("compound", "compound_id", "compound"),
             "kegg_reaction": ("reaction", "reaction_id", "reaction"),
@@ -694,230 +809,291 @@ class KEGGMetabolicSelection:
                 "reaction",
             ),
         }
-        rows: list[dict[str, Any]] = []
-        with duckdb.connect(str(self.publication.path), read_only=True) as con:
-            for group, raw in self.inputs:
-                value = _normalize_input(raw, ns)
-                if ns == "kegg_compound" and "compound" not in self.publication.tables:
-                    if "compound_reaction" in self.publication.tables:
-                        table, column, target, entity = (
-                            "compound_reaction",
-                            "compound_id",
-                            "compound_id",
-                            "compound",
-                        )
-                    else:
-                        table, column, target, entity = (
-                            "reaction_participant",
-                            "participant_id",
-                            "participant_id",
-                            "compound",
-                        )
-                    ids = [
-                        row[0]
-                        for row in con.execute(
-                            f"SELECT DISTINCT {target} FROM {table} WHERE {column}=?",
-                            [value],
-                        ).fetchall()
-                    ]
-                elif ns == "ec" and "enzyme" not in self.publication.tables:
-                    table, column, target, entity = (
-                        "reaction_enzyme",
-                        "ec_number",
-                        "reaction_id",
-                        "reaction",
-                    )
-                    ids = [
-                        row[0]
-                        for row in con.execute(
-                            f"SELECT DISTINCT {target} FROM {table} WHERE {column}=?",
-                            [value],
-                        ).fetchall()
-                    ]
-                elif ns == "kegg_module" and "module" not in self.publication.tables:
-                    table, column, target, entity = (
-                        "reaction_module",
-                        "module_id",
-                        "reaction_id",
-                        "reaction",
-                    )
-                    ids = [
-                        row[0]
-                        for row in con.execute(
-                            f"SELECT DISTINCT {target} FROM {table} WHERE {column}=?",
-                            [value],
-                        ).fetchall()
-                    ]
-                elif ns in direct:
-                    table, column, entity = direct[ns]
-                    self._require(table)
-                    if ns == "ec":
-                        status_clause = (
-                            "" if self.include_obsolete else " AND status='active'"
-                        )
-                        ids = [
-                            r[0]
-                            for r in con.execute(
-                                f"SELECT {column} FROM {table} "
-                                f"WHERE {column}=?{status_clause}",
-                                [value],
-                            ).fetchall()
-                        ]
-                        if (
-                            not ids
-                            and not self.include_obsolete
-                            and "enzyme_replacement" in self.publication.tables
-                        ):
-                            ids = [
-                                r[0]
-                                for r in con.execute(
-                                    """
-                                    WITH RECURSIVE replacement_path(ec_number) AS (
-                                        SELECT replacement_ec_number
-                                        FROM enzyme_replacement
-                                        WHERE ec_number = ?
-                                        UNION
-                                        SELECT edge.replacement_ec_number
-                                        FROM enzyme_replacement AS edge
-                                        JOIN replacement_path AS path
-                                          ON edge.ec_number = path.ec_number
-                                    )
-                                    SELECT DISTINCT enzyme.ec_number
-                                    FROM replacement_path
-                                    JOIN enzyme USING (ec_number)
-                                    WHERE enzyme.status = 'active'
-                                    ORDER BY enzyme.ec_number
-                                    """,
-                                    [value],
-                                ).fetchall()
-                            ]
-                    else:
-                        ids = [
-                            r[0]
-                            for r in con.execute(
-                                f"SELECT {column} FROM {table} WHERE {column}=?",
-                                [value],
-                            ).fetchall()
-                        ]
-                elif ns in xref:
-                    table, column, target, entity = xref[ns]
-                    self._require(table)
-                    ids = [
-                        r[0]
-                        for r in con.execute(
-                            f"SELECT {target} FROM {table} WHERE {column}=?", [value]
-                        ).fetchall()
-                    ]
-                else:
-                    table, column, target, entity = relation[ns]
-                    self._require(table)
-                    ids = [
-                        r[0]
-                        for r in con.execute(
-                            f"SELECT DISTINCT {target} FROM {table} WHERE {column}=?",
-                            [value],
-                        ).fetchall()
-                    ]
-                for ident in ids:
-                    rows.append(
-                        {
-                            "GroupId": group,
-                            "InputId": value,
-                            "InputNamespace": ns,
-                            "MatchType": (
-                                "replacement"
-                                if ns == "ec" and entity == "enzyme" and ident != value
-                                else "exact"
-                            ),
-                            "EntityType": entity,
-                            "EntityId": ident,
-                        }
-                    )
-        columns = [
-            "GroupId",
-            "InputId",
-            "InputNamespace",
-            "MatchType",
-            "EntityType",
-            "EntityId",
-        ]
-        self._matches = (
-            pl.DataFrame(rows, schema=dict.fromkeys(columns, pl.String))
-            if rows
-            else _empty(dict.fromkeys(columns, pl.String))
+        table: str
+        column: str
+        target: str
+        entity: str
+        namespace_filter = ""
+        if ns == "kegg_compound" and "compound" not in self.publication.tables:
+            if "compound_reaction" in self.publication.tables:
+                table, column, target, entity = (
+                    "compound_reaction",
+                    "compound_id",
+                    "compound_id",
+                    "compound",
+                )
+            else:
+                self._require("reaction_participant")
+                table, column, target, entity = (
+                    "reaction_participant",
+                    "participant_id",
+                    "participant_id",
+                    "compound",
+                )
+                namespace_filter = (
+                    " AND target_row.participant_namespace='kegg_compound'"
+                )
+        elif ns == "ec" and "enzyme" not in self.publication.tables:
+            self._require("reaction_enzyme")
+            table, column, target, entity = (
+                "reaction_enzyme",
+                "ec_number",
+                "reaction_id",
+                "reaction",
+            )
+        elif ns == "kegg_module" and "module" not in self.publication.tables:
+            self._require("reaction_module")
+            table, column, target, entity = (
+                "reaction_module",
+                "module_id",
+                "reaction_id",
+                "reaction",
+            )
+        elif ns == "ec":
+            self._require("enzyme")
+            return self._query_unique_ec_matches(connection)
+        elif ns in direct:
+            table, column, entity = direct[ns]
+            target = column
+            self._require(table)
+        elif ns in xref:
+            table, column, target, entity = xref[ns]
+            self._require(table)
+            if ns in {"chebi", "rhea"}:
+                namespace_filter = f" AND target_row.namespace='{ns}'"
+        else:
+            table, column, target, entity = relation[ns]
+            self._require(table)
+
+        return _query_frame(
+            connection,
+            f"""
+            SELECT DISTINCT
+                input.input_id AS "InputId",
+                '{ns}' AS "InputNamespace",
+                'exact' AS "MatchType",
+                '{entity}' AS "EntityType",
+                target_row.{target} AS "EntityId"
+            FROM _input_id AS input
+            JOIN {table} AS target_row
+              ON target_row.{column} = input.input_id
+            WHERE true{namespace_filter}
+            ORDER BY "InputId", "EntityId"
+            """,
         )
-        if not self.is_grouped:
-            self._matches = self._matches.drop("GroupId")
-        return self._matches
+
+    def _query_unique_ec_matches(
+        self, connection: duckdb.DuckDBPyConnection
+    ) -> pl.DataFrame:
+        if self.include_obsolete:
+            return _query_frame(
+                connection,
+                """
+                SELECT DISTINCT
+                    input.input_id AS "InputId",
+                    'ec' AS "InputNamespace",
+                    'exact' AS "MatchType",
+                    'enzyme' AS "EntityType",
+                    enzyme.ec_number AS "EntityId"
+                FROM _input_id AS input
+                JOIN enzyme ON enzyme.ec_number = input.input_id
+                ORDER BY "InputId", "EntityId"
+                """,
+            )
+
+        replacement = (
+            """
+            UNION ALL
+            SELECT DISTINCT
+                path.input_id AS "InputId",
+                'ec' AS "InputNamespace",
+                'replacement' AS "MatchType",
+                'enzyme' AS "EntityType",
+                enzyme.ec_number AS "EntityId"
+            FROM replacement_path AS path
+            JOIN enzyme ON enzyme.ec_number = path.ec_number
+            WHERE enzyme.status = 'active'
+            """
+            if "enzyme_replacement" in self.publication.tables
+            else ""
+        )
+        recursive_cte = (
+            """
+            WITH RECURSIVE replacement_path(input_id, ec_number) AS (
+                SELECT input.input_id, edge.replacement_ec_number
+                FROM _input_id AS input
+                JOIN enzyme_replacement AS edge
+                  ON edge.ec_number = input.input_id
+                UNION
+                SELECT path.input_id, edge.replacement_ec_number
+                FROM replacement_path AS path
+                JOIN enzyme_replacement AS edge
+                  ON edge.ec_number = path.ec_number
+            )
+            """
+            if replacement
+            else ""
+        )
+        return _query_frame(
+            connection,
+            f"""
+            {recursive_cte}
+            SELECT DISTINCT
+                input.input_id AS "InputId",
+                'ec' AS "InputNamespace",
+                'exact' AS "MatchType",
+                'enzyme' AS "EntityType",
+                enzyme.ec_number AS "EntityId"
+            FROM _input_id AS input
+            JOIN enzyme ON enzyme.ec_number = input.input_id
+            WHERE enzyme.status = 'active'
+            {replacement}
+            ORDER BY "InputId", "MatchType", "EntityId"
+            """,
+        )
+
+    def _expand_groups(self, frame: pl.DataFrame) -> pl.DataFrame:
+        if self.group_membership is None:
+            return frame
+        membership = pl.DataFrame(
+            self.group_membership,
+            schema={"GroupId": pl.String, "InputId": pl.String},
+            orient="row",
+        )
+        return (
+            membership.join(frame, on="InputId", how="inner")
+            .select("GroupId", *frame.columns)
+            .sort("GroupId", *frame.columns)
+        )
 
     def _reaction_lineage(self) -> pl.DataFrame:
+        if self._lineage is not None:
+            return self._lineage
         matches = self.extract_matches()
         prefix = ["GroupId"] if self.is_grouped else []
-        rows: list[dict[str, Any]] = []
-        with duckdb.connect(str(self.publication.path), read_only=True) as con:
-            for match in matches.iter_rows(named=True):
-                entity, ident = match["EntityType"], match["EntityId"]
-                reactions: list[str]
-                if entity == "reaction":
-                    reactions = [ident]
-                elif entity == "compound":
-                    if "compound_reaction" in self.publication.tables:
-                        query = (
-                            "SELECT reaction_id FROM compound_reaction "
-                            "WHERE compound_id=?"
-                        )
-                    else:
-                        self._require("reaction_participant")
-                        query = (
-                            "SELECT reaction_id FROM reaction_participant "
-                            "WHERE participant_namespace='kegg_compound' "
-                            "AND participant_id=?"
-                        )
-                    reactions = [r[0] for r in con.execute(query, [ident]).fetchall()]
-                elif entity == "enzyme":
-                    self._require("reaction_enzyme")
-                    reactions = [
-                        r[0]
-                        for r in con.execute(
-                            "SELECT reaction_id FROM reaction_enzyme WHERE ec_number=?",
-                            [ident],
-                        ).fetchall()
-                    ]
-                elif entity == "module":
-                    self._require("reaction_module")
-                    reactions = [
-                        r[0]
-                        for r in con.execute(
-                            "SELECT reaction_id FROM reaction_module WHERE module_id=?",
-                            [ident],
-                        ).fetchall()
-                    ]
-                else:
-                    reactions = []
-                for reaction_id in reactions:
-                    rows.append(
-                        {
-                            **{
-                                k: match[k]
-                                for k in (*prefix, "InputId", "InputNamespace")
-                            },
-                            "AnchorType": entity,
-                            "AnchorId": ident,
-                            "ReactionId": reaction_id,
-                        }
-                    )
-        schema = dict.fromkeys(
-            (
-                *prefix,
-                "InputId",
-                "InputNamespace",
-                "AnchorType",
-                "AnchorId",
-                "ReactionId",
-            ),
-            pl.String,
+        schema = pl.Schema(
+            dict.fromkeys(
+                (
+                    *prefix,
+                    "InputId",
+                    "InputNamespace",
+                    "AnchorType",
+                    "AnchorId",
+                    "ReactionId",
+                ),
+                pl.String,
+            )
         )
-        return pl.DataFrame(rows, schema=schema).unique() if rows else _empty(schema)
+        if matches.is_empty():
+            self._lineage = _empty(schema)
+            return self._lineage
+
+        entity_types = set(matches["EntityType"].to_list())
+        clauses = [
+            """
+            SELECT
+                selected.group_id,
+                selected.input_id,
+                selected.input_namespace,
+                selected.entity_type AS anchor_type,
+                selected.entity_id AS anchor_id,
+                selected.entity_id AS reaction_id
+            FROM _selected_anchor AS selected
+            WHERE selected.entity_type = 'reaction'
+            """
+        ]
+        if "compound" in entity_types:
+            if "compound_reaction" in self.publication.tables:
+                clauses.append(
+                    """
+                    SELECT
+                        selected.group_id,
+                        selected.input_id,
+                        selected.input_namespace,
+                        selected.entity_type,
+                        selected.entity_id,
+                        relation.reaction_id
+                    FROM _selected_anchor AS selected
+                    JOIN compound_reaction AS relation
+                      ON relation.compound_id = selected.entity_id
+                    WHERE selected.entity_type = 'compound'
+                    """
+                )
+            else:
+                self._require("reaction_participant")
+                clauses.append(
+                    """
+                    SELECT
+                        selected.group_id,
+                        selected.input_id,
+                        selected.input_namespace,
+                        selected.entity_type,
+                        selected.entity_id,
+                        participant.reaction_id
+                    FROM _selected_anchor AS selected
+                    JOIN reaction_participant AS participant
+                      ON participant.participant_id = selected.entity_id
+                     AND participant.participant_namespace = 'kegg_compound'
+                    WHERE selected.entity_type = 'compound'
+                    """
+                )
+        if "enzyme" in entity_types:
+            self._require("reaction_enzyme")
+            clauses.append(
+                """
+                SELECT
+                    selected.group_id,
+                    selected.input_id,
+                    selected.input_namespace,
+                    selected.entity_type,
+                    selected.entity_id,
+                    relation.reaction_id
+                FROM _selected_anchor AS selected
+                JOIN reaction_enzyme AS relation
+                  ON relation.ec_number = selected.entity_id
+                WHERE selected.entity_type = 'enzyme'
+                """
+            )
+        if "module" in entity_types:
+            self._require("reaction_module")
+            clauses.append(
+                """
+                SELECT
+                    selected.group_id,
+                    selected.input_id,
+                    selected.input_namespace,
+                    selected.entity_type,
+                    selected.entity_id,
+                    relation.reaction_id
+                FROM _selected_anchor AS selected
+                JOIN reaction_module AS relation
+                  ON relation.module_id = selected.entity_id
+                WHERE selected.entity_type = 'module'
+                """
+            )
+
+        with duckdb.connect(str(self.publication.path), read_only=True) as connection:
+            _create_selected_anchor_table(connection, matches)
+            lineage = _query_frame(
+                connection,
+                f"""
+                SELECT DISTINCT
+                    group_id AS "GroupId",
+                    input_id AS "InputId",
+                    input_namespace AS "InputNamespace",
+                    anchor_type AS "AnchorType",
+                    anchor_id AS "AnchorId",
+                    reaction_id AS "ReactionId"
+                FROM ({" UNION ALL ".join(clauses)})
+                ORDER BY "GroupId", "InputId", "AnchorType", "AnchorId", "ReactionId"
+                """,
+            )
+        self._lineage = (
+            lineage.select(*schema).cast(schema)
+            if self.is_grouped
+            else lineage.drop("GroupId").select(*schema).cast(schema)
+        )
+        return self._lineage
 
     def _extract(
         self, table: str, join_column: str, rename: Mapping[str, str] | None = None
@@ -937,7 +1113,10 @@ class KEGGMetabolicSelection:
         """Return selected reactions with input and anchor lineage.
 
         Examples:
-            >>> selection.extract_reactions()["ReactionId"].head(1)  # doctest: +SKIP
+            >>> selection.extract_reactions().select(  # doctest: +SKIP
+            ...     "ReactionId", "Equation"
+            ... ).columns
+            ['ReactionId', 'Equation']
         """
         return self._extract("reaction", "reaction_id")
 
@@ -947,7 +1126,8 @@ class KEGGMetabolicSelection:
         Examples:
             >>> selection.extract_participants().select(  # doctest: +SKIP
             ...     "ReactionId", "Side", "ParticipantId"
-            ... )
+            ... ).columns
+            ['ReactionId', 'Side', 'ParticipantId']
         """
         return self._extract("reaction_participant", "reaction_id")
 
@@ -955,7 +1135,10 @@ class KEGGMetabolicSelection:
         """Return EC links owned by the selected reactions.
 
         Examples:
-            >>> selection.extract_enzymes()["EcNumber"].head(1)  # doctest: +SKIP
+            >>> selection.extract_enzymes().select(  # doctest: +SKIP
+            ...     "ReactionId", "EcNumber"
+            ... ).columns
+            ['ReactionId', 'EcNumber']
         """
         return self._extract("reaction_enzyme", "reaction_id")
 
@@ -963,7 +1146,10 @@ class KEGGMetabolicSelection:
         """Return KO links owned by the selected reactions.
 
         Examples:
-            >>> selection.extract_kos()["KoId"].head(1)  # doctest: +SKIP
+            >>> selection.extract_kos().select(  # doctest: +SKIP
+            ...     "ReactionId", "KoId"
+            ... ).columns
+            ['ReactionId', 'KoId']
         """
         return self._extract("reaction_ko", "reaction_id")
 
@@ -971,7 +1157,10 @@ class KEGGMetabolicSelection:
         """Return module memberships of the selected reactions.
 
         Examples:
-            >>> selection.extract_modules()["ModuleId"].head(1)  # doctest: +SKIP
+            >>> selection.extract_modules().select(  # doctest: +SKIP
+            ...     "ReactionId", "ModuleId"
+            ... ).columns
+            ['ReactionId', 'ModuleId']
         """
         return self._extract("reaction_module", "reaction_id")
 
@@ -979,7 +1168,10 @@ class KEGGMetabolicSelection:
         """Return compound participants and available compound facts.
 
         Examples:
-            >>> selection.extract_compounds()["ParticipantId"].head(1)  # doctest: +SKIP
+            >>> selection.extract_compounds().select(  # doctest: +SKIP
+            ...     "ParticipantId", "Name"
+            ... ).columns
+            ['ParticipantId', 'Name']
         """
         participants = self.extract_participants().filter(
             pl.col("ParticipantNamespace") == "kegg_compound"
@@ -1000,9 +1192,10 @@ class KEGGMetabolicSelection:
         """Return reference-pathway memberships of selected reactions.
 
         Examples:
-            >>> selection.extract_pathway_memberships()[  # doctest: +SKIP
-            ...     "PathwayId"
-            ... ].head(1)
+            >>> selection.extract_pathway_memberships().select(  # doctest: +SKIP
+            ...     "ReactionId", "PathwayId"
+            ... ).columns
+            ['ReactionId', 'PathwayId']
         """
         return self._extract("reaction_pathway", "reaction_id")
 
@@ -1012,7 +1205,8 @@ class KEGGMetabolicSelection:
         Examples:
             >>> selection.extract_cross_references().select(  # doctest: +SKIP
             ...     "Namespace", "ExternalId"
-            ... )
+            ... ).columns
+            ['Namespace', 'ExternalId']
         """
         frames: list[pl.DataFrame] = []
         compounds = self.extract_compounds()
@@ -1046,41 +1240,97 @@ class KEGGMetabolicSelection:
         """Return normalized inputs that resolved to no canonical anchor.
 
         Examples:
-            >>> selection.extract_unmatched_ids().select("InputId", "Reason")  # doctest: +SKIP
+            >>> selection.extract_unmatched_ids().select(  # doctest: +SKIP
+            ...     "InputId", "Reason"
+            ... ).columns
+            ['InputId', 'Reason']
         """
-        matched = {
-            (r.get("GroupId"), r["InputId"])
-            for r in self.extract_matches().iter_rows(named=True)
-        }
-        rows: list[dict[str, str | None]] = []
-        with duckdb.connect(str(self.publication.path), read_only=True) as connection:
-            for group, raw in self.inputs:
-                value = _normalize_input(raw, self.namespace)
-                if (group, value) in matched:
-                    continue
-                reason = "not_found"
-                if self.namespace == "ec" and "enzyme" in self.publication.tables:
-                    status_row = connection.execute(
-                        "SELECT status FROM enzyme WHERE ec_number=?", [value]
-                    ).fetchone()
-                    if status_row is not None and status_row[0] == "deleted":
-                        reason = (
-                            "not_found"
-                            if self.include_obsolete
-                            else "obsolete_excluded"
-                        )
-                    elif status_row is not None and status_row[0] == "transferred":
-                        reason = "invalid_canonical_target"
-                rows.append({"GroupId": group, "InputId": value, "Reason": reason})
-        frame = pl.DataFrame(
-            rows,
-            schema={"GroupId": pl.String, "InputId": pl.String, "Reason": pl.String},
+        return self._expand_groups(self._resolve_unique_unmatched())
+
+    def _resolve_unique_unmatched(self) -> pl.DataFrame:
+        if self._unmatched_unique is not None:
+            return self._unmatched_unique
+        matched = set(self._resolve_unique_matches()["InputId"].to_list())
+        missing = tuple(
+            input_id for input_id in self.input_ids if input_id not in matched
         )
-        return frame if self.is_grouped else frame.drop("GroupId")
+        schema = {"InputId": pl.String, "Reason": pl.String}
+        if not missing:
+            self._unmatched_unique = _empty(schema)
+            return self._unmatched_unique
+
+        reasons = dict.fromkeys(missing, "not_found")
+        if self.namespace == "ec" and "enzyme" in self.publication.tables:
+            with duckdb.connect(
+                str(self.publication.path), read_only=True
+            ) as connection:
+                _create_selection_input_table(connection, missing)
+                statuses = connection.execute(
+                    """
+                    SELECT input.input_id, enzyme.status
+                    FROM _input_id AS input
+                    JOIN enzyme ON enzyme.ec_number = input.input_id
+                    """
+                ).fetchall()
+            for input_id, status in statuses:
+                if status == "deleted" and not self.include_obsolete:
+                    reasons[str(input_id)] = "obsolete_excluded"
+                elif status == "transferred":
+                    reasons[str(input_id)] = "invalid_canonical_target"
+
+        self._unmatched_unique = pl.DataFrame(
+            {
+                "InputId": missing,
+                "Reason": tuple(reasons[input_id] for input_id in missing),
+            },
+            schema=schema,
+        )
+        return self._unmatched_unique
+
+
+def _create_selection_input_table(
+    connection: duckdb.DuckDBPyConnection, input_ids: Sequence[str]
+) -> None:
+    connection.execute("CREATE TEMP TABLE _input_id(input_id VARCHAR PRIMARY KEY)")
+    connection.executemany(
+        "INSERT INTO _input_id VALUES (?)",
+        [(input_id,) for input_id in input_ids],
+    )
+
+
+def _create_selected_anchor_table(
+    connection: duckdb.DuckDBPyConnection, matches: pl.DataFrame
+) -> None:
+    connection.execute(
+        """
+        CREATE TEMP TABLE _selected_anchor(
+            group_id VARCHAR,
+            input_id VARCHAR NOT NULL,
+            input_namespace VARCHAR NOT NULL,
+            entity_type VARCHAR NOT NULL,
+            entity_id VARCHAR NOT NULL
+        )
+        """
+    )
+    connection.executemany(
+        "INSERT INTO _selected_anchor VALUES (?, ?, ?, ?, ?)",
+        [
+            (
+                row.get("GroupId"),
+                row["InputId"],
+                row["InputNamespace"],
+                row["EntityType"],
+                row["EntityId"],
+            )
+            for row in matches.iter_rows(named=True)
+        ],
+    )
 
 
 def _normalize_input(value: str, namespace: str) -> str:
     value = str(value).strip()
+    if not value:
+        return ""
     prefixes = {
         "kegg_compound": "cpd:",
         "kegg_reaction": "rn:",
@@ -1088,10 +1338,14 @@ def _normalize_input(value: str, namespace: str) -> str:
         "kegg_pathway": "path:",
     }
     value = value.removeprefix(prefixes.get(namespace, ""))
+    if not value:
+        return ""
     if namespace == "chebi":
-        value = f"CHEBI:{value.upper().removeprefix('CHEBI:')}"
+        identifier = value.upper().removeprefix("CHEBI:")
+        value = f"CHEBI:{identifier}" if identifier else ""
     if namespace == "rhea":
-        value = f"RHEA:{value.upper().removeprefix('RHEA:')}"
+        identifier = value.upper().removeprefix("RHEA:")
+        value = f"RHEA:{identifier}" if identifier else ""
     return value
 
 
@@ -1126,7 +1380,7 @@ def validate_selection_namespace(
         *(("kegg_pathway",) if "reaction_pathway" in tables else ()),
     }
     if namespace not in available:
-        raise KEGGMetabolicCapabilityError(
+        raise CapabilityError(
             f"KEGG metabolic namespace {namespace!r} is unavailable; "
             f"available namespaces: {sorted(available)}"
         )
@@ -1136,9 +1390,7 @@ def evaluate_modules(
     publication: MetabolicPublication, ko_ids: Iterable[str]
 ) -> pl.DataFrame:
     if "module_definition_node" not in publication.tables:
-        raise KEGGMetabolicCapabilityError(
-            "KEGG metabolic publication lacks module definitions"
-        )
+        raise CapabilityError("KEGG metabolic publication lacks module definitions")
     available = {str(x).strip().removeprefix("ko:") for x in ko_ids}
     with duckdb.connect(str(publication.path), read_only=True) as con:
         rows = con.execute(

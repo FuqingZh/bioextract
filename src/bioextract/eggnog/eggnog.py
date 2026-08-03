@@ -37,8 +37,6 @@ from .util import (
 
 __all__ = [
     "EggNOGDatabase",
-    "EggnogSelection",
-    "EggnogTidyDataset",
 ]
 
 
@@ -47,9 +45,6 @@ class _EggnogSnapshot:
     file_eggnog_db: Path
     file_cog_fun: Path | None
     dir_tmp: Path | None
-
-
-EggnogTidyDataset = TidyDataset
 
 
 @dataclass(slots=True)
@@ -194,6 +189,7 @@ class EggNOGDatabase:
             dataset=self,
             _df_input_ids=df_input_ids,
             _df_groups=None,
+            _df_group_membership=None,
         )
 
     def select_groups(
@@ -235,6 +231,7 @@ class EggNOGDatabase:
             dataset=self,
             _df_input_ids=grp_in_frames.df_input_ids,
             _df_groups=grp_in_frames.df_groups,
+            _df_group_membership=grp_in_frames.df_group_membership,
         )
 
     def write_parquet(
@@ -266,7 +263,7 @@ class EggNOGDatabase:
                 df_cog_fun=self.read_cog_fun(),
                 path=file_mapping_tsv,
             )
-            dataset = EggnogTidyDataset(
+            dataset = TidyDataset(
                 frames={"mapping": scan_mapping_tsv(file_mapping_tsv)},
                 source=self._tidy_sources(),
                 resource_schema_version=SCHEMA_VERSION,
@@ -349,6 +346,7 @@ class EggnogSelection:
     dataset: EggNOGDatabase
     _df_input_ids: pl.DataFrame = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
+    _df_group_membership: pl.DataFrame | None = field(repr=False)
     namespace: EggnogNamespace = field(
         default="eggnog_protein",
         init=False,
@@ -368,10 +366,6 @@ class EggnogSelection:
             False
         """
         return self._df_groups is not None
-
-    @property
-    def _col_group_id(self) -> tuple[str, ...]:
-        return ("GroupId",) if self.is_grouped else ()
 
     def extract_mapping(self) -> pl.DataFrame:
         """Extract mapping rows for the normalized selection.
@@ -398,8 +392,8 @@ class EggnogSelection:
                 file_eggnog_db=self.dataset.snapshot.file_eggnog_db,
                 dir_tmp=self.dataset.snapshot.dir_tmp,
                 df_input_ids=self._df_input_ids,
+                df_group_membership=self._df_group_membership,
                 namespace=self.namespace,
-                cols_group_id=self._col_group_id,
                 df_cog_fun=self.dataset.read_cog_fun(),
             )
         return self._df_mapping
@@ -425,7 +419,7 @@ class EggnogSelection:
             self._df_unmapped = extract_unmatched_ids_frame(
                 self._df_input_ids,
                 self.extract_mapping(),
-                cols_group_id=self._col_group_id,
+                df_group_membership=self._df_group_membership,
             )
         return self._df_unmapped
 

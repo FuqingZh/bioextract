@@ -116,7 +116,8 @@ publication. Opening validates the metadata-version-specific `_bioextract`
 tables, resource and
 schema identity, the complete `main` table inventory, and every recorded row
 count. Partial publications remain valid; operations fail with
-`RheaCapabilityError` only when their required relations are absent.
+`bioextract.errors.CapabilityError` only when their required relations are
+absent.
 
 The two selection entry points are:
 
