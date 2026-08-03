@@ -16,13 +16,13 @@ Automated tests cover:
 - direct relations plus cycle-safe `is_a` ancestor/descendant traversal;
 - canonical fail-fast behavior, old-target preservation, staging/WAL cleanup,
   orphan-row skipping, and validation issue persistence;
-- metadata v1 compatibility, v2 five-table requirements, unknown-version
-  rejection, inventory and count validation;
+- metadata v1 exact five-table requirements, rejection of every other version,
+  inventory validation, and count validation;
 - independent native read-only `connect()` calls and arbitrary SQL;
 - source-backed handles rejecting query operations before publication.
 
 Before a release is accepted, build the official FULL OBO plus SDF into
-`tidy/chebi.duckdb`, open it with `from_duckdb()`, query water
+the versioned `tidy/data.duckdb`, open it with `from_duckdb()`, query water
 (`CHEBI:15377`), exercise a secondary ID, external prefix, relation traversal,
 and unmatched case, then compare every `_bioextract.table_info` count with its
 live table. Finally verify an equality-only Rhea participant-to-ChEBI compound
