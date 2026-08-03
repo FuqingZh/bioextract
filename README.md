@@ -261,7 +261,8 @@ with published.connect() as connection:
 
 ## UniProt
 
-UniProt idmapping remains a separate lazy Parquet product:
+UniProt idmapping remains a separate lazy source profile and publishes one
+`mapping` table in DuckDB:
 
 ```python
 from bioextract import UniProtDatabase
@@ -269,10 +270,15 @@ from bioextract import UniProtDatabase
 UniProtDatabase.from_idmapping(
     "idmapping_selected.tab.gz",
     release_version="2026_01",
-).write_parquet(
-    "out/uniprot_idmapping.parquet",
+).write_duckdb(
+    "out/uniprot_idmapping.duckdb",
     taxon_ids=["9606", "10090"],
 )
+
+mapping = UniProtDatabase.from_duckdb("out/uniprot_idmapping.duckdb")
+human = mapping.read_mapping(taxon_ids=["9606"])
+with mapping.connect() as connection:
+    print(connection.sql("SELECT count(*) FROM mapping").fetchone())
 ```
 
 Reviewed UniProtKB is a multi-relation DuckDB publication:

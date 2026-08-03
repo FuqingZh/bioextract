@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import gzip
-import json
 from pathlib import Path
 
 import duckdb
@@ -103,8 +102,8 @@ def test_idmapping_is_lazy_and_requires_explicit_eager_scope(tmp_path: Path) -> 
         database.read_mapping()
     assert database.read_mapping(taxon_ids=["9606"]).height == 1
 
-    result = database.write_parquet(tmp_path / "mapping.parquet", taxon_ids=["9606"])
-    assert result.resource_schema_version == "uniprot-idmapping-selected-v0.1"
+    result = database.write_duckdb(tmp_path / "mapping.duckdb", taxon_ids=["9606"])
+    assert result.resource_schema_version == "uniprot-idmapping-duckdb-v1"
 
 
 @pytest.mark.parametrize("compressed", [False, True])
@@ -120,17 +119,14 @@ def test_idmapping_reads_plain_and_gzip(tmp_path: Path, compressed: bool) -> Non
     assert frame.select("UniProtId", "TaxId").to_dicts() == [
         {"UniProtId": "P12345", "TaxId": "9606"}
     ]
-    publication = tmp_path / f"published-{compressed}.parquet"
-    UniProtDatabase.from_idmapping(path).write_parquet(publication, taxon_ids=["9606"])
-    with duckdb.connect() as connection:
-        sources_json = connection.execute(
-            "SELECT decode(value) FROM parquet_kv_metadata(?) "
-            "WHERE CAST(key AS VARCHAR)='bioextract.sources'",
-            [str(publication)],
+    publication = tmp_path / f"published-{compressed}.duckdb"
+    UniProtDatabase.from_idmapping(path).write_duckdb(publication, taxon_ids=["9606"])
+    with UniProtDatabase.from_duckdb(publication).connect() as connection:
+        source_media_type = connection.execute(
+            "SELECT media_type FROM _bioextract.source_file"
         ).fetchone()
-    assert sources_json is not None
-    assert json.loads(sources_json[0])[0]["media_type"] == (
-        "text/tab-separated-values+gzip" if compressed else "text/tab-separated-values"
+    assert source_media_type == (
+        "text/tab-separated-values+gzip" if compressed else "text/tab-separated-values",
     )
 
 
@@ -140,18 +136,12 @@ def test_idmapping_parquet_and_hive_inputs(tmp_path: Path) -> None:
     parquet = tmp_path / "mapping.parquet"
     frame.write_parquet(parquet)
     assert UniProtDatabase.from_idmapping(parquet).scan_mapping().collect().height == 1
-    published = tmp_path / "republished.parquet"
-    UniProtDatabase.from_idmapping(parquet).write_parquet(published, taxon_ids=["9606"])
-    with duckdb.connect() as connection:
-        sources_json = connection.execute(
-            "SELECT decode(value) FROM parquet_kv_metadata(?) "
-            "WHERE CAST(key AS VARCHAR)='bioextract.sources'",
-            [str(published)],
-        ).fetchone()
-    assert sources_json is not None
-    assert (
-        json.loads(sources_json[0])[0]["media_type"] == "application/vnd.apache.parquet"
-    )
+    published = tmp_path / "republished.duckdb"
+    UniProtDatabase.from_idmapping(parquet).write_duckdb(published, taxon_ids=["9606"])
+    with UniProtDatabase.from_duckdb(published).connect() as connection:
+        assert connection.execute(
+            "SELECT media_type FROM _bioextract.source_file"
+        ).fetchone() == ("application/vnd.apache.parquet",)
 
     hive = tmp_path / "hive" / "TaxId=9606"
     hive.mkdir(parents=True)
@@ -172,9 +162,9 @@ def test_idmapping_taxon_validation_and_all_taxa_opt_in(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="TaxId"):
         database.scan_mapping(taxon_ids=["9606", ""])
     with pytest.raises(ValueError, match="allow_all_taxa"):
-        database.write_parquet(tmp_path / "blocked.parquet")
-    assert database.write_parquet(
-        tmp_path / "all.parquet", allow_all_taxa=True
+        database.write_duckdb(tmp_path / "blocked.duckdb")
+    assert database.write_duckdb(
+        tmp_path / "all.duckdb", allow_all_taxa=True
     ).path.is_file()
 
 

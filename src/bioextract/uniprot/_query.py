@@ -15,6 +15,7 @@ from ._knowledgebase import (
     SOURCE_SCHEMA_PROFILE,
     TABLE_SCHEMAS,
 )
+from .constant import IDMAPPING_SOURCE_SCHEMA_PROFILE, SCHEMA_MAPPING, SCHEMA_VERSION
 from .util import normalize_taxids
 
 if TYPE_CHECKING:
@@ -473,7 +474,7 @@ class UniProtSelection:
             return _cursor_frame(cursor)
 
 
-def validate_publication(path: Path) -> Mapping[str, str]:
+def validate_publication(path: Path) -> tuple[str, Mapping[str, str]]:
     with duckdb.connect(str(path), read_only=True) as connection:
         metadata_tables = {
             row[0]
@@ -499,7 +500,7 @@ def validate_publication(path: Path) -> Mapping[str, str]:
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
         if metadata.get("bioextract.metadata_schema_version") != "1":
-            raise ValueError("Unsupported UniProtKB metadata schema version")
+            raise ValueError("Unsupported UniProt metadata schema version")
         required_v1 = {
             "bioextract.resource_name",
             "bioextract.resource_schema_version",
@@ -512,7 +513,7 @@ def validate_publication(path: Path) -> Mapping[str, str]:
         }
         missing_v1 = sorted(required_v1 - set(metadata))
         if missing_v1:
-            raise ValueError(f"UniProtKB metadata v1 is missing keys: {missing_v1}")
+            raise ValueError(f"UniProt metadata v1 is missing keys: {missing_v1}")
         validate_duckdb_metadata_v1(connection, metadata)
         issue_count = connection.execute(
             "SELECT count(*) FROM _bioextract.validation_issue"
@@ -520,31 +521,66 @@ def validate_publication(path: Path) -> Mapping[str, str]:
         if issue_count is None or int(
             metadata.get("bioextract.validation_issue_count", "-1")
         ) != int(issue_count[0]):
-            raise ValueError("UniProtKB validation issue count mismatch")
+            raise ValueError("UniProt validation issue count mismatch")
         if metadata.get("bioextract.resource_name") != "uniprot":
             raise ValueError("DuckDB file is not a bioextract UniProt publication")
-        if (
-            metadata.get("bioextract.resource_schema_version")
-            != RESOURCE_SCHEMA_VERSION
+        profile_metadata = (
+            metadata.get("bioextract.resource_schema_version"),
+            metadata.get("bioextract.source_schema_profile"),
+        )
+        if profile_metadata == (SCHEMA_VERSION, IDMAPPING_SOURCE_SCHEMA_PROFILE):
+            profile = "idmapping"
+            expected_schemas = {"mapping": SCHEMA_MAPPING}
+            required_capabilities = {"bioextract.capability.mapping": "true"}
+            expected_capability_keys = set(required_capabilities)
+        elif profile_metadata == (RESOURCE_SCHEMA_VERSION, SOURCE_SCHEMA_PROFILE):
+            profile = "knowledgebase"
+            expected_schemas = TABLE_SCHEMAS
+            required_capabilities = {
+                "bioextract.capability.canonical_sequences": "true",
+                "bioextract.capability.isoform_definitions": "true",
+            }
+            expected_capability_keys = {
+                *required_capabilities,
+                "bioextract.capability.isoform_sequences",
+            }
+        else:
+            raise ValueError(
+                "Unsupported UniProt source schema profile or resource schema"
+            )
+        capability_metadata = {
+            key: value
+            for key, value in metadata.items()
+            if key.startswith("bioextract.capability.")
+        }
+        if any(
+            capability_metadata.get(key) != value
+            for key, value in required_capabilities.items()
         ):
-            raise ValueError("Unsupported UniProtKB resource schema version")
-        if metadata.get("bioextract.source_schema_profile") != SOURCE_SCHEMA_PROFILE:
-            raise ValueError("Unsupported UniProtKB source schema profile")
-        tables = {
-            row[0]
+            raise ValueError("Unsupported UniProt capability metadata")
+        if profile == "idmapping" and capability_metadata != required_capabilities:
+            raise ValueError("Unsupported UniProt idmapping capability inventory")
+        if profile == "knowledgebase" and (
+            set(capability_metadata) != expected_capability_keys
+            or capability_metadata["bioextract.capability.isoform_sequences"]
+            not in {"true", "false"}
+        ):
+            raise ValueError("Unsupported UniProtKB capability inventory")
+        relations = {
+            (str(row[0]), str(row[1]))
             for row in connection.execute(
-                "SELECT table_name FROM information_schema.tables "
+                "SELECT table_name, table_type FROM information_schema.tables "
                 "WHERE table_schema='main'"
             ).fetchall()
         }
-        expected_tables = set(TABLE_SCHEMAS)
-        if tables != expected_tables:
+        expected_tables = set(expected_schemas)
+        if relations != {(table, "BASE TABLE") for table in expected_tables}:
             raise ValueError(
                 "UniProtKB relation inventory mismatch: "
-                f"expected={sorted(expected_tables)}, actual={sorted(tables)}"
+                f"expected={sorted(expected_tables)}, actual={sorted(relations)}"
             )
         recorded_rows = connection.execute(
-            "SELECT table_name, row_count FROM _bioextract.table_info"
+            "SELECT table_name, table_role, row_count FROM _bioextract.table_info"
         ).fetchall()
         recorded_tables = [str(row[0]) for row in recorded_rows]
         if len(recorded_tables) != len(set(recorded_tables)):
@@ -554,8 +590,9 @@ def validate_publication(path: Path) -> Mapping[str, str]:
                 "UniProtKB table_info inventory mismatch: "
                 f"expected={sorted(expected_tables)}, actual={sorted(recorded_tables)}"
             )
-        recorded = dict(recorded_rows)
-        for table, schema in TABLE_SCHEMAS.items():
+        if any(str(row[1]) != "canonical" for row in recorded_rows):
+            raise ValueError("UniProt table_info role inventory is unsupported")
+        for table, schema in expected_schemas.items():
             actual_columns = connection.execute(
                 """
                 SELECT column_name, data_type, is_nullable
@@ -573,10 +610,7 @@ def validate_publication(path: Path) -> Mapping[str, str]:
                     f"UniProtKB physical schema mismatch for {table}: "
                     f"expected={expected_columns}, actual={actual_columns}"
                 )
-            count = connection.execute(f'SELECT count(*) FROM "{table}"').fetchone()
-            if count is None or int(count[0]) != int(recorded.get(table, -1)):
-                raise ValueError(f"UniProtKB row-count mismatch: {table}")
-        return metadata
+        return profile, metadata
 
 
 def make_selection(
