@@ -57,7 +57,7 @@ def write_rhea_duckdb(
     release_number, release_date = _release_metadata(sources)
     connection: duckdb.DuckDBPyConnection | None = None
     try:
-        connection = duckdb.connect(str(staging))
+        connection = _connect_publication(staging)
         _create_metadata_tables(connection)
 
         if "rdf" in sources:
@@ -812,7 +812,7 @@ def _validate_staged_database(
     *,
     row_counts: Mapping[str, int],
 ) -> None:
-    connection = duckdb.connect(str(path), read_only=True)
+    connection = _connect_publication(path, read_only=True)
     try:
         connection.execute("PRAGMA database_size").fetchall()
         metadata = dict(
@@ -852,6 +852,18 @@ def _validate_staged_database(
                 )
     finally:
         connection.close()
+
+
+def _connect_publication(
+    path: Path,
+    *,
+    read_only: bool = False,
+) -> duckdb.DuckDBPyConnection:
+    return duckdb.connect(
+        str(path),
+        read_only=read_only,
+        config={"threads": str(pl.thread_pool_size())},
+    )
 
 
 def _release_metadata(

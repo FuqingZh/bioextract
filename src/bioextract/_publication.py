@@ -270,7 +270,7 @@ def write_duckdb_publication(
     row_counts: dict[str, int] = {}
     try:
         with tempfile.TemporaryDirectory(prefix="bioextract-relations-") as dir_tmp:
-            connection = duckdb.connect(str(stage))
+            connection = _connect_publication(stage)
             try:
                 _create_metadata_schema(connection)
                 mappings = list(column_mappings)
@@ -556,7 +556,7 @@ def _validate_duckdb_publication(
     relations: Sequence[RelationSpec],
     row_counts: Mapping[str, int],
 ) -> None:
-    connection = duckdb.connect(str(path), read_only=True)
+    connection = _connect_publication(path, read_only=True)
     try:
         connection.execute("PRAGMA database_size").fetchall()
         metadata_rows = dict(
@@ -662,6 +662,18 @@ def _validate_duckdb_publication(
                 )
     finally:
         connection.close()
+
+
+def _connect_publication(
+    path: Path,
+    *,
+    read_only: bool = False,
+) -> duckdb.DuckDBPyConnection:
+    return duckdb.connect(
+        str(path),
+        read_only=read_only,
+        config={"threads": str(pl.thread_pool_size())},
+    )
 
 
 def _normalize_lazy_columns(
