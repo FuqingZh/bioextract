@@ -19,7 +19,7 @@ verifies:
 - subset discovery and term selection by namespace, subset, primary ID, and
   alternate ID
 - obsolete-term defaults and official cellular-component term selection
-- direct and legacy tidy writers
+- source-backed `write_duckdb(path)` publication
 - source-build to DuckDB reopen parity for term selection, subset discovery,
   fresh native SQL connections, and read-only enforcement
 - bounded metadata-v1 GO identity, profile, exact inventory, physical-schema,

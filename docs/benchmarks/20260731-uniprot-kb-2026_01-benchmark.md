@@ -1,7 +1,12 @@
 # UniProtKB 2026_01 Publication Baseline
 
 Date: 2026-07-31
-Status: accepted
+Status: legacy pre-convergence metadata-v3 DuckDB baseline
+
+This artifact predates the supported metadata-v1 contract and is retained only
+as historical measurement evidence. Current metadata-v1-only readers reject
+it; it is not an accepted current publication. A formal metadata-v1 rebuild
+benchmark remains pending.
 
 ## Artifact
 

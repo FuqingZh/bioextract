@@ -8,8 +8,9 @@ Status: current
 
 `KEGGDatabase` publishes caller-supplied local KEGG compound, reaction,
 enzyme, module, and global-link files as one provenance-aware DuckDB. This
-metabolic product is independent of the KEGG BRITE and organism-mapping
-Parquet products and does not change their schemas or release scopes.
+metabolic product is independent of the one-relation KEGG BRITE and
+organism-mapping DuckDB products and does not change their schemas or release
+scopes.
 
 ## Construction And Publication
 
@@ -23,7 +24,7 @@ supply or validate release identity.
 Entry batches are streamed record by record; excluded large fields are not
 published. The writer stages locally beside the requested destination,
 publishes metadata schema v1, verifies inventory and row counts read-only, and
-then atomically commits `<resource>.duckdb`.
+then atomically commits the requested DuckDB destination.
 
 When a release is supplied as an archive, provenance records the original
 archive display path and media type rather than an ephemeral extraction path.

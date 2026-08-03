@@ -12,20 +12,26 @@ will consume them.
 
 The domain contract is primary. Storage is an execution strategy:
 
-- consume an official indexed or inexpensive representation directly when it
-  is already fit for use;
-- publish canonical relations that are normally queried together as one DuckDB;
+- use official/native direct access when the upstream representation is fit
+  for the supported queries (eggNOG, STRING, and OmniPath); or
+- publish one bioextract-owned DuckDB for each materialized logical product,
+  regardless of whether it contains one relation or many;
 - keep ordinary filtering, sorting, grouping, and SQL in Polars or DuckDB;
 - add convenience methods only when they encode resource-owned ID resolution,
   relationship traversal, grouping, or unmatched-ID accounting.
 
-Canonical writers always require an explicit `path`. They validate into a
+Materialized writers use `write_duckdb(path)` with an explicit destination.
+Readers use `XDatabase.from_duckdb(path)`, and every `connect()` call returns a
+fresh caller-owned read-only DuckDB connection. Writers validate into a
 staging file and atomically publish only after success. Publication provenance
-lives in the DuckDB `_bioextract` schema. No sidecar manifest is required.
+lives in exactly five relations in the DuckDB `_bioextract` schema; biological
+relations live in `main`. Metadata v1 is the only supported publication
+metadata contract. Parquet is an upstream, internal-transfer, or general
+interchange format, never a canonical bioextract publication.
 
 Read the
 [Domain Access Architecture](docs/architecture/20260729-v1.0-domain-access-architecture.md)
-before adding a resource, public query method, or output format.
+before adding a resource, public query method, or storage strategy.
 
 ## Install
 
@@ -393,9 +399,9 @@ Official two-dimensional source headers are retained unless a minimal
 deterministic mapping is required to make them queryable. Any such mapping is
 recorded in embedded provenance.
 
-Example names such as `go.duckdb` and `kegg.duckdb` are product guidance, not
-format standards or compatibility identifiers. Machine identity comes from
-embedded metadata.
+The versioned CephFS convention is `tidy/data.duckdb`. Callers may use other
+filenames; a filename is never schema identity or a compatibility identifier.
+Machine identity comes from embedded metadata.
 
 ## Development
 

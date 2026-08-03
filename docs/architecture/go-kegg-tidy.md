@@ -56,9 +56,6 @@ with published_kegg.connect() as connection:
     pathway_count = connection.sql("SELECT count(*) FROM pathway").fetchone()[0]
 ```
 
-Legacy directory writers remain only for migration. New callers use the
-single-file writers above.
-
 ## Data Flow
 
 `GODatabase` and `KEGGDatabase` are path-first resource handles. They validate

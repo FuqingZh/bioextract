@@ -1,5 +1,10 @@
 # KEGG Metabolic Domain Access Plan
 
+Storage naming status: superseded by the current
+[Storage And Publication Convergence Plan](20260803-v1.0-storage-publication-convergence-implementation-plan.md).
+The decisions, artifact paths, and measurements below remain historical;
+resource-named DuckDB guidance is not current schema or filename authority.
+
 Date: 2026-07-30
 Status: completed
 Authority:

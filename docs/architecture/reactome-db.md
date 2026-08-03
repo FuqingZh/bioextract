@@ -259,16 +259,17 @@ validated file identity and rejects access after atomic replacement. Source
 handles do not expose native connections, and reopened handles do not republish
 the validated database.
 
-The verified v96 publication is:
+The pre-convergence verified v96 artifact is retained as a legacy baseline:
 
 ```text
 reactome/mapping/v96/tidy/reactome.duckdb
 ```
 
 It contains 322,435 `protein_pathway` rows, 23,498 `pathway` rows, and
-23,612 `pathway_relation` rows. The prior multi-Parquet
-`tidy/reactome/` directory is a preserved migration artifact, not the
-recommended publication shape.
+23,612 `pathway_relation` rows. The prior multi-Parquet `tidy/reactome/`
+directory is also a preserved migration artifact. Neither legacy path
+overrides the current versioned CephFS convention, `tidy/data.duckdb`; formal
+rebuild acceptance is pending.
 
 ## Why Not reactome2py
 

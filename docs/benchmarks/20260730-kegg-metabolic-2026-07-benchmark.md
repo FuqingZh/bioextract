@@ -1,7 +1,11 @@
 # KEGG Metabolic 2026-07 Publication Baseline
 
 Date: 2026-07-30
-Status: accepted
+Status: legacy pre-convergence DuckDB baseline
+
+This artifact predates the supported metadata-v1 contract and is retained only
+as historical measurement evidence. It is not an accepted current publication;
+a formal metadata-v1 rebuild benchmark remains pending.
 
 ## Artifact
 

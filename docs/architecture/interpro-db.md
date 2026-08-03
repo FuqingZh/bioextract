@@ -188,7 +188,7 @@ cost.
 All three published frames remain lazy. XML parsing materializes one compact
 Pfam metadata index, and a streaming raw-file aggregation materializes one
 compact used-pair index for validation and term filtering. Derived term and
-xref outputs are not materialized before their Parquet sinks.
+xref outputs remain lazy until the internal transfer step into staged DuckDB.
 
 ## Selection Contract
 

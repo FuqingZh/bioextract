@@ -11,26 +11,29 @@ is subordinate to the repository-wide
 [Domain Access Architecture](20260729-v1.0-domain-access-architecture.md):
 materialization is an execution strategy, not the product purpose.
 
-## Output unit
+## Output Unit And Strategies
 
-The biological relation structure determines the access strategy:
+There are exactly two storage strategies:
 
-- canonical materialized relations: one DuckDB file;
-- an already efficient official query format: direct access unless
-  materialization has an identified benefit.
+- official/native direct access when the upstream representation is fit; or
+- one bioextract-owned DuckDB per materialized logical product, regardless of
+  relation count.
 
 A partial capability of a multi-relation resource retains the same DuckDB
 container. Missing inputs produce absent tables, not a different packaging
 model and not misleading empty observations.
 
-Canonical writers are:
+Resource publication writers use:
 
 ```python
-dataset.write_duckdb(path, table_names=...)
+path = "tidy/data.duckdb"
+result = source.write_duckdb(path)
 ```
 
-Every writer requires `path`. The library does not infer a semantic
-filename.
+Every writer requires `path`. Readers use `XDatabase.from_duckdb(path)`, and
+every `connect()` call returns a fresh caller-owned connection opened read-only.
+The library does not infer a semantic filename. The versioned CephFS convention
+is `tidy/data.duckdb`, but filenames are not schema identity.
 
 ## Naming
 
@@ -92,8 +95,8 @@ until a complete new staging file is ready.
 
 `TidyDataset` has no directory writer and resources expose no `write_tidy()`
 compatibility surface. Publications always use an explicit single-file
-`write_duckdb(path)` destination. Metadata schema v1 is the first supported
-contract. It may include
+`write_duckdb(path)` destination. Metadata schema v1 is the first and only
+supported contract. It may include
 `bioextract.source_schema_version` only when the upstream source declares an
 authoritative schema label. `bioextract.release_version` remains optional.
 Writers never infer either value from paths, basenames, archives, timestamps,

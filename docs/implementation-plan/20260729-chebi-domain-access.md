@@ -1,5 +1,10 @@
 # ChEBI Domain Access And Publication Plan
 
+Storage status: superseded by the current
+[Storage And Publication Convergence Plan](20260803-v1.0-storage-publication-convergence-implementation-plan.md).
+The decisions and measurements below remain historical; metadata v1/v2/v3
+statements and example filenames are not current publication authority.
+
 Date: 2026-07-29
 Status: implemented
 Authority:
