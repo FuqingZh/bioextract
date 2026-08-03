@@ -17,7 +17,8 @@ The implemented MVP covers:
 - GO term selection by ID, namespace, and subset membership
 - KEGG BRITE JSON to pathway tidy tables
 - in-memory use through `build_tidy().frames`
-- persisted GO use through `write_duckdb(path)`
+- persisted GO use through `write_duckdb(path)`, `from_duckdb(path)`, and a
+  fresh caller-owned read-only `connect()` connection
 - persisted KEGG use through `write_duckdb(path)`, `from_duckdb(path)`, and a
   fresh caller-owned read-only `connect()` connection
 
@@ -41,6 +42,9 @@ df_goslim_generic = go.select_terms(
     subset_id="goslim_generic",
 )
 go_result = go.write_duckdb("out/go.duckdb")
+published_go = GODatabase.from_duckdb(go_result.path)
+with published_go.connect() as connection:
+    term_count = connection.sql("SELECT count(*) FROM term").fetchone()[0]
 
 kegg_tidy = KEGGDatabase.from_brite_json("br08901.json").build_tidy()
 df_pathway = kegg_tidy.frames["pathway"]
@@ -102,3 +106,10 @@ GO and KEGG provenance and table counts are stored in the metadata-v1
 identity, the `kegg-brite-json-v1` profile, the BRITE resource schema version,
 the `brite` scope, and the exact `pathway` table/role/count before exposing
 read-only SQL. Neither output requires a sidecar.
+
+A reopened GO publication validates the GO resource identity,
+`gene-ontology-obo-v1` profile, ontology schema version, exact nine-table
+ontology capability, semantic roles, and physical column schemas. Validation
+uses the bounded catalog and provenance relations and does not recount the
+biological tables. The handle pins the validated file identity, so replacing
+the path requires an explicit reopen before domain reads or native SQL access.

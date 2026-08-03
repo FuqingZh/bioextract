@@ -20,6 +20,10 @@ verifies:
   alternate ID
 - obsolete-term defaults and subcellular-component compatibility output
 - direct and legacy tidy writers
+- source-build to DuckDB reopen parity for term selection, subset discovery,
+  subcell extraction, fresh native SQL connections, and read-only enforcement
+- bounded metadata-v1 GO identity, profile, exact inventory, physical-schema,
+  and pinned-file validation
 
 [`tests/unit/kegg/brite/test_parser.py`](../../tests/unit/kegg/brite/test_parser.py)
 and
@@ -38,7 +42,8 @@ services and do not calculate enrichment statistics.
 Run the focused contract with:
 
 ```bash
-pdm run pytest tests/unit/kegg/brite tests/integration/kegg/brite \
+pdm run pytest tests/contract/resources/go tests/integration/go \
+  tests/unit/kegg/brite tests/integration/kegg/brite \
   tests/contract/resources/kegg/test_mapping_brite_publication_contract.py
 ```
 
