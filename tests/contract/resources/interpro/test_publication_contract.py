@@ -321,11 +321,11 @@ def test_xml_profile_rejects_incomplete_mapping_enrichment(
 @pytest.mark.parametrize(
     "statement",
     [
-        "UPDATE protein_term SET pfam_id='PF99999'",
-        "UPDATE protein_term SET uniprot_id='FORGED'",
         "UPDATE term SET pfam_name=''",
-        "UPDATE term_xref SET interpro_id='IPR999999'",
-        "INSERT INTO term SELECT * FROM term LIMIT 1",
+        "UPDATE mapping SET member_db_id='INVALID' WHERE member_db='PFAM'; "
+        "UPDATE protein_term SET pfam_id='INVALID'; "
+        "UPDATE term SET pfam_id='INVALID'; "
+        "UPDATE term_xref SET pfam_id='INVALID'",
     ],
 )
 def test_xml_profile_rejects_inconsistent_compact_pfam_relations(
@@ -359,7 +359,7 @@ def test_xml_profile_reopens_multiple_distinct_xrefs_for_one_pfam(
     source = _source(
         tmp_path,
         mapping_rows=(
-            "P12345\tIPR000001\tFirst\tPF00051\t10\t80",
+            "P12345\tIPR000001\tRaw first name\tPF00051\t10\t80",
             "P12345\tIPR000002\tSecond\tPF00051\t10\t80",
         ),
         xml_entries=xml,
@@ -396,4 +396,31 @@ def test_from_duckdb_rejects_unrecorded_main_schema_view(tmp_path: Path) -> None
         connection.execute("CREATE VIEW forged AS SELECT * FROM mapping")
 
     with pytest.raises(IntegrityError, match="table inventory"):
+        InterProDatabase.from_duckdb(path)
+
+
+def test_mapping_only_profile_rejects_xml_derived_enrichment(tmp_path: Path) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path, with_xml=False).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute("UPDATE mapping SET member_db='PFAM'")
+
+    with pytest.raises(IntegrityError, match="XML-derived enrichment"):
+        InterProDatabase.from_duckdb(path)
+
+
+def test_from_duckdb_rejects_duplicate_metadata_keys(tmp_path: Path) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "CREATE TABLE metadata_copy AS SELECT * FROM _bioextract.metadata; "
+            "DROP TABLE _bioextract.metadata; "
+            "CREATE TABLE _bioextract.metadata AS SELECT * FROM metadata_copy; "
+            "INSERT INTO _bioextract.metadata VALUES "
+            "('bioextract.resource_name', 'interpro'); "
+            "DROP TABLE metadata_copy"
+        )
+
+    with pytest.raises(IntegrityError, match="duplicate metadata keys"):
         InterProDatabase.from_duckdb(path)

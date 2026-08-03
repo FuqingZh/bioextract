@@ -674,11 +674,12 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
         raise FileNotFoundError(path)
     try:
         with duckdb.connect(str(path), read_only=True) as connection:
-            metadata = dict(
-                connection.execute(
-                    "SELECT key, value FROM _bioextract.metadata"
-                ).fetchall()
-            )
+            metadata_rows = connection.execute(
+                "SELECT key, value FROM _bioextract.metadata"
+            ).fetchall()
+            metadata = dict(metadata_rows)
+            if len(metadata) != len(metadata_rows):
+                raise ValueError("InterPro publication has duplicate metadata keys")
             if metadata.get("bioextract.metadata_schema_version") != "1":
                 raise ValueError("Unsupported InterPro metadata schema version")
             validate_duckdb_metadata_v1(connection, metadata)
@@ -820,46 +821,31 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
                     "SELECT "
                     "EXISTS(SELECT 1 FROM protein_term WHERE "
                     "uniprot_id IS NULL OR trim(uniprot_id)='' OR "
-                    "pfam_id IS NULL OR trim(pfam_id)='') OR "
+                    "pfam_id IS NULL OR trim(pfam_id)='' OR "
+                    "NOT regexp_full_match(pfam_id, 'PF[0-9]{5}')) OR "
                     "EXISTS(SELECT 1 FROM term WHERE "
                     "pfam_id IS NULL OR trim(pfam_id)='' OR "
+                    "NOT regexp_full_match(pfam_id, 'PF[0-9]{5}') OR "
                     "pfam_name IS NULL OR trim(pfam_name)='') OR "
                     "EXISTS(SELECT 1 FROM term_xref WHERE "
                     "pfam_id IS NULL OR trim(pfam_id)='' OR "
+                    "NOT regexp_full_match(pfam_id, 'PF[0-9]{5}') OR "
                     "interpro_id IS NULL OR trim(interpro_id)='' OR "
                     "interpro_name IS NULL OR trim(interpro_name)='' OR "
-                    "interpro_type IS NULL OR trim(interpro_type)='') OR "
-                    "EXISTS(SELECT 1 FROM protein_term "
-                    "GROUP BY uniprot_id, pfam_id HAVING count(*) > 1) OR "
-                    "EXISTS(SELECT 1 FROM term "
-                    "GROUP BY pfam_id HAVING count(*) > 1) OR "
-                    "EXISTS(SELECT 1 FROM term_xref GROUP BY "
-                    "pfam_id, interpro_id, interpro_name, interpro_type "
-                    "HAVING count(*) > 1) OR "
-                    "EXISTS(SELECT pfam_id FROM term EXCEPT "
-                    "SELECT pfam_id FROM term_xref) OR "
-                    "EXISTS(SELECT pfam_id FROM term_xref EXCEPT "
-                    "SELECT pfam_id FROM term) OR "
-                    "EXISTS(SELECT pfam_id FROM protein_term EXCEPT "
-                    "SELECT pfam_id FROM term) OR "
-                    "EXISTS(SELECT uniprot_id, pfam_id FROM protein_term EXCEPT "
-                    "SELECT uniprot_id, member_db_id FROM mapping "
-                    "WHERE upper(member_db)='PFAM') OR "
-                    "EXISTS(SELECT uniprot_id, member_db_id FROM mapping "
-                    "WHERE upper(member_db)='PFAM' EXCEPT "
-                    "SELECT uniprot_id, pfam_id FROM protein_term) OR "
-                    "EXISTS(SELECT pfam_id, interpro_id, interpro_name, "
-                    "interpro_type FROM term_xref EXCEPT "
-                    "SELECT member_db_id, interpro_id, interpro_name, "
-                    "interpro_type FROM mapping WHERE upper(member_db)='PFAM') OR "
-                    "EXISTS(SELECT member_db_id, interpro_id, interpro_name, "
-                    "interpro_type FROM mapping WHERE upper(member_db)='PFAM' "
-                    "EXCEPT SELECT pfam_id, interpro_id, interpro_name, "
-                    "interpro_type FROM term_xref)"
+                    "interpro_type IS NULL OR trim(interpro_type)='')"
                 ).fetchone()
                 if invalid_compact is None or bool(invalid_compact[0]):
                     raise ValueError(
                         "InterPro publication has inconsistent compact Pfam relations"
+                    )
+            else:
+                unexpected_enrichment = connection.execute(
+                    "SELECT count(*) FROM mapping WHERE "
+                    "interpro_type IS NOT NULL OR member_db IS NOT NULL"
+                ).fetchone()
+                if unexpected_enrichment is None or int(unexpected_enrichment[0]):
+                    raise ValueError(
+                        "InterPro mapping-only publication has XML-derived enrichment"
                     )
 
             observed_mappings = {
