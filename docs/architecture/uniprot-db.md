@@ -5,10 +5,20 @@ Date: 2026-07-30
 Status: current
 
 `UniProtDatabase` exposes independent idmapping and reviewed UniProtKB
-products. Idmapping uses `from_idmapping(path, release_version=None)`,
-`scan_mapping()`, `read_mapping()`, and `write_parquet()`. An unscoped eager
+products. Source-backed idmapping uses
+`from_idmapping(path, release_version=None)`, `scan_mapping()`,
+`read_mapping()`, and `write_duckdb()`. An unscoped eager
 read or write requires `allow_all_taxa=True`; lazy scanning remains unscoped by
 default.
+
+Idmapping publication is one `mapping` table with resource schema
+`uniprot-idmapping-duckdb-v1`, source profile
+`uniprot-idmapping-selected-22-column-v1`, and the exact capability
+`bioextract.capability.mapping=true`. `from_duckdb()` distinguishes this
+profile from `uniprot-knowledgebase-duckdb-v1` using metadata v1, capabilities,
+exact table inventory, and physical schema. Both profiles return fresh
+caller-owned read-only connections. Publication paths are resolved and file
+identity is pinned so a replaced file must be explicitly reopened.
 
 Swiss-Prot has one raw constructor:
 
@@ -100,8 +110,11 @@ Every matched extractor begins with the stable selection prefix
 corresponding schema, and every extractor has an explicit domain order after
 the stable selection prefix.
 
-`from_duckdb()` validates metadata/resource schemas, exact table inventories,
-physical column order/types/nullability, and row counts.
+`from_duckdb()` validates the shared exact five-table metadata-v1 provenance
+schema, resource/source profile, capabilities, exact table inventories, and
+physical column order/types/nullability. Reopening does not scan large domain
+tables to recount them; staged publication validation owns bounded row-count
+verification.
 `connect()` is read-only. Selection supports `uniprot`, `entry_name`,
 `gene_name`, `gene_id`, `refseq`, `ensembl`, and `isoform_id`, retaining every
 canonical match. Extractors expose proteins, accessions, names, EC, GO,

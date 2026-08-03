@@ -3,7 +3,8 @@ from __future__ import annotations
 import polars as pl
 from polars._typing import SchemaDict
 
-SCHEMA_VERSION = "uniprot-idmapping-selected-v0.1"
+SCHEMA_VERSION = "uniprot-idmapping-duckdb-v1"
+IDMAPPING_SOURCE_SCHEMA_PROFILE = "uniprot-idmapping-selected-22-column-v1"
 SCHEMA_VERSION_EGGNOG_XREF = "uniprot-eggnog-xref-v0.1"
 SCHEMA_VERSION_SUBCELLULAR_LOCATION = "uniprot-subcellular-location-v0.1"
 MEDIA_TYPE_TSV_GZIP = "text/tab-separated-values+gzip"

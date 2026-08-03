@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -8,13 +9,15 @@ from pathlib import Path
 import duckdb
 import polars as pl
 
-from bioextract._publication import DuckDBWriteResult, ParquetWriteResult
+from bioextract._publication import DuckDBWriteResult
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
+from bioextract.errors import CapabilityError, IntegrityError
 
 from ._knowledgebase import write_knowledgebase
 from ._query import UniProtSelection, make_selection, validate_publication
 from .constant import (
     COLS_IDMAPPING_SELECTED,
+    IDMAPPING_SOURCE_SCHEMA_PROFILE,
     MEDIA_TYPE_PARQUET,
     MEDIA_TYPE_PARQUET_DATASET,
     MEDIA_TYPE_TSV,
@@ -51,6 +54,7 @@ class UniProtDatabase:
     _isoform_sequences: Path | None = None
     _release_version: str | None = None
     _duckdb_path: Path | None = None
+    _duckdb_identity: tuple[int, int, int, int, int] | None = None
 
     @classmethod
     def from_idmapping(
@@ -65,7 +69,7 @@ class UniProtDatabase:
             >>> UniProtDatabase.from_idmapping("mapping.parquet")  # doctest: +SKIP
             UniProtDatabase(...)
         """
-        source = Path(path)
+        source = Path(path).resolve()
         if not source.exists():
             raise FileNotFoundError(f"UniProt idmapping path not found: {source}")
         kind = _mapping_kind(source)
@@ -118,15 +122,23 @@ class UniProtDatabase:
             >>> UniProtDatabase.from_duckdb("uniprot.duckdb")  # doctest: +SKIP
             UniProtDatabase(...)
         """
-        publication = Path(path)
+        publication = Path(path).resolve()
         if not publication.is_file():
             raise FileNotFoundError(
                 f"UniProt DuckDB publication not found: {publication}"
             )
-        metadata = validate_publication(publication)
+        identity_before = _file_identity(publication)
+        try:
+            profile, metadata = validate_publication(publication)
+        except (KeyError, TypeError, ValueError, duckdb.Error) as error:
+            raise IntegrityError(str(error)) from error
+        identity_after = _file_identity(publication)
+        if identity_after != identity_before:
+            raise IntegrityError("UniProt publication changed during validation")
         return cls(
-            "knowledgebase_publication",
+            f"{profile}_publication",
             _duckdb_path=publication,
+            _duckdb_identity=identity_after,
             _release_version=metadata.get("bioextract.release_version"),
         )
 
@@ -149,13 +161,14 @@ class UniProtDatabase:
             >>> database.scan_mapping(taxon_ids=["9606"])  # doctest: +SKIP
             <LazyFrame ...>
         """
-        self._require_mode("idmapping")
-        frame = self._scan_mapping()
+        if self._mode not in {"idmapping", "idmapping_publication"}:
+            raise CapabilityError("UniProt publication has no idmapping capability")
+        normalized = normalize_taxids(tuple(taxon_ids or ()))
+        frame = self._scan_mapping(normalized)
         validate_mapping_schema(frame)
-        return filter_taxids(
-            frame,
-            normalize_taxids(tuple(taxon_ids or ())),
-        ).select(COLS_IDMAPPING_SELECTED)
+        if self._mode == "idmapping_publication":
+            return frame.select(COLS_IDMAPPING_SELECTED)
+        return filter_taxids(frame, normalized).select(COLS_IDMAPPING_SELECTED)
 
     def read_mapping(
         self,
@@ -176,20 +189,32 @@ class UniProtDatabase:
             )
         return self.scan_mapping(taxon_ids=normalized).collect()
 
-    def write_parquet(
+    def write_duckdb(
         self,
         path: os.PathLike[str] | str,
         *,
         taxon_ids: Iterable[str | int] | None = None,
         allow_all_taxa: bool = False,
         if_exists: str = "fail",
-    ) -> ParquetWriteResult:
-        """Publish an idmapping selection as atomic Parquet.
+    ) -> DuckDBWriteResult:
+        """Publish idmapping or the declared UniProtKB roles as atomic DuckDB.
 
         Examples:
-            >>> database.write_parquet("mapping.parquet", taxon_ids=["9606"])  # doctest: +SKIP
-            ParquetWriteResult(...)
+            >>> database.write_duckdb("mapping.duckdb", taxon_ids=["9606"])  # doctest: +SKIP
+            DuckDBWriteResult(...)
         """
+        if self._mode == "knowledgebase_source":
+            if taxon_ids is not None or allow_all_taxa:
+                raise ValueError("Taxon scoping applies only to UniProt idmapping")
+            return write_knowledgebase(
+                entries=self._required_entries(),
+                canonical_sequences=self._canonical_sequences,
+                isoform_sequences=self._isoform_sequences,
+                release_version=self._release_version,
+                path=Path(path),
+                if_exists=if_exists,
+            )
+        self._require_mode("idmapping")
         normalized = normalize_taxids(tuple(taxon_ids or ()))
         if not normalized and not allow_all_taxa:
             raise ValueError("Writing all UniProt taxids requires allow_all_taxa=True")
@@ -203,35 +228,21 @@ class UniProtDatabase:
                 _mapping_media_type(self._mapping_kind or ""),
             ),
             resource_schema_version=SCHEMA_VERSION,
-            source_schema_profile="uniprot-idmapping-selected-22-column-v1",
+            source_schema_profile=IDMAPPING_SOURCE_SCHEMA_PROFILE,
             build_id_prefix="uniprot-id-mapping",
             assets=(TidyAsset("mapping.parquet", "canonical", "mapping"),),
             release_version=self._release_version,
+            scope=json.dumps(
+                {"taxon_ids": list(normalized)} if normalized else {"all_taxa": True},
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            extra_metadata={"bioextract.capability.mapping": "true"},
         )
-        return dataset.write_parquet(
-            path, if_exists=if_exists, preserve_source_headers=True
-        )
-
-    def write_duckdb(
-        self,
-        path: os.PathLike[str] | str,
-        *,
-        if_exists: str = "fail",
-    ) -> DuckDBWriteResult:
-        """Publish the declared UniProtKB roles as atomic DuckDB.
-
-        Examples:
-            >>> database.write_duckdb("uniprot.duckdb")  # doctest: +SKIP
-            DuckDBWriteResult(...)
-        """
-        self._require_mode("knowledgebase_source")
-        return write_knowledgebase(
-            entries=self._required_entries(),
-            canonical_sequences=self._canonical_sequences,
-            isoform_sequences=self._isoform_sequences,
-            release_version=self._release_version,
-            path=Path(path),
+        return dataset.write_duckdb(
+            path,
             if_exists=if_exists,
+            preserve_source_headers=("mapping",),
         )
 
     def connect(self) -> duckdb.DuckDBPyConnection:
@@ -241,10 +252,21 @@ class UniProtDatabase:
             >>> database.connect()  # doctest: +SKIP
             <duckdb.DuckDBPyConnection ...>
         """
-        self._require_mode("knowledgebase_publication")
+        if self._mode not in {"knowledgebase_publication", "idmapping_publication"}:
+            raise CapabilityError("connect() requires UniProtDatabase.from_duckdb()")
         if self._duckdb_path is None:
             raise RuntimeError("UniProt DuckDB path is unavailable")
-        return duckdb.connect(str(self._duckdb_path), read_only=True)
+        if _file_identity(self._duckdb_path) != self._duckdb_identity:
+            raise IntegrityError(
+                "UniProt publication was replaced; reopen it with from_duckdb()"
+            )
+        connection = duckdb.connect(str(self._duckdb_path), read_only=True)
+        if _file_identity(self._duckdb_path) != self._duckdb_identity:
+            connection.close()
+            raise IntegrityError(
+                "UniProt publication was replaced; reopen it with from_duckdb()"
+            )
+        return connection
 
     def select_ids(
         self,
@@ -286,7 +308,15 @@ class UniProtDatabase:
             taxon_ids=normalized_taxa,
         )
 
-    def _scan_mapping(self) -> pl.LazyFrame:
+    def _scan_mapping(self, taxon_ids: tuple[str, ...]) -> pl.LazyFrame:
+        if self._mode == "idmapping_publication":
+            connection = self.connect()
+            query = "SELECT * FROM mapping"
+            params: list[str] = []
+            if taxon_ids:
+                query += f" WHERE TaxId IN ({','.join('?' for _ in taxon_ids)})"
+                params.extend(taxon_ids)
+            return connection.sql(query, params=params).pl(lazy=True)
         source = self._required_source_path()
         match self._mapping_kind:
             case "raw_plain" | "raw_gzip":
@@ -300,10 +330,11 @@ class UniProtDatabase:
 
     def _require_mode(self, mode: str) -> None:
         if self._mode != mode:
-            raise ValueError(f"Operation requires UniProt {mode} mode")
+            raise CapabilityError(f"Operation requires UniProt {mode} capability")
 
     def _required_source_path(self) -> Path:
-        self._require_mode("idmapping")
+        if self._mode != "idmapping":
+            raise CapabilityError("Operation requires UniProt idmapping source")
         if self._source_path is None:
             raise RuntimeError("UniProt idmapping source is unavailable")
         return self._source_path
@@ -351,3 +382,13 @@ def _mapping_media_type(kind: str) -> str:
         "parquet": MEDIA_TYPE_PARQUET,
         "hive": MEDIA_TYPE_PARQUET_DATASET,
     }[kind]
+
+
+def _file_identity(path: Path) -> tuple[int, int, int, int, int]:
+    try:
+        stat = path.stat()
+    except OSError as error:
+        raise IntegrityError(
+            "UniProt publication is unavailable; reopen it with from_duckdb()"
+        ) from error
+    return stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns
