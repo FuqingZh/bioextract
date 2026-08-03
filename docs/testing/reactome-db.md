@@ -8,7 +8,7 @@ Status: current
 
 The ReactomeDatabase test suite verifies local raw-file parsing,
 selection behavior, species scoping, enrichment input extraction, relation
-filtering, tidy writing, and error handling.
+filtering, tidy writing, DuckDB reopen parity, and error handling.
 
 It does not test online Reactome services, ReactomePA behavior, or statistical
 enrichment calculations.
@@ -104,6 +104,21 @@ R-MMU-000001	R-MMU-1257604
 - Partial snapshots write only derivable relations and list only provided
   source files.
 
+### DuckDB Reopen
+
+- Build a representative source fixture, publish it, reopen it with
+  `from_duckdb()`, and compare single/grouped selection plus whole-domain
+  extraction results.
+- `connect()` returns distinct caller-owned native read-only connections and
+  permits arbitrary read SQL while rejecting writes.
+- Metadata v1 resource identity, source schema profile, resource schema,
+  source capability roles, exact physical table/view inventory, table roles,
+  and physical column schemas are rejected when incompatible.
+- Validation accepts non-negative recorded biological row counts without
+  recounting the biological tables during reopen.
+- A reopened handle rejects a vanished or atomically replaced file and requires
+  the caller to reopen it.
+
 ## Real-Data Smoke
 
 Use the local v96 snapshot:
@@ -128,7 +143,7 @@ The smoke test should verify:
 - DuckDB publication succeeds under `/tmp`
 - the formal v96 publication has 322,435 `protein_pathway`, 23,498 `pathway`,
   and 23,612 `pathway_relation` rows
-- metadata schema v3 has all five `_bioextract` tables and reports
+- metadata schema v1 has all five `_bioextract` tables and reports
   `validation_status=passed`
 
 Example command:
@@ -149,6 +164,10 @@ assert view.extract_term2gene().height > 0
 assert view.extract_term2name().height > 0
 assert view.extract_pathway_relations().height > 0
 view.write_duckdb("/tmp/reactome.duckdb")
+reopened = ReactomeDatabase.from_duckdb("/tmp/reactome.duckdb")
+assert reopened.with_species("Homo sapiens").extract_term2gene().height > 0
+with reopened.connect() as connection:
+    assert connection.sql("SELECT count(*) FROM protein_pathway").fetchone()[0] > 0
 PY
 ```
 
