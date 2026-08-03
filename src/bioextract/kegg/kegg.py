@@ -1096,6 +1096,31 @@ def _validate_tidy_publication(
             if actual is None or int(actual[0]) != int(row_count):
                 raise ValueError(f"KEGG {scope} row-count drift: {table_name}")
         if scope == "mapping":
+            expected_column_mapping = {
+                ("mapping", source_column, output_column, "generated_snake_case")
+                for source_column, output_column in {
+                    "OrganismCode": "organism_code",
+                    "KeggGeneId": "kegg_gene_id",
+                    "UniProtId": "uniprot_id",
+                    "NcbiGeneId": "ncbi_gene_id",
+                    "KoId": "ko_id",
+                    "KeggPathwayId": "kegg_pathway_id",
+                    "PathwayMapId": "pathway_map_id",
+                    "GeneSymbol": "gene_symbol",
+                    "GeneDescription": "gene_description",
+                }.items()
+            }
+            observed_column_mapping = {
+                tuple(str(value) for value in row)
+                for row in connection.execute(
+                    "SELECT table_name, source_column, output_column, reason "
+                    "FROM _bioextract.column_mapping"
+                ).fetchall()
+            }
+            if observed_column_mapping != expected_column_mapping:
+                raise ValueError(
+                    "KEGG mapping column provenance inventory is unsupported"
+                )
             organism_code = metadata["bioextract.organism_code"]
             mismatch = connection.execute(
                 "SELECT count(*) FROM mapping "

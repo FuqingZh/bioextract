@@ -103,6 +103,26 @@ def test_duckdb_writes_source_schema_version_only_when_authoritative(
 
 
 @pytest.mark.parametrize(
+    "key",
+    [
+        "bioextract.release_version",
+        "bioextract.release_version_source",
+        "bioextract.scope",
+        "bioextract.source_schema_version",
+    ],
+)
+def test_extra_metadata_cannot_forge_optional_canonical_keys(
+    tmp_path: Path, key: str
+) -> None:
+    dataset = _dataset(tmp_path)
+    dataset.release_version = None
+    dataset.extra_metadata = {key: "forged"}
+
+    with pytest.raises(ValueError, match="canonical publication metadata keys"):
+        dataset.write_duckdb(tmp_path / "forged.duckdb")
+
+
+@pytest.mark.parametrize(
     ("release_version", "release_version_source", "message"),
     [
         (" ", None, "release_version must be non-empty"),

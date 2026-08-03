@@ -21,6 +21,22 @@ BIOEXTRACT_RELATIONS = {
     "column_mapping",
     "validation_issue",
 }
+_CANONICAL_METADATA_KEYS = {
+    "bioextract.metadata_schema_version",
+    "bioextract.resource_name",
+    "bioextract.resource_schema_version",
+    "bioextract.source_schema_profile",
+    "bioextract.source_schema_version",
+    "bioextract.release_version",
+    "bioextract.release_version_source",
+    "bioextract.package_version",
+    "bioextract.generated_at",
+    "bioextract.validation_status",
+    "bioextract.validation_issue_count",
+    "bioextract.sources",
+    "bioextract.scope",
+    "bioextract.column_mapping",
+}
 _SQL_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -318,7 +334,7 @@ def write_duckdb_publication(
                     validation_issue_count=len(validation_issues),
                 )
                 extra = {} if extra_metadata is None else dict(extra_metadata)
-                reserved = sorted(set(publication_metadata) & set(extra))
+                reserved = sorted(_CANONICAL_METADATA_KEYS & set(extra))
                 if reserved:
                     raise ValueError(
                         "extra_metadata cannot replace canonical publication "
