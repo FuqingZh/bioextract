@@ -589,7 +589,10 @@ def validate_publication(path: Path) -> tuple[str, Mapping[str, str]]:
                 taxon_ids is not None
                 and bool(taxon_ids)
                 and all(
-                    isinstance(taxon_id, str) and taxon_id for taxon_id in taxon_ids
+                    isinstance(taxon_id, str)
+                    and bool(taxon_id)
+                    and taxon_id == taxon_id.strip()
+                    for taxon_id in taxon_ids
                 )
                 and len(taxon_ids) == len(set(taxon_ids))
                 and set(scope_mapping) == {"taxon_ids"}

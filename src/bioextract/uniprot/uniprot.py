@@ -130,7 +130,7 @@ class UniProtDatabase:
         identity_before = _file_identity(publication)
         try:
             profile, metadata = validate_publication(publication)
-        except ValueError as error:
+        except (ValueError, duckdb.Error) as error:
             raise IntegrityError(str(error)) from error
         identity_after = _file_identity(publication)
         if identity_after != identity_before:
