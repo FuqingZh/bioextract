@@ -23,7 +23,7 @@ from bioextract._tidy import (
     TidyDataset,
     TidySource,
 )
-from bioextract.errors import CapabilityError
+from bioextract.errors import CapabilityError, IntegrityError
 
 from ._pfam import build_pfam_tidy_dataset, read_interpro_release_version
 from .constant import (
@@ -153,7 +153,12 @@ class InterProDatabase:
             1
         """
         publication_path = Path(path)
-        capabilities, release_version = _validate_interpro_publication(publication_path)
+        try:
+            capabilities, release_version = _validate_interpro_publication(
+                publication_path
+            )
+        except ValueError as error:
+            raise IntegrityError(str(error)) from error
         result = cls(snapshot=_InterProSnapshot())
         result._publication_path = publication_path
         result._capabilities = capabilities
@@ -432,6 +437,11 @@ class InterProDatabase:
             >>> db.xml_frame("entry").rows()
             [('IPR000001', 'Domain'), ('IPR000002', 'Homologous_superfamily')]
         """
+        if self._publication_path is not None:
+            raise CapabilityError(
+                "xml_frame() requires an InterPro XML source handle; the "
+                "publication retains enriched mapping values, not XML lookup frames"
+            )
         if self._frames_xml is None:
             self._frames_xml = read_interpro_xml_frames(self.snapshot.file_interpro_xml)
         return self._frames_xml[frame_name]
@@ -792,6 +802,16 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
                 ).fetchone()
                 if actual_count is None or int(actual_count[0]) != row_count:
                     raise ValueError(f"InterPro row-count drift: {table_name}")
+            if "pfam" in capabilities:
+                incomplete_enrichment = connection.execute(
+                    "SELECT count(*) FROM mapping WHERE "
+                    "interpro_type IS NULL OR trim(interpro_type)='' OR "
+                    "member_db IS NULL OR trim(member_db)=''"
+                ).fetchone()
+                if incomplete_enrichment is None or int(incomplete_enrichment[0]):
+                    raise ValueError(
+                        "InterPro XML publication has incomplete mapping enrichment"
+                    )
 
             observed_mappings = {
                 tuple(str(value) for value in row)

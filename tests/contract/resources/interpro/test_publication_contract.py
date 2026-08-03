@@ -6,7 +6,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from bioextract.errors import CapabilityError
+from bioextract.errors import CapabilityError, IntegrityError
 from bioextract.interpro import InterProDatabase
 
 
@@ -181,6 +181,14 @@ def test_source_handle_connect_reports_missing_capability(tmp_path: Path) -> Non
         _source(tmp_path).connect()
 
 
+def test_reopened_handle_reports_missing_xml_frame_capability(tmp_path: Path) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+
+    with pytest.raises(CapabilityError, match="XML source handle"):
+        InterProDatabase.from_duckdb(path).xml_frame("entry")
+
+
 def test_reopened_handle_reports_missing_publication_source_capability(
     tmp_path: Path,
 ) -> None:
@@ -244,7 +252,7 @@ def test_from_duckdb_rejects_forged_publication(
     with duckdb.connect(str(path)) as connection:
         connection.execute(statement)
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(IntegrityError, match=message):
         InterProDatabase.from_duckdb(path)
 
 
@@ -276,7 +284,7 @@ def test_xml_profile_requires_official_release_metadata(
     with duckdb.connect(str(path)) as connection:
         connection.execute(statement)
 
-    with pytest.raises(ValueError, match="official release metadata"):
+    with pytest.raises(IntegrityError, match="official release metadata"):
         InterProDatabase.from_duckdb(path)
 
 
@@ -290,5 +298,19 @@ def test_mapping_only_profile_rejects_forged_release_metadata(tmp_path: Path) ->
             "('bioextract.release_version_source', 'caller')"
         )
 
-    with pytest.raises(ValueError, match="mapping-only publication"):
+    with pytest.raises(IntegrityError, match="mapping-only publication"):
+        InterProDatabase.from_duckdb(path)
+
+
+@pytest.mark.parametrize("column", ["interpro_type", "member_db"])
+def test_xml_profile_rejects_incomplete_mapping_enrichment(
+    tmp_path: Path,
+    column: str,
+) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(f'UPDATE mapping SET "{column}"=NULL')
+
+    with pytest.raises(IntegrityError, match="incomplete mapping enrichment"):
         InterProDatabase.from_duckdb(path)
