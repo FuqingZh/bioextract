@@ -422,6 +422,10 @@ Machine identity comes from embedded metadata.
 Hermetic tests limit DuckDB, Polars, and Rayon-backed work to four threads by
 default. Set `BIOEXTRACT_TEST_THREADS=1` when sharing a constrained host.
 
+For publication builds, set `POLARS_MAX_THREADS` before importing Polars or
+bioextract. It bounds both Polars execution and bioextract-owned DuckDB
+publication connections.
+
 ## Release
 
 - `.github/workflows/py-ci.yml` runs test-and-build checks.
