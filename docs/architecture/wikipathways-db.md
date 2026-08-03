@@ -72,6 +72,28 @@ df_mapping = selection.extract_mapping()
 df_unmapped = selection.extract_unmatched_ids()
 ```
 
+Canonical publications can be reopened without the original GMT files:
+
+```python
+published = WikiPathwaysDatabase.from_duckdb("tidy/wikipathways.duckdb")
+with published.connect() as connection:
+    pathway_count = connection.sql("SELECT count(*) FROM pathway").fetchone()[0]
+```
+
+`from_duckdb()` accepts only the metadata-v1 `wikipathways-gmt-v1` profile with
+the current resource schema, official content-derived release identity, the
+exact `pathway` and `pathway_gene` canonical inventory, and their recorded
+roles, column provenance, and physical schemas. Validation is bounded to
+metadata and catalogs: recorded biological row counts must be non-negative but
+are not recounted during reopen. `connect()` returns a fresh caller-owned native
+DuckDB connection in read-only mode.
+
+The reopened handle is pinned to the file identity that passed validation.
+Every domain terminal, including a previously cached selection terminal,
+rejects a vanished or atomically replaced publication and requires reopening.
+Reopened tidy datasets cannot be republished because they do not own the GMT
+source provenance needed to create a new canonical publication.
+
 Grouped selections mirror the STRINGdb and Reactome style:
 
 ```python

@@ -65,6 +65,22 @@ Mouse pathway%WikiPathways_20260510%WP1%Mus musculus	https://www.wikipathways.or
   `bioextract.release_version_source=official_metadata`; the publication test
   asserts both values.
 
+## DuckDB Reopen
+
+- Build a representative species-scoped GMT source, publish it, reopen it with
+  `from_duckdb()`, and compare pathway, term2gene, term2name, single-selection,
+  and grouped-selection outputs with the source-backed handle.
+- `connect()` returns distinct caller-owned native read-only connections,
+  permits arbitrary read SQL, and rejects writes. Source-backed `connect()`
+  raises `CapabilityError` without changing existing source extraction errors.
+- Reject incompatible metadata-v1 resource identity, source profile, resource
+  schema, release identity, exact physical table/view inventory, table roles,
+  column provenance, and physical column schemas.
+- Reopen validation accepts non-negative recorded biological row counts without
+  recounting or scanning the biological tables.
+- Reopened handles and cached selection terminals reject vanished or atomically
+  replaced files. Reopened tidy datasets and handles cannot be republished.
+
 ## Real-Data Smoke
 
 Use:

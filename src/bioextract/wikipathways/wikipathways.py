@@ -1,18 +1,24 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import duckdb
 import polars as pl
 
-from bioextract._publication import DuckDBWriteResult
+from bioextract._publication import (
+    BIOEXTRACT_RELATIONS,
+    DuckDBWriteResult,
+    validate_duckdb_metadata_v1,
+)
 from bioextract._shared import (
     create_group_input_frames,
     create_input_id_frame,
 )
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
+from bioextract.errors import CapabilityError, IntegrityError
 
 from .constant import (
     ASSET_SPECS,
@@ -38,6 +44,22 @@ __all__ = [
 class _WikiPathwaysSnapshot:
     files_gmt: tuple[Path, ...]
     species: str | None = None
+
+
+class _ReopenedWikiPathwaysTidyDataset(TidyDataset):
+    def write_duckdb(
+        self,
+        path: os.PathLike[str] | str,
+        *,
+        table_names: Mapping[str, str] | None = None,
+        if_exists: str = "fail",
+        preserve_source_headers: Collection[str] = (),
+        include_source_hashes: bool = False,
+    ) -> DuckDBWriteResult:
+        del path, table_names, if_exists, preserve_source_headers, include_source_hashes
+        raise CapabilityError(
+            "write_duckdb() requires a WikiPathways GMT source handle"
+        )
 
 
 @dataclass(slots=True)
@@ -76,6 +98,10 @@ class WikiPathwaysDatabase:
         default=None, init=False, repr=False
     )
     _release_version: str | None = field(default=None, init=False, repr=False)
+    _publication_path: Path | None = field(default=None, init=False, repr=False)
+    _publication_identity: tuple[int, int, int, int, int] | None = field(
+        default=None, init=False, repr=False
+    )
 
     @classmethod
     def from_gmt(
@@ -137,6 +163,91 @@ class WikiPathwaysDatabase:
             ),
         )
 
+    @classmethod
+    def from_duckdb(cls, path: os.PathLike[str] | str) -> WikiPathwaysDatabase:
+        """Open a validated WikiPathways publication for domain and SQL access.
+
+        Validation reads bounded metadata and catalog schemas only. The handle
+        is pinned to the exact file that passed validation.
+
+        Args:
+            path: A bioextract WikiPathways metadata-v1 DuckDB publication.
+
+        Returns:
+            A publication-backed handle for extraction and selection.
+
+        Raises:
+            FileNotFoundError: If the publication does not exist.
+            IntegrityError: If its metadata, inventory, or physical schema is
+                incompatible, or if the file changes during validation.
+
+        Examples:
+            Reopen a publication and extract pathway metadata:
+
+            >>> db = WikiPathwaysDatabase.from_duckdb(  # doctest: +SKIP
+            ...     "tidy/wikipathways.duckdb"
+            ... )
+            >>> db.extract_pathway().height > 0  # doctest: +SKIP
+            True
+        """
+        publication_path = Path(path).absolute()
+        identity_before = _file_identity(publication_path)
+        try:
+            release_version = _validate_wikipathways_publication(publication_path)
+            identity_after = _file_identity(publication_path)
+        except (KeyError, TypeError, ValueError) as error:
+            raise IntegrityError(str(error)) from error
+        except OSError as error:
+            raise IntegrityError(
+                "WikiPathways publication changed during validation"
+            ) from error
+        if identity_after != identity_before:
+            raise IntegrityError("WikiPathways publication changed during validation")
+        result = cls(snapshot=_WikiPathwaysSnapshot(files_gmt=()))
+        result._release_version = release_version
+        result._publication_path = publication_path
+        result._publication_identity = identity_after
+        return result
+
+    def connect(self) -> duckdb.DuckDBPyConnection:
+        """Return a fresh caller-owned read-only DuckDB connection.
+
+        Raises:
+            CapabilityError: If this handle was created from GMT source files.
+            IntegrityError: If the validated publication was replaced or became
+                unavailable.
+
+        Examples:
+            Run native SQL against a reopened publication:
+
+            >>> db = WikiPathwaysDatabase.from_duckdb(  # doctest: +SKIP
+            ...     "tidy/wikipathways.duckdb"
+            ... )
+            >>> with db.connect() as connection:  # doctest: +SKIP
+            ...     count = connection.sql("SELECT count(*) FROM pathway").fetchone()[0]
+            >>> count >= 0  # doctest: +SKIP
+            True
+        """
+        path = self._publication_path
+        if path is None:
+            raise CapabilityError(
+                "connect() requires WikiPathwaysDatabase.from_duckdb()"
+            )
+        self._assert_publication_identity()
+        try:
+            connection = duckdb.connect(str(path), read_only=True)
+        except duckdb.Error as error:
+            raise IntegrityError(
+                "WikiPathways publication became unavailable; reopen it with "
+                "from_duckdb()"
+            ) from error
+        try:
+            self._assert_publication_identity()
+        except BaseException:
+            connection.close()
+            raise
+        return connection
+
     def select_ids(self, ids: Iterable[str]) -> WikiPathwaysSelection:
         """Create a single-query selection from Entrez Gene IDs.
 
@@ -161,6 +272,7 @@ class WikiPathwaysDatabase:
             ... )
             [{'InputId': '2687', 'WikiPathwaysId': 'WP100'}]
         """
+        self._assert_publication_current()
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
         return WikiPathwaysSelection(
             dataset=self,
@@ -198,6 +310,7 @@ class WikiPathwaysDatabase:
             ... )
             [{'GroupId': 'case', 'InputId': '2687', 'WikiPathwaysId': 'WP100'}, {'GroupId': 'control', 'InputId': '435', 'WikiPathwaysId': 'WP106'}]
         """
+        self._assert_publication_current()
         grp_in_frames = create_group_input_frames(
             ids_by_group,
             schema_groups=SCHEMA_GROUPS,
@@ -277,6 +390,7 @@ class WikiPathwaysDatabase:
             >>> sorted(db.build_tidy().frames)
             ['pathway', 'term2gene', 'term2name']
         """
+        self._assert_publication_current()
         frames = {
             "pathway": self._lazy_frame("pathway"),
             "term2gene": self._lazy_frame("term2gene"),
@@ -285,7 +399,12 @@ class WikiPathwaysDatabase:
         release_version = self._release_version
         if release_version is None:
             raise RuntimeError("WikiPathways GMT release Version was not parsed")
-        return TidyDataset(
+        dataset_type = (
+            _ReopenedWikiPathwaysTidyDataset
+            if self._publication_path is not None
+            else TidyDataset
+        )
+        return dataset_type(
             frames=frames,
             source=tuple(
                 TidySource(
@@ -330,6 +449,10 @@ class WikiPathwaysDatabase:
             ...     result.tables
             ('pathway', 'pathway_gene')
         """
+        if self._publication_path is not None:
+            raise CapabilityError(
+                "write_duckdb() requires a WikiPathways GMT source handle"
+            )
         dataset = self.build_tidy()
         canonical = TidyDataset(
             frames=dataset.frames,
@@ -369,10 +492,14 @@ class WikiPathwaysDatabase:
             contracts. Keep this cache entrypoint private so internal frame
             keys do not become a second API.
         """
+        self._assert_publication_current()
         if self._frames is None:
-            parsed = read_gmt_frames(self.snapshot.files_gmt)
-            frames = parsed.frames
-            self._release_version = parsed.release_version
+            if self._publication_path is None:
+                parsed = read_gmt_frames(self.snapshot.files_gmt)
+                frames = parsed.frames
+                self._release_version = parsed.release_version
+            else:
+                frames = self._read_publication_frames()
             if self.snapshot.species is not None:
                 lf_pathway = _filter_species_frame(
                     frames["pathway"],
@@ -395,6 +522,51 @@ class WikiPathwaysDatabase:
                 }
             self._frames = frames
         return self._frames[frame_name]
+
+    def _read_publication_frames(self) -> dict[str, pl.LazyFrame]:
+        with self.connect() as connection:
+            pathway = pl.read_database(  # pyright: ignore[reportUnknownMemberType]
+                "SELECT * FROM pathway", connection
+            ).rename(
+                {
+                    "wiki_pathways_id": "WikiPathwaysId",
+                    "pathway_name": "PathwayName",
+                    "species": "Species",
+                    "collection": "Collection",
+                    "version": "Version",
+                    "url": "Url",
+                    "gene_count": "GeneCount",
+                }
+            )
+            term2gene = pl.read_database(  # pyright: ignore[reportUnknownMemberType]
+                "SELECT * FROM pathway_gene", connection
+            ).rename(
+                {
+                    "wiki_pathways_id": "WikiPathwaysId",
+                    "gene_id": "GeneId",
+                }
+            )
+        term2name = pathway.drop("GeneCount")
+        return {
+            "pathway": pathway.lazy(),
+            "term2gene": term2gene.lazy(),
+            "term2name": term2name.lazy(),
+        }
+
+    def _assert_publication_identity(self) -> None:
+        path = self._publication_path
+        try:
+            current_identity = None if path is None else _file_identity(path)
+        except OSError:
+            current_identity = None
+        if current_identity != self._publication_identity:
+            raise IntegrityError(
+                "WikiPathways publication was replaced; reopen it with from_duckdb()"
+            )
+
+    def _assert_publication_current(self) -> None:
+        if self._publication_path is not None:
+            self._assert_publication_identity()
 
 
 @dataclass(slots=True)
@@ -457,6 +629,7 @@ class WikiPathwaysSelection:
             >>> selection.extract_mapping()["WikiPathwaysId"].to_list()
             ['WP100']
         """
+        self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
         if self._df_mapping is None:
             self._df_mapping = extract_mapping_frame(
                 self.dataset._lazy_frame("pathway"),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
@@ -482,6 +655,7 @@ class WikiPathwaysSelection:
             >>> selection.extract_unmatched_ids().to_dicts()
             [{'InputId': 'MISSING'}]
         """
+        self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
         if self._df_unmapped is None:
             self._df_unmapped = extract_unmatched_ids_frame(
                 self._df_input_ids,
@@ -495,3 +669,165 @@ def _filter_species_frame(lf: pl.LazyFrame, species: str) -> pl.LazyFrame:
     if "Species" not in lf.collect_schema().names():
         return lf
     return lf.filter(pl.col("Species") == species)
+
+
+_WIKIPATHWAYS_TABLE_CONTRACTS = {
+    "pathway": (
+        "canonical",
+        (
+            ("wiki_pathways_id", "VARCHAR"),
+            ("pathway_name", "VARCHAR"),
+            ("species", "VARCHAR"),
+            ("collection", "VARCHAR"),
+            ("version", "VARCHAR"),
+            ("url", "VARCHAR"),
+            ("gene_count", "BIGINT"),
+        ),
+    ),
+    "pathway_gene": (
+        "derived",
+        (("wiki_pathways_id", "VARCHAR"), ("gene_id", "VARCHAR")),
+    ),
+}
+
+_WIKIPATHWAYS_COLUMN_MAPPINGS = {
+    ("pathway", "Collection", "collection", "generated_snake_case"),
+    ("pathway", "GeneCount", "gene_count", "generated_snake_case"),
+    ("pathway", "PathwayName", "pathway_name", "generated_snake_case"),
+    ("pathway", "Species", "species", "generated_snake_case"),
+    ("pathway", "Url", "url", "generated_snake_case"),
+    ("pathway", "Version", "version", "generated_snake_case"),
+    ("pathway", "WikiPathwaysId", "wiki_pathways_id", "generated_snake_case"),
+    ("pathway_gene", "GeneId", "gene_id", "generated_snake_case"),
+    (
+        "pathway_gene",
+        "WikiPathwaysId",
+        "wiki_pathways_id",
+        "generated_snake_case",
+    ),
+}
+
+
+def _validate_wikipathways_publication(path: Path) -> str:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    try:
+        with duckdb.connect(str(path), read_only=True) as connection:
+            metadata_rows = connection.execute(
+                "SELECT key, value FROM _bioextract.metadata"
+            ).fetchall()
+            metadata = {str(row[0]): str(row[1]) for row in metadata_rows}
+            if len(metadata) != len(metadata_rows):
+                raise ValueError("WikiPathways publication has duplicate metadata keys")
+            if metadata.get("bioextract.metadata_schema_version") != "1":
+                raise ValueError("Unsupported WikiPathways metadata schema version")
+            validate_duckdb_metadata_v1(connection, metadata)
+            if metadata.get("bioextract.resource_name") != "wikipathways":
+                raise ValueError(
+                    "DuckDB file is not a bioextract WikiPathways publication"
+                )
+            if metadata.get("bioextract.source_schema_profile") != (
+                "wikipathways-gmt-v1"
+            ):
+                raise ValueError("Unsupported WikiPathways source schema profile")
+            if metadata.get("bioextract.resource_schema_version") != SCHEMA_VERSION:
+                raise ValueError("Unsupported WikiPathways resource schema version")
+            if "bioextract.scope" in metadata:
+                raise ValueError("WikiPathways publication scope is unsupported")
+            release_version = metadata.get("bioextract.release_version")
+            if (
+                release_version is None
+                or metadata.get("bioextract.release_version_source")
+                != "official_metadata"
+            ):
+                raise ValueError(
+                    "WikiPathways publication release identity is unsupported"
+                )
+
+            source_rows = connection.execute(
+                "SELECT logical_name, bytes, media_type FROM _bioextract.source_file"
+            ).fetchall()
+            expected_roles = {
+                f"pathway_gmt_{index:03d}" for index in range(1, len(source_rows) + 1)
+            }
+            if (
+                not source_rows
+                or {str(row[0]) for row in source_rows} != expected_roles
+                or any(
+                    int(row[1]) < 0 or str(row[2]) != MEDIA_TYPE_GMT
+                    for row in source_rows
+                )
+            ):
+                raise ValueError(
+                    "WikiPathways source capability inventory is unsupported"
+                )
+
+            relations = {
+                (str(row[0]), str(row[1]), str(row[2]))
+                for row in connection.execute(
+                    "SELECT table_schema, table_name, table_type "
+                    "FROM information_schema.tables "
+                    "WHERE table_schema NOT IN ('information_schema', 'pg_catalog')"
+                ).fetchall()
+            }
+            expected_relations = {
+                ("_bioextract", name, "BASE TABLE") for name in BIOEXTRACT_RELATIONS
+            } | {("main", name, "BASE TABLE") for name in _WIKIPATHWAYS_TABLE_CONTRACTS}
+            if relations != expected_relations:
+                raise ValueError(
+                    "WikiPathways physical table/view inventory is unsupported"
+                )
+
+            info_rows = connection.execute(
+                "SELECT table_name, table_role, row_count FROM _bioextract.table_info"
+            ).fetchall()
+            recorded = {str(row[0]): (str(row[1]), int(row[2])) for row in info_rows}
+            if len(recorded) != len(info_rows) or set(recorded) != set(
+                _WIKIPATHWAYS_TABLE_CONTRACTS
+            ):
+                raise ValueError("WikiPathways table inventory does not match metadata")
+            for table_name, (role, row_count) in recorded.items():
+                expected_role, expected_schema = _WIKIPATHWAYS_TABLE_CONTRACTS[
+                    table_name
+                ]
+                if role != expected_role or row_count < 0:
+                    raise ValueError(
+                        "WikiPathways table capability inventory is unsupported"
+                    )
+                actual_schema = tuple(
+                    (str(row[1]), str(row[2]))
+                    for row in connection.execute(
+                        f'PRAGMA table_info("{table_name}")'
+                    ).fetchall()
+                )
+                if actual_schema != expected_schema:
+                    raise ValueError(
+                        f"WikiPathways table schema is unsupported: {table_name}"
+                    )
+            column_mappings = {
+                tuple(str(value) for value in row)
+                for row in connection.execute(
+                    "SELECT table_name, source_column, output_column, reason "
+                    "FROM _bioextract.column_mapping"
+                ).fetchall()
+            }
+            if column_mappings != _WIKIPATHWAYS_COLUMN_MAPPINGS:
+                raise ValueError(
+                    "WikiPathways column provenance inventory is unsupported"
+                )
+    except duckdb.Error as error:
+        raise ValueError(
+            f"Cannot open WikiPathways DuckDB publication: {path}"
+        ) from error
+    return release_version
+
+
+def _file_identity(path: Path) -> tuple[int, int, int, int, int]:
+    stat = path.stat()
+    return (
+        stat.st_dev,
+        stat.st_ino,
+        stat.st_size,
+        stat.st_mtime_ns,
+        stat.st_ctime_ns,
+    )

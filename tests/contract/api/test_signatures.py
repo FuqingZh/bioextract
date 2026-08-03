@@ -105,6 +105,7 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "relations",
         ),
         wikipathways.WikiPathwaysDatabase.from_gmt: ("source", "species", "glob"),
+        wikipathways.WikiPathwaysDatabase.from_duckdb: ("path",),
         eggnog.EggNOGDatabase.from_sqlite: (
             "source",
             "cog_functions",
