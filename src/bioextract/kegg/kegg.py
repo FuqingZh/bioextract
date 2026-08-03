@@ -721,7 +721,11 @@ class KEGGDatabase:
             _KeggSnapshotKind.BRITE_JSON,
             _KeggSnapshotKind.MAPPING_FILES,
         }:
-            return self.build_tidy().write_duckdb(path, if_exists=if_exists)
+            return self.build_tidy().write_duckdb(
+                path,
+                if_exists=if_exists,
+                include_source_hashes=include_source_hashes,
+            )
         if self.snapshot.kind != _KeggSnapshotKind.METABOLIC_FILES:
             raise CapabilityError("write_duckdb() requires a KEGG source handle")
         snapshot = self.snapshot.metabolic
@@ -1024,6 +1028,26 @@ def _validate_tidy_publication(
             )
         if metadata.get("bioextract.resource_schema_version") != schema_version:
             raise ValueError(f"Unsupported KEGG {scope} resource schema version")
+        source_roles = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT logical_name FROM _bioextract.source_file"
+            ).fetchall()
+        }
+        required_source_roles = (
+            {"brite_json"}
+            if scope == "brite"
+            else {"uniprot_conversion", "gene_ko", "gene_pathway"}
+        )
+        allowed_source_roles = (
+            required_source_roles
+            if scope == "brite"
+            else required_source_roles | {"gene_list", "ncbi_gene_conversion"}
+        )
+        if not required_source_roles <= source_roles or not source_roles <= (
+            allowed_source_roles
+        ):
+            raise ValueError(f"KEGG {scope} source role inventory is unsupported")
         if (
             scope == "mapping"
             and not metadata.get("bioextract.organism_code", "").strip()
@@ -1059,16 +1083,28 @@ def _validate_tidy_publication(
                 ]
             )
             actual_columns = [
-                str(row[1])
+                (str(row[1]), str(row[2]))
                 for row in connection.execute(
                     f'PRAGMA table_info("{table_name}")'
                 ).fetchall()
             ]
-            if actual_columns != expected_columns:
+            if actual_columns != [(column, "VARCHAR") for column in expected_columns]:
                 raise ValueError(f"KEGG {scope} table schema is unsupported")
             actual = connection.execute(
                 f'SELECT count(*) FROM "{table_name}"'
             ).fetchone()
             if actual is None or int(actual[0]) != int(row_count):
                 raise ValueError(f"KEGG {scope} row-count drift: {table_name}")
+        if scope == "mapping":
+            organism_code = metadata["bioextract.organism_code"]
+            mismatch = connection.execute(
+                "SELECT count(*) FROM mapping "
+                "WHERE organism_code != ? "
+                "OR NOT starts_with(kegg_gene_id, ?)",
+                [organism_code, f"{organism_code}:"],
+            ).fetchone()
+            if mismatch is None or int(mismatch[0]) != 0:
+                raise ValueError(
+                    "KEGG mapping rows do not match the recorded organism_code"
+                )
     return kind

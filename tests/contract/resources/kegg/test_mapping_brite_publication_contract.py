@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Callable
 from pathlib import Path
@@ -153,6 +154,65 @@ def test_atomic_if_exists_preserves_previous_publication(tmp_path: Path) -> None
     with pytest.raises(FileExistsError):
         source.write_duckdb(path)
     assert path.read_bytes() == before
+
+
+def test_source_hash_requests_are_honored_for_tidy_profiles(tmp_path: Path) -> None:
+    source = _brite_source(tmp_path)
+    path = tmp_path / "brite.duckdb"
+    source.write_duckdb(path, include_source_hashes=True)
+
+    with duckdb.connect(str(path), read_only=True) as connection:
+        observed = connection.execute(
+            "SELECT display_path, sha256 FROM _bioextract.source_file"
+        ).fetchone()
+    assert observed is not None
+    assert observed[1] == hashlib.sha256(Path(observed[0]).read_bytes()).hexdigest()
+
+
+def test_mapping_publication_rejects_incompatible_column_types(tmp_path: Path) -> None:
+    path = tmp_path / "mapping.duckdb"
+    _mapping_source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "ALTER TABLE mapping ALTER kegg_gene_id TYPE INTEGER USING 1"
+        )
+
+    with pytest.raises(ValueError, match="table schema"):
+        KEGGDatabase.from_duckdb(path)
+
+
+def test_mapping_publication_validates_recorded_organism(tmp_path: Path) -> None:
+    path = tmp_path / "mapping.duckdb"
+    _mapping_source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value='mmu' "
+            "WHERE key='bioextract.organism_code'"
+        )
+
+    with pytest.raises(ValueError, match="recorded organism_code"):
+        KEGGDatabase.from_duckdb(path)
+
+
+def test_tidy_profiles_validate_source_roles(tmp_path: Path) -> None:
+    path = tmp_path / "brite.duckdb"
+    _brite_source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "UPDATE _bioextract.source_file SET logical_name='renamed_brite_json'"
+        )
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+        sources = json.loads(metadata["bioextract.sources"])
+        sources[0]["logical_name"] = "renamed_brite_json"
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value=? WHERE key='bioextract.sources'",
+            [json.dumps(sources, separators=(",", ":"), sort_keys=True)],
+        )
+
+    with pytest.raises(ValueError, match="source role inventory"):
+        KEGGDatabase.from_duckdb(path)
 
 
 def test_brite_publication_rejects_mapping_selection(tmp_path: Path) -> None:
