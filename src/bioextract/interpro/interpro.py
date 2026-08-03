@@ -157,7 +157,7 @@ class InterProDatabase:
             capabilities, release_version = _validate_interpro_publication(
                 publication_path
             )
-        except ValueError as error:
+        except (KeyError, TypeError, ValueError) as error:
             raise IntegrityError(str(error)) from error
         result = cls(snapshot=_InterProSnapshot())
         result._publication_path = publication_path
@@ -770,18 +770,22 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
             }
             if provenance_tables != BIOEXTRACT_RELATIONS:
                 raise ValueError("InterPro provenance table inventory is unsupported")
-            physical_tables = {
-                str(row[0])
+            physical_relations = {
+                (str(row[0]), str(row[1]))
                 for row in connection.execute(
-                    "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema='main' AND table_type='BASE TABLE'"
+                    "SELECT table_name, table_type FROM information_schema.tables "
+                    "WHERE table_schema='main'"
                 ).fetchall()
             }
             rows = connection.execute(
                 "SELECT table_name, table_role, row_count FROM _bioextract.table_info"
             ).fetchall()
             recorded = {str(row[0]): (str(row[1]), int(row[2])) for row in rows}
-            if set(recorded) != expected_tables or physical_tables != expected_tables:
+            expected_relations = {(table, "BASE TABLE") for table in expected_tables}
+            if (
+                set(recorded) != expected_tables
+                or physical_relations != expected_relations
+            ):
                 raise ValueError("InterPro table inventory does not match capabilities")
             for table_name, (role, row_count) in recorded.items():
                 expected_role, expected_columns = _TABLE_CONTRACTS[table_name]
@@ -811,6 +815,36 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
                 if incomplete_enrichment is None or int(incomplete_enrichment[0]):
                     raise ValueError(
                         "InterPro XML publication has incomplete mapping enrichment"
+                    )
+                invalid_compact = connection.execute(
+                    "SELECT "
+                    "EXISTS(SELECT 1 FROM protein_term WHERE "
+                    "uniprot_id IS NULL OR trim(uniprot_id)='' OR "
+                    "pfam_id IS NULL OR trim(pfam_id)='') OR "
+                    "EXISTS(SELECT 1 FROM term WHERE "
+                    "pfam_id IS NULL OR trim(pfam_id)='' OR "
+                    "pfam_name IS NULL OR trim(pfam_name)='') OR "
+                    "EXISTS(SELECT 1 FROM term_xref WHERE "
+                    "pfam_id IS NULL OR trim(pfam_id)='' OR "
+                    "interpro_id IS NULL OR trim(interpro_id)='' OR "
+                    "interpro_name IS NULL OR trim(interpro_name)='' OR "
+                    "interpro_type IS NULL OR trim(interpro_type)='') OR "
+                    "EXISTS(SELECT 1 FROM protein_term "
+                    "GROUP BY uniprot_id, pfam_id HAVING count(*) > 1) OR "
+                    "EXISTS(SELECT 1 FROM term "
+                    "GROUP BY pfam_id HAVING count(*) > 1) OR "
+                    "EXISTS(SELECT 1 FROM term_xref "
+                    "GROUP BY pfam_id HAVING count(*) > 1) OR "
+                    "EXISTS(SELECT pfam_id FROM term EXCEPT "
+                    "SELECT pfam_id FROM term_xref) OR "
+                    "EXISTS(SELECT pfam_id FROM term_xref EXCEPT "
+                    "SELECT pfam_id FROM term) OR "
+                    "EXISTS(SELECT pfam_id FROM protein_term EXCEPT "
+                    "SELECT pfam_id FROM term)"
+                ).fetchone()
+                if invalid_compact is None or bool(invalid_compact[0]):
+                    raise ValueError(
+                        "InterPro publication has inconsistent compact Pfam relations"
                     )
 
             observed_mappings = {

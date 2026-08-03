@@ -69,6 +69,7 @@ deterministic sample after write, and:
   deterministic UniProt sample
 - recorded output sizes, elapsed time, peak RSS, and selected-ID query time
 
-Keep full-snapshot runs outside the default pytest suite. The observed canonical
-and compact 108.0 baselines are recorded in the
+Keep full-snapshot runs outside the default pytest suite. Historical canonical
+and compact Parquet measurements, which predate unified DuckDB publication and
+are not its size or reopen baseline, are recorded in the
 [InterPro 108.0 benchmark](../benchmarks/20260714-v1.0-interpro-108-benchmark.md).

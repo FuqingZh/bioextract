@@ -314,3 +314,55 @@ def test_xml_profile_rejects_incomplete_mapping_enrichment(
 
     with pytest.raises(IntegrityError, match="incomplete mapping enrichment"):
         InterProDatabase.from_duckdb(path)
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE protein_term SET pfam_id='PF99999'",
+        "UPDATE term SET pfam_name=''",
+        "INSERT INTO term SELECT * FROM term LIMIT 1",
+    ],
+)
+def test_xml_profile_rejects_inconsistent_compact_pfam_relations(
+    tmp_path: Path,
+    statement: str,
+) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(statement)
+        connection.execute(
+            "UPDATE _bioextract.table_info SET row_count=(SELECT count(*) FROM term) "
+            "WHERE table_name='term'"
+        )
+
+    with pytest.raises(IntegrityError, match="compact Pfam relations"):
+        InterProDatabase.from_duckdb(path)
+
+
+@pytest.mark.parametrize("value", ["null", "{}"])
+def test_from_duckdb_rejects_wrong_embedded_source_json_shape(
+    tmp_path: Path,
+    value: str,
+) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value=? WHERE key='bioextract.sources'",
+            [value],
+        )
+
+    with pytest.raises(IntegrityError):
+        InterProDatabase.from_duckdb(path)
+
+
+def test_from_duckdb_rejects_unrecorded_main_schema_view(tmp_path: Path) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute("CREATE VIEW forged AS SELECT * FROM mapping")
+
+    with pytest.raises(IntegrityError, match="table inventory"):
+        InterProDatabase.from_duckdb(path)
