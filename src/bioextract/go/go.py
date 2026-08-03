@@ -25,7 +25,16 @@ from .ontology.constant import (
     ASSET_SPECS,
     GO_SUBSET_GOSLIM_GENERIC,
     MEDIA_TYPE_OBO,
+    SCHEMA_ALT_ID,
+    SCHEMA_ANCESTOR,
+    SCHEMA_DEPTH,
+    SCHEMA_EDGE,
+    SCHEMA_SUBSET_DEFINITION,
+    SCHEMA_SUBSET_MEMBERSHIP,
+    SCHEMA_SYNONYM,
+    SCHEMA_TERM,
     SCHEMA_VERSION,
+    SCHEMA_XREF,
 )
 from .ontology.parse import (
     read_obo_subset_definitions,
@@ -50,6 +59,19 @@ class _GoNamespace(StrEnum):
     BIOLOGICAL_PROCESS = "biological_process"
     CELLULAR_COMPONENT = "cellular_component"
     MOLECULAR_FUNCTION = "molecular_function"
+
+
+_GO_FRAME_SCHEMAS = {
+    "term": SCHEMA_TERM,
+    "edge": SCHEMA_EDGE,
+    "synonym": SCHEMA_SYNONYM,
+    "xref": SCHEMA_XREF,
+    "alt_id": SCHEMA_ALT_ID,
+    "subset_membership": SCHEMA_SUBSET_MEMBERSHIP,
+    "subset_definition": SCHEMA_SUBSET_DEFINITION,
+    "ancestor_all": SCHEMA_ANCESTOR,
+    "depth": SCHEMA_DEPTH,
+}
 
 
 class GoSubsetId(StrEnum):
@@ -478,7 +500,9 @@ class GODatabase:
         with self.connect() as connection:
             return {
                 frame_name: pl.read_database(  # pyright: ignore[reportUnknownMemberType]
-                    f'SELECT * FROM "{table_names[frame_name]}"', connection
+                    f'SELECT * FROM "{table_names[frame_name]}"',
+                    connection,
+                    schema_overrides=_GO_FRAME_SCHEMAS[frame_name],
                 )
                 for frame_name in selected_names
             }

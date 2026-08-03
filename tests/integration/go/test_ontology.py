@@ -185,6 +185,49 @@ def test_go_duckdb_reopen_preserves_domain_and_native_sql_behavior(
         second.close()
 
 
+def test_go_duckdb_reopen_uses_declared_schemas_for_nullable_synonym_types(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "go-basic.obo"
+    publication = tmp_path / "go.duckdb"
+    write_minimal_obo(source_path)
+    synonym_lines = [
+        f'synonym: "untyped synonym {index:03d}" EXACT []' for index in range(100)
+    ]
+    synonym_lines.append('synonym: "typed synonym" EXACT systematic_synonym []')
+    with source_path.open("a", encoding="utf-8") as source_file:
+        source_file.write(
+            "\n[Term]\n"
+            "id: GO:0000005\n"
+            "name: synonym inference fixture\n"
+            "namespace: biological_process\n" + "\n".join(synonym_lines) + "\n"
+        )
+
+    source = GODatabase.from_obo(source_path)
+    expected_tidy = {
+        name: frame.collect() for name, frame in source.build_tidy().frames.items()
+    }
+    expected_terms = source.select_terms(term_ids=["GO:0000005"])
+    expected_subsets = source.list_subsets()
+    source.write_duckdb(publication)
+
+    reopened = GODatabase.from_duckdb(publication)
+    actual_tidy = reopened.build_tidy()
+    assert set(actual_tidy.frames) == set(expected_tidy)
+    for name, expected_frame in expected_tidy.items():
+        assert actual_tidy.frames[name].collect().equals(expected_frame)
+    assert reopened.select_terms(term_ids=["GO:0000005"]).equals(expected_terms)
+    assert reopened.list_subsets().equals(expected_subsets)
+    assert (
+        actual_tidy.frames["synonym"]
+        .filter(pl.col("synonym_type_name") == "systematic_synonym")
+        .select("synonym_scope")
+        .collect()
+        .item()
+        == "EXACT"
+    )
+
+
 def test_go_db_lists_subsets(tmp_path: Path) -> None:
     file_in = tmp_path / "go-basic.obo"
     write_minimal_obo(file_in)
