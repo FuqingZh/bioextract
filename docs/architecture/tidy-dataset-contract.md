@@ -26,15 +26,14 @@ model and not misleading empty observations.
 Resource publication writers use:
 
 ```python
-file_out = "tidy/data.duckdb"
-result = source.write_duckdb(file_out)
+path = "tidy/data.duckdb"
+result = source.write_duckdb(path)
 ```
 
-Here `file_out` is the positional destination value; it is not a promised
-keyword name. Readers use `XDatabase.from_duckdb(path)`, and every `connect()`
-call returns a fresh caller-owned connection opened read-only. The library does
-not infer a semantic filename. The versioned CephFS convention is
-`tidy/data.duckdb`, but filenames are not schema identity.
+Every writer requires `path`. Readers use `XDatabase.from_duckdb(path)`, and
+every `connect()` call returns a fresh caller-owned connection opened read-only.
+The library does not infer a semantic filename. The versioned CephFS convention
+is `tidy/data.duckdb`, but filenames are not schema identity.
 
 ## Naming
 
@@ -96,8 +95,7 @@ until a complete new staging file is ready.
 
 `TidyDataset` has no directory writer and resources expose no `write_tidy()`
 compatibility surface. Publications always use an explicit single-file
-`write_duckdb(file_out)` destination, where `file_out` denotes the positional
-destination value. Metadata schema v1 is the first and only
+`write_duckdb(path)` destination. Metadata schema v1 is the first and only
 supported contract. It may include
 `bioextract.source_schema_version` only when the upstream source declares an
 authoritative schema label. `bioextract.release_version` remains optional.
