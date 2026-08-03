@@ -246,6 +246,19 @@ Canonical publication uses `write_duckdb(path)`. `protein_pathway`,
 `pathway`, and `pathway_relation` stay together; duplicate enrichment
 projections are not stored. Provenance and row counts live in `_bioextract`.
 
+`ReactomeDatabase.from_duckdb(path)` reopens full or partial publications that
+conform to metadata v1 and `reactome-mapping-files-v1`. Reopen validation is
+bounded to provenance, source capabilities, the exact table/view inventory,
+and physical column schemas; recorded biological row counts are trusted rather
+than recomputed. Existing selection, grouped-selection, enrichment, relation,
+and species-scoping behavior is shared with source-backed handles.
+
+Each `connect()` call on a reopened handle returns an independent native DuckDB
+connection opened read-only and owned by the caller. The handle pins the
+validated file identity and rejects access after atomic replacement. Source
+handles do not expose native connections, and reopened handles do not republish
+the validated database.
+
 The verified v96 publication is:
 
 ```text

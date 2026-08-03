@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+import duckdb
 import pytest
 
+from bioextract.errors import CapabilityError, IntegrityError
 from bioextract.reactome import ReactomeDatabase
 
 
@@ -193,6 +196,148 @@ def test_build_tidy_writes_duckdb(tmp_path: Path) -> None:
     assert not (tmp_path / "manifest.json").exists()
 
 
+def test_duckdb_reopen_preserves_domain_selection_and_native_sql(
+    tmp_path: Path,
+) -> None:
+    file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
+    source = ReactomeDatabase.from_files(
+        uniprot_mapping=file_mapping,
+        pathways=file_pathways,
+        relations=file_relations,
+    ).with_species("Homo sapiens")
+    expected_mapping = source.select_groups(
+        {
+            "TumorA": ["P04637", "MISSING"],
+            "TumorB": ["P04637", "Q9Y243"],
+        }
+    ).extract_mapping()
+    expected_unmatched = source.select_groups(
+        {
+            "TumorA": ["P04637", "MISSING"],
+            "TumorB": ["P04637", "Q9Y243"],
+        }
+    ).extract_unmatched_ids()
+    expected_term2gene = source.extract_term2gene()
+    expected_term2name = source.extract_term2name()
+    expected_relations = source.extract_pathway_relations()
+    publication = tmp_path / "reactome.duckdb"
+    ReactomeDatabase.from_files(
+        uniprot_mapping=file_mapping,
+        pathways=file_pathways,
+        relations=file_relations,
+    ).write_duckdb(publication)
+
+    reopened = ReactomeDatabase.from_duckdb(publication).with_species("Homo sapiens")
+    selection = reopened.select_groups(
+        {
+            "TumorA": ["P04637", "MISSING"],
+            "TumorB": ["P04637", "Q9Y243"],
+        }
+    )
+    assert selection.extract_mapping().equals(expected_mapping)
+    assert selection.extract_unmatched_ids().equals(expected_unmatched)
+    assert reopened.extract_term2gene().equals(expected_term2gene)
+    assert reopened.extract_term2name().equals(expected_term2name)
+    assert reopened.extract_pathway_relations().equals(expected_relations)
+    assert set(reopened.build_tidy().frames) == set(source.build_tidy().frames)
+
+    first = reopened.connect()
+    second = reopened.connect()
+    try:
+        assert first is not second
+        assert first.execute(
+            "SELECT pathway_name FROM pathway WHERE reactome_pathway_id='R-HSA-1640170'"
+        ).fetchone() == ("Cell Cycle",)
+        with pytest.raises(duckdb.Error):
+            first.execute("CREATE TABLE forbidden(value INTEGER)")
+    finally:
+        first.close()
+        second.close()
+
+
+def test_duckdb_reopen_validates_bounded_physical_contract(tmp_path: Path) -> None:
+    file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
+    publication = tmp_path / "reactome.duckdb"
+    ReactomeDatabase.from_files(
+        uniprot_mapping=file_mapping,
+        pathways=file_pathways,
+        relations=file_relations,
+    ).write_duckdb(publication)
+
+    with duckdb.connect(str(publication)) as connection:
+        connection.execute(
+            "UPDATE _bioextract.table_info SET row_count=999999999 "
+            "WHERE table_name='protein_pathway'"
+        )
+    assert (
+        ReactomeDatabase.from_duckdb(publication)
+        .select_ids(["P04637"])
+        .extract_mapping()
+        .height
+        == 2
+    )
+
+    with duckdb.connect(str(publication)) as connection:
+        connection.execute("ALTER TABLE pathway DROP COLUMN species")
+    with pytest.raises(IntegrityError, match="table schema"):
+        ReactomeDatabase.from_duckdb(publication)
+
+
+def test_duckdb_reopen_rejects_wrong_identity_inventory_and_replacement(
+    tmp_path: Path,
+) -> None:
+    file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
+    wrong = tmp_path / "wrong.duckdb"
+    ReactomeDatabase.from_files(
+        uniprot_mapping=file_mapping,
+        pathways=file_pathways,
+        relations=file_relations,
+    ).write_duckdb(wrong)
+    with duckdb.connect(str(wrong)) as connection:
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value='other' "
+            "WHERE key='bioextract.resource_name'"
+        )
+    with pytest.raises(IntegrityError, match="not a bioextract Reactome"):
+        ReactomeDatabase.from_duckdb(wrong)
+
+    corrupt = tmp_path / "corrupt.duckdb"
+    ReactomeDatabase.from_files(
+        uniprot_mapping=file_mapping,
+        pathways=file_pathways,
+        relations=file_relations,
+    ).write_duckdb(corrupt)
+    with duckdb.connect(str(corrupt)) as connection:
+        connection.execute("CREATE VIEW unexpected AS SELECT 1 AS value")
+    with pytest.raises(IntegrityError, match="table/view inventory"):
+        ReactomeDatabase.from_duckdb(corrupt)
+
+    current = tmp_path / "current.duckdb"
+    replacement = tmp_path / "replacement.duckdb"
+    ReactomeDatabase.from_files(uniprot_mapping=file_mapping).write_duckdb(current)
+    reopened = ReactomeDatabase.from_duckdb(current)
+    cached_selection = reopened.select_ids(["P04637"])
+    assert cached_selection.extract_mapping().height == 2
+    with pytest.raises(CapabilityError, match="source-file handle"):
+        reopened.build_tidy().write_duckdb(tmp_path / "invalid.duckdb")
+    with pytest.raises(CapabilityError, match="pathway metadata"):
+        reopened.extract_term2name()
+    ReactomeDatabase.from_files(uniprot_mapping=file_mapping).write_duckdb(replacement)
+    os.replace(replacement, current)
+    with pytest.raises(IntegrityError, match="was replaced"):
+        reopened.connect()
+    with pytest.raises(IntegrityError, match="was replaced"):
+        cached_selection.extract_mapping()
+    with pytest.raises(IntegrityError, match="was replaced"):
+        reopened.build_tidy()
+
+
+def test_source_handle_rejects_native_connection(tmp_path: Path) -> None:
+    file_mapping, _, _ = write_reactome_fixture(tmp_path)
+    with pytest.raises(CapabilityError, match="from_duckdb"):
+        ReactomeDatabase.from_files(uniprot_mapping=file_mapping).connect()
+
+
 def test_mapping_only_snapshot_supports_annotation_and_term2gene(
     tmp_path: Path,
 ) -> None:
@@ -239,6 +384,13 @@ def test_relation_only_snapshot_supports_unscoped_relations(
 
     with pytest.raises(ValueError, match="species-scoped relation filtering"):
         db.with_species("Homo sapiens").extract_pathway_relations()
+
+    publication = tmp_path / "reactome_relations.duckdb"
+    db.write_duckdb(publication)
+    with pytest.raises(CapabilityError, match="species-scoped relation filtering"):
+        ReactomeDatabase.from_duckdb(publication).with_species(
+            "Homo sapiens"
+        ).extract_pathway_relations()
 
 
 def test_from_files_rejects_missing_files(tmp_path: Path) -> None:
