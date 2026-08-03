@@ -149,6 +149,13 @@ class GODatabase:
             FileNotFoundError: If the publication does not exist.
             IntegrityError: If the publication contract is invalid or the file
                 changes while it is being validated.
+
+        Examples:
+            Reopen a publication for ontology selection:
+
+            >>> db = GODatabase.from_duckdb("tidy/go.duckdb")  # doctest: +SKIP
+            >>> db.select_terms(term_ids=["GO:0005575"]).height  # doctest: +SKIP
+            1
         """
         publication_path = Path(path).resolve()
         identity_before = _file_identity(publication_path)
@@ -170,6 +177,15 @@ class GODatabase:
         Raises:
             CapabilityError: If this handle was created from an OBO source.
             IntegrityError: If the validated publication path was replaced.
+
+        Examples:
+            Query the publication through native DuckDB SQL:
+
+            >>> db = GODatabase.from_duckdb("tidy/go.duckdb")  # doctest: +SKIP
+            >>> with db.connect() as connection:  # doctest: +SKIP
+            ...     count = connection.sql("SELECT count(*) FROM term").fetchone()[0]
+            >>> count >= 0  # doctest: +SKIP
+            True
         """
         path = self._publication_path
         if path is None:
