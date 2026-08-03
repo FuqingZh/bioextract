@@ -575,9 +575,13 @@ def validate_publication(path: Path) -> tuple[str, Mapping[str, str]]:
                 scope = cast(object, json.loads(metadata["bioextract.scope"]))
             except (KeyError, json.JSONDecodeError) as error:
                 raise ValueError("Unsupported UniProt idmapping taxon scope") from error
-            valid_all_taxa = scope == {"all_taxa": True}
             scope_mapping = (
                 cast(dict[str, object], scope) if isinstance(scope, dict) else {}
+            )
+            valid_all_taxa = (
+                set(scope_mapping) == {"all_taxa"}
+                and isinstance(scope_mapping["all_taxa"], bool)
+                and scope_mapping["all_taxa"] is True
             )
             taxon_ids_value = scope_mapping.get("taxon_ids")
             taxon_ids = (

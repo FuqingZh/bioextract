@@ -306,6 +306,40 @@ def test_idmapping_reopen_translates_malformed_metadata_schema(
         UniProtDatabase.from_duckdb(path)
 
 
+@pytest.mark.parametrize("scope", [{"all_taxa": 1}, {"all_taxa": 1.0}])
+def test_idmapping_reopen_requires_boolean_all_taxa(
+    tmp_path: Path, scope: dict[str, object]
+) -> None:
+    path = tmp_path / "mapping.duckdb"
+    UniProtDatabase.from_idmapping(
+        _write_idmapping(tmp_path / "mapping.tab.gz")
+    ).write_duckdb(path, allow_all_taxa=True)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value=? WHERE key='bioextract.scope'",
+            [json.dumps(scope)],
+        )
+    with pytest.raises(IntegrityError, match="taxon scope"):
+        UniProtDatabase.from_duckdb(path)
+
+
+@pytest.mark.parametrize("sources", [{}, [{}]])
+def test_idmapping_reopen_translates_malformed_embedded_sources(
+    tmp_path: Path, sources: object
+) -> None:
+    path = tmp_path / "mapping.duckdb"
+    UniProtDatabase.from_idmapping(
+        _write_idmapping(tmp_path / "mapping.tab.gz")
+    ).write_duckdb(path, allow_all_taxa=True)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value=? WHERE key='bioextract.sources'",
+            [json.dumps(sources)],
+        )
+    with pytest.raises(IntegrityError):
+        UniProtDatabase.from_duckdb(path)
+
+
 def test_reopened_mapping_lazy_frame_owns_and_releases_connection(
     tmp_path: Path,
 ) -> None:
