@@ -385,6 +385,13 @@ def test_relation_only_snapshot_supports_unscoped_relations(
     with pytest.raises(ValueError, match="species-scoped relation filtering"):
         db.with_species("Homo sapiens").extract_pathway_relations()
 
+    publication = tmp_path / "reactome_relations.duckdb"
+    db.write_duckdb(publication)
+    with pytest.raises(CapabilityError, match="species-scoped relation filtering"):
+        ReactomeDatabase.from_duckdb(publication).with_species(
+            "Homo sapiens"
+        ).extract_pathway_relations()
+
 
 def test_from_files_rejects_missing_files(tmp_path: Path) -> None:
     _file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)

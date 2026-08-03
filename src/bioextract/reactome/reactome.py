@@ -460,9 +460,11 @@ class ReactomeDatabase:
         if self._df_relations is None:
             if not self._has_pathway():
                 if self.species is not None:
-                    raise ValueError(
+                    self._raise_missing_capability(
                         "Cannot apply Reactome species-scoped relation filtering "
-                        "without pathways file"
+                        "without pathways file",
+                        "Reactome publication cannot apply species-scoped relation "
+                        "filtering without pathway metadata",
                     )
                 self._df_relations = (
                     self._relation_raw_frame()
