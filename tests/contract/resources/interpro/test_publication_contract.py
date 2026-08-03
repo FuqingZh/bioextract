@@ -405,3 +405,36 @@ def test_from_duckdb_rejects_duplicate_table_info_keys(tmp_path: Path) -> None:
 
     with pytest.raises(IntegrityError, match="duplicate table-info keys"):
         InterProDatabase.from_duckdb(path)
+
+
+def test_from_duckdb_rejects_duplicate_column_provenance_keys(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "CREATE TABLE mapping_copy AS SELECT * FROM _bioextract.column_mapping; "
+            "DROP TABLE _bioextract.column_mapping; "
+            "CREATE TABLE _bioextract.column_mapping AS SELECT * FROM mapping_copy; "
+            "INSERT INTO _bioextract.column_mapping SELECT * FROM mapping_copy LIMIT 1; "
+            "DROP TABLE mapping_copy"
+        )
+
+    with pytest.raises(IntegrityError, match="duplicate column-provenance keys"):
+        InterProDatabase.from_duckdb(path)
+
+
+def test_reopened_handle_rejects_atomically_replaced_publication(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    reopened = InterProDatabase.from_duckdb(path)
+
+    replacement_dir = tmp_path / "replacement"
+    replacement_dir.mkdir()
+    _source(replacement_dir, with_xml=False).write_duckdb(path, if_exists="replace")
+
+    with pytest.raises(IntegrityError, match="was replaced"):
+        reopened.connect()

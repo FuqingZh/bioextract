@@ -133,6 +133,8 @@ counts, and column provenance. `connect()` returns a new caller-owned read-only
 DuckDB connection on every call. Source-build content validation is persisted
 as the profile-bound `bioextract.interpro_content_validation` result; reopen
 checks that bounded result and does not rescan billion-row biological tables.
+The reopened handle is pinned to the validated file identity; atomic path
+replacement requires constructing a new handle before further SQL access.
 
 ## Pfam Compact Contract
 

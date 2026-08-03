@@ -87,6 +87,9 @@ class InterProDatabase:
         default=None, init=False, repr=False
     )
     _publication_path: Path | None = field(default=None, init=False, repr=False)
+    _publication_identity: tuple[int, int, int, int] | None = field(
+        default=None, init=False, repr=False
+    )
     _capabilities: frozenset[str] = field(
         default_factory=lambda: frozenset[str](), init=False
     )
@@ -153,6 +156,7 @@ class InterProDatabase:
             1
         """
         publication_path = Path(path)
+        identity_before = _file_identity(publication_path)
         try:
             capabilities, release_version = _validate_interpro_publication(
                 publication_path
@@ -160,7 +164,11 @@ class InterProDatabase:
         except (KeyError, TypeError, ValueError) as error:
             raise IntegrityError(str(error)) from error
         result = cls(snapshot=_InterProSnapshot())
+        identity_after = _file_identity(publication_path)
+        if identity_after != identity_before:
+            raise IntegrityError("InterPro publication changed during validation")
         result._publication_path = publication_path
+        result._publication_identity = identity_after
         result._capabilities = capabilities
         result.release_version = release_version
         return result
@@ -177,7 +185,17 @@ class InterProDatabase:
         """
         if self._publication_path is None:
             raise CapabilityError("connect() requires InterProDatabase.from_duckdb()")
-        return duckdb.connect(str(self._publication_path), read_only=True)
+        if _file_identity(self._publication_path) != self._publication_identity:
+            raise IntegrityError(
+                "InterPro publication was replaced; reopen it with from_duckdb()"
+            )
+        connection = duckdb.connect(str(self._publication_path), read_only=True)
+        if _file_identity(self._publication_path) != self._publication_identity:
+            connection.close()
+            raise IntegrityError(
+                "InterPro publication was replaced; reopen it with from_duckdb()"
+            )
+        return connection
 
     def select_ids(
         self,
@@ -824,13 +842,17 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
                 ).fetchone()
                 if actual_count is None or int(actual_count[0]) != row_count:
                     raise ValueError(f"InterPro row-count drift: {table_name}")
+            mapping_rows = connection.execute(
+                "SELECT table_name, source_column, output_column, reason "
+                "FROM _bioextract.column_mapping"
+            ).fetchall()
             observed_mappings = {
-                tuple(str(value) for value in row)
-                for row in connection.execute(
-                    "SELECT table_name, source_column, output_column, reason "
-                    "FROM _bioextract.column_mapping"
-                ).fetchall()
+                tuple(str(value) for value in row) for row in mapping_rows
             }
+            if len(observed_mappings) != len(mapping_rows):
+                raise ValueError(
+                    "InterPro publication has duplicate column-provenance keys"
+                )
             expected_mappings = {
                 (table, source, output, "generated_snake_case")
                 for table in expected_tables
@@ -853,3 +875,8 @@ def _source_output_columns(table: str) -> list[tuple[str, str]]:
     }[table]
     outputs = [name for name, _type in _TABLE_CONTRACTS[table][1]]
     return list(zip(sources, outputs, strict=True))
+
+
+def _file_identity(path: Path) -> tuple[int, int, int, int]:
+    stat = path.stat()
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)

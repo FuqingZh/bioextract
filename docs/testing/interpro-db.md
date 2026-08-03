@@ -40,6 +40,7 @@ It does not cover:
   provenance inventories, including an incompatible persisted InterPro
   content-validation result.
 - `connect()` returns distinct caller-owned read-only connections.
+- a reopened handle rejects an atomically replaced publication path.
 - reopened selections preserve normalization, unique lookup, grouped fan-out,
   and unmatched behavior.
 - `if_exists="fail"` and `"replace"` retain atomic publication behavior.
