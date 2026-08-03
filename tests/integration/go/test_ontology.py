@@ -7,7 +7,8 @@ import duckdb
 import polars as pl
 import pytest
 
-from bioextract.go import GODatabase, GoSubsetId
+from bioextract import GODatabase
+from bioextract.go.go import GoSubsetId
 
 
 def write_minimal_obo(file_in: Path) -> None:

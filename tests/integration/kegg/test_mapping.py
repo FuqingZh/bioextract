@@ -5,6 +5,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+import bioextract.kegg.kegg as kegg_module
 from bioextract.kegg import KEGGDatabase
 
 
@@ -149,6 +150,76 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     assert selection.extract_unmatched_ids().to_dicts() == [
         {"GroupId": "up", "InputId": "MISSING"}
     ]
+
+
+def test_select_groups_resolves_unique_ids_once_then_expands_membership(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = create_mapping_db(write_kegg_mapping_fixture(tmp_path))
+    mapping_calls = 0
+    original_extract_mapping = kegg_module.KEGGDatabase.extract_mapping
+
+    def counted_extract_mapping(database: KEGGDatabase) -> pl.DataFrame:
+        nonlocal mapping_calls
+        mapping_calls += 1
+        return original_extract_mapping(database)
+
+    monkeypatch.setattr(
+        kegg_module.KEGGDatabase,
+        "extract_mapping",
+        counted_extract_mapping,
+    )
+    selection = db.select_groups(
+        {
+            " case ": ["sp|P12345|GENE1_HUMAN", "P12345", "MISSING"],
+            "control": ["P12345", "MISSING"],
+            "empty": [],
+        },
+        namespace="uniprot",
+    )
+
+    groups = selection._df_groups  # pyright: ignore[reportPrivateUsage]
+    assert groups is not None
+    assert groups["GroupId"].to_list() == [
+        "case",
+        "control",
+        "empty",
+    ]
+    assert selection._df_input_ids["InputId"].to_list() == [  # pyright: ignore[reportPrivateUsage]
+        "MISSING",
+        "P12345",
+    ]
+    assert selection.extract_mapping().select(
+        "GroupId", "InputId", "KeggPathwayId"
+    ).to_dicts() == [
+        {
+            "GroupId": "case",
+            "InputId": "P12345",
+            "KeggPathwayId": "hsa00010",
+        },
+        {
+            "GroupId": "case",
+            "InputId": "P12345",
+            "KeggPathwayId": "hsa01100",
+        },
+        {
+            "GroupId": "control",
+            "InputId": "P12345",
+            "KeggPathwayId": "hsa00010",
+        },
+        {
+            "GroupId": "control",
+            "InputId": "P12345",
+            "KeggPathwayId": "hsa01100",
+        },
+    ]
+    selection.extract_mapping()
+    assert selection.extract_unmatched_ids().to_dicts() == [
+        {"GroupId": "case", "InputId": "MISSING"},
+        {"GroupId": "control", "InputId": "MISSING"},
+    ]
+    assert mapping_calls == 1
 
 
 def test_optional_mapping_files_leave_nullable_columns(tmp_path: Path) -> None:

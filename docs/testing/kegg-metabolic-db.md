@@ -4,7 +4,9 @@ Version: v0.1
 Date: 2026-07-30
 Status: current
 
-The focused suite is `tests/test_kegg_metabolic.py`. It uses temporary local
+The focused suites are `tests/unit/kegg/test_metabolic_parsers.py`,
+`tests/contract/resources/kegg/test_metabolic_publication_contract.py`, and
+`tests/integration/kegg/test_metabolic.py`. They use temporary local
 fixtures only and verifies:
 
 - streaming multi-record compound, reaction, enzyme, and module parsing;
@@ -29,7 +31,8 @@ fixtures only and verifies:
 Run the focused standard with:
 
 ```console
-pdm run pytest tests/test_kegg_metabolic.py tests/test_kegg_mapping.py tests/test_kegg_tidy.py
+pdm run pytest tests/unit/kegg tests/contract/resources/kegg \
+  tests/integration/kegg
 ```
 
 Before handoff, run the repository-wide non-mutating gate:

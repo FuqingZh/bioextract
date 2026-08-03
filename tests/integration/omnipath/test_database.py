@@ -3,8 +3,10 @@ from __future__ import annotations
 import gzip
 from pathlib import Path
 
+import polars as pl
 import pytest
 
+import bioextract.omnipath.util as omnipath_util
 from bioextract.omnipath import OmniPathDatabase
 
 
@@ -54,7 +56,7 @@ def _write_demo_omnipath_files(
         )
 
 
-def test_extract_enzsub_single_query_smoke(tmp_path: Path) -> None:
+def test_extract_enzsub_minimal_round_trip(tmp_path: Path) -> None:
     file_enzsub = tmp_path / "enzsub.tsv"
     _write_demo_omnipath_files(enzsub=file_enzsub)
 
@@ -81,7 +83,7 @@ def test_extract_enzsub_single_query_smoke(tmp_path: Path) -> None:
     assert df_unmapped.to_dicts() == []
 
 
-def test_extract_interactions_single_query_smoke(tmp_path: Path) -> None:
+def test_extract_interactions_minimal_round_trip(tmp_path: Path) -> None:
     file_interactions = tmp_path / "interactions.tsv"
     _write_demo_omnipath_files(interactions=file_interactions)
 
@@ -224,7 +226,7 @@ def test_extract_plain_and_gzip_inputs(tmp_path: Path) -> None:
         assert selection.extract_interactions().height == 1
 
 
-def test_dataset_existence_helpers_smoke(tmp_path: Path) -> None:
+def test_dataset_existence_helpers_with_minimal_sources(tmp_path: Path) -> None:
     file_enzsub = tmp_path / "enzsub.tsv"
     file_interactions = tmp_path / "interactions.tsv"
     _write_demo_omnipath_files(
@@ -466,3 +468,85 @@ def test_selection_exposes_group_mode(tmp_path: Path) -> None:
 
     assert db.select_ids(["P31749"]).is_grouped is False
     assert db.select_groups({"G1": ["P31749"]}).is_grouped is True
+
+
+def test_group_selection_matches_unique_ids_then_expands_membership(
+    tmp_path: Path,
+) -> None:
+    file_enzsub = tmp_path / "enzsub.tsv"
+    _write_demo_omnipath_files(enzsub=file_enzsub)
+
+    selection = OmniPathDatabase.from_files(enzsub=file_enzsub).select_groups(
+        {
+            "G1": ["sp|P31749|AKT1_HUMAN", "MISSING"],
+            "G2": ["P31749", "MISSING"],
+        }
+    )
+
+    assert selection._df_input_ids.to_dicts() == [  # pyright: ignore[reportPrivateUsage]
+        {"InputId": "MISSING"},
+        {"InputId": "P31749"},
+    ]
+    group_membership = selection._df_group_membership  # pyright: ignore[reportPrivateUsage]
+    assert group_membership is not None
+    assert group_membership.to_dicts() == [
+        {"GroupId": "G1", "InputId": "MISSING"},
+        {"GroupId": "G1", "InputId": "P31749"},
+        {"GroupId": "G2", "InputId": "MISSING"},
+        {"GroupId": "G2", "InputId": "P31749"},
+    ]
+    assert (
+        selection.extract_enzsub().group_by("GroupId").len().sort("GroupId").to_dicts()
+    ) == [
+        {"GroupId": "G1", "len": 2},
+        {"GroupId": "G2", "len": 2},
+    ]
+    assert selection.extract_unmatched_ids().to_dicts() == [
+        {"GroupId": "G1", "InputId": "MISSING"},
+        {"GroupId": "G2", "InputId": "MISSING"},
+    ]
+
+
+def test_group_selection_builds_one_scan_per_cached_resource(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_enzsub = tmp_path / "enzsub.tsv"
+    file_interactions = tmp_path / "interactions.tsv"
+    _write_demo_omnipath_files(
+        enzsub=file_enzsub,
+        interactions=file_interactions,
+    )
+
+    original_scan_enzsub = omnipath_util.scan_enzsub
+    original_scan_interactions = omnipath_util.scan_interactions
+    scan_counts = {"enzsub": 0, "interactions": 0}
+
+    def counted_scan_enzsub(file_enzsub: Path) -> pl.LazyFrame:
+        scan_counts["enzsub"] += 1
+        return original_scan_enzsub(file_enzsub)
+
+    def counted_scan_interactions(file_interactions: Path) -> pl.LazyFrame:
+        scan_counts["interactions"] += 1
+        return original_scan_interactions(file_interactions)
+
+    monkeypatch.setattr(omnipath_util, "scan_enzsub", counted_scan_enzsub)
+    monkeypatch.setattr(
+        omnipath_util,
+        "scan_interactions",
+        counted_scan_interactions,
+    )
+
+    selection = OmniPathDatabase.from_files(
+        enzsub=file_enzsub,
+        interactions=file_interactions,
+    ).select_groups(
+        {
+            "G1": ["sp|P31749|AKT1_HUMAN", "ERBB2"],
+            "G2": ["P31749", "ERBB2"],
+        }
+    )
+    assert selection.extract_enzsub() is selection.extract_enzsub()
+    assert selection.extract_interactions() is selection.extract_interactions()
+    assert selection.extract_unmatched_ids() is selection.extract_unmatched_ids()
+    assert scan_counts == {"enzsub": 1, "interactions": 1}

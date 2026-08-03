@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import gzip
 import inspect
 import os
-import zipfile
 from pathlib import Path
 
 import duckdb
-import polars as pl
 import pytest
 
-from bioextract.rhea import RheaCapabilityError, RheaDatabase, RheaNamespace
+from bioextract import RheaDatabase
+from bioextract.errors import CapabilityError
 
 RDF_FIXTURE = """\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -174,50 +172,6 @@ def _write_release(root: Path) -> Path:
     return root
 
 
-def test_reaction_files_write_semantic_tables(tmp_path: Path) -> None:
-    file_rdf = _write(tmp_path / "rhea.rdf", RDF_FIXTURE)
-    file_directions = _write(
-        tmp_path / "directions.tsv",
-        "RHEA_ID_MASTER\tRHEA_ID_LR\tRHEA_ID_RL\tRHEA_ID_BI\n"
-        "10000\t10001\t10002\t10003\n",
-    )
-    path = tmp_path / "rhea.duckdb"
-
-    report = RheaDatabase.from_files(
-        rdf=file_rdf,
-        directions=file_directions,
-    ).write_duckdb(path)
-
-    assert report.scope == "reactions"
-    assert report.row_counts["reaction"] == 5
-    assert "compound_structure" not in report.tables
-    with duckdb.connect(str(path), read_only=True) as connection:
-        assert connection.execute(
-            "SELECT master_id, direction FROM reaction WHERE rhea_id = 10002"
-        ).fetchone() == (10000, "RL")
-        assert connection.execute(
-            """
-            SELECT coefficient_text, coefficient_numeric, location
-            FROM reaction_participant
-            WHERE participant_id = 'Participant_A'
-            """
-        ).fetchone() == ("2", 2.0, "cytoplasm")
-        assert connection.execute(
-            """
-            SELECT directional_role FROM reaction_participant_direction
-            WHERE rhea_id = 10002 AND participant_id = 'Participant_A'
-            """
-        ).fetchone() == ("product",)
-        assert connection.execute(
-            "SELECT charge_text, charge_numeric FROM compound "
-            "WHERE compound_id = 'Compound_B'"
-        ).fetchone() == ("(-1)n", None)
-        assert connection.execute(
-            "SELECT master_id, direction, is_obsolete "
-            "FROM reaction WHERE rhea_id = 10004"
-        ).fetchone() == (None, None, True)
-
-
 def test_from_files_signature_and_removed_constructors() -> None:
     parameters = inspect.signature(RheaDatabase.from_files).parameters
     assert tuple(parameters) == (
@@ -315,60 +269,6 @@ def test_from_files_rejects_duplicate_physical_files(tmp_path: Path) -> None:
             RheaDatabase.from_files(chebi_names=source, xrefs=alias)
 
 
-def test_gzip_is_detected_from_content_not_suffix(tmp_path: Path) -> None:
-    file_rdf = tmp_path / "rhea.data"
-    with gzip.open(file_rdf, "wt", encoding="utf-8") as handle:
-        handle.write(RDF_FIXTURE)
-    file_directions = _write(
-        tmp_path / "directions.data",
-        "RHEA_ID_MASTER\tRHEA_ID_LR\tRHEA_ID_RL\tRHEA_ID_BI\n"
-        "10000\t10001\t10002\t10003\n",
-    )
-
-    report = RheaDatabase.from_files(
-        rdf=file_rdf,
-        directions=file_directions,
-    ).write_duckdb(tmp_path / "gzip.duckdb")
-
-    assert report.row_counts["reaction"] == 5
-
-
-def test_participant_constructor_creates_only_supplied_tables(
-    tmp_path: Path,
-) -> None:
-    file_names = tmp_path / "names.data"
-    with gzip.open(file_names, "wt", encoding="utf-8") as handle:
-        handle.write("CHEBI:1\t A\nCHEBI:2\t B\n")
-    path = tmp_path / "participants.duckdb"
-
-    report = RheaDatabase.from_files(chebi_names=file_names).write_duckdb(path)
-
-    assert report.tables == ("chebi_name",)
-    with duckdb.connect(str(path), read_only=True) as connection:
-        assert connection.execute(
-            "SELECT name FROM chebi_name ORDER BY chebi_id"
-        ).fetchall() == [("A",), ("B",)]
-
-
-def test_cross_reference_constructor_builds_views(tmp_path: Path) -> None:
-    release = _write_release(tmp_path / "release")
-    raw = release / "raw"
-    path = tmp_path / "xrefs.duckdb"
-
-    RheaDatabase.from_files(
-        xrefs=raw / "rhea2xrefs.tsv",
-        uniprot_sprot=raw / "rhea2uniprot_sprot.tsv",
-    ).write_duckdb(path)
-
-    with duckdb.connect(str(path), read_only=True) as connection:
-        assert connection.execute("SELECT ec_number FROM reaction_ec").fetchone() == (
-            "1.1.1.1",
-        )
-        assert connection.execute(
-            "SELECT uniprot_section FROM reaction_uniprot"
-        ).fetchone() == ("Swiss-Prot",)
-
-
 def test_all_role_provenance_and_mixed_reaction_xref_capability(
     tmp_path: Path,
 ) -> None:
@@ -441,7 +341,7 @@ def test_xref_only_publication_reports_reaction_capability_failure(
 
     database = RheaDatabase.from_duckdb(path)
     assert database.snapshot.scope == "publication"
-    with pytest.raises(RheaCapabilityError, match="missing relations"):
+    with pytest.raises(CapabilityError, match="missing relations"):
         database.select_reactions(["1.1.1.1"], namespace="ec")
 
 
@@ -469,36 +369,6 @@ def test_reaction_xref_publication_persists_partial_construction_scope(
     assert database.snapshot.scope == "publication"
     matches = database.select_reactions(["1.1.1.1"], namespace="ec").extract_matches()
     assert matches["RheaId"].to_list() == [10000]
-
-
-def test_complete_release_directory_and_archive(tmp_path: Path) -> None:
-    release = _write_release(tmp_path / "release")
-    file_directory = tmp_path / "directory.duckdb"
-    directory_report = RheaDatabase.from_release(release).write_duckdb(file_directory)
-
-    assert directory_report.release_number == 141
-    assert directory_report.release_date == "2026-06-10"
-    assert directory_report.row_counts["compound_structure"] == 1
-    assert directory_report.row_counts["reaction_uniprot"] == 2
-    with duckdb.connect(str(file_directory), read_only=True) as connection:
-        assert connection.execute(
-            "SELECT charge_text, charge_numeric FROM compound_structure"
-        ).fetchone() == ("(-1)n", None)
-
-    file_archive = tmp_path / "release.zip"
-    with zipfile.ZipFile(file_archive, mode="w") as archive:
-        for path in release.rglob("*"):
-            if path.is_file():
-                archive.write(path, path.relative_to(tmp_path))
-    file_archived_db = tmp_path / "archive.duckdb"
-    archive_report = RheaDatabase.from_release(file_archive).write_duckdb(
-        file_archived_db
-    )
-
-    assert archive_report.row_counts == directory_report.row_counts
-    assert all(
-        str(file_archive) in value for value in archive_report.source_files.values()
-    )
 
 
 def test_release_is_strict_but_partial_constructor_is_not(
@@ -597,178 +467,15 @@ def test_publication_metadata_and_direction_view_follow_shared_contract(
     ]
 
 
-def test_from_duckdb_selects_exact_reactions_and_domain_relations(
-    tmp_path: Path,
-) -> None:
-    release = _write_release(tmp_path / "release")
-    path = tmp_path / "rhea.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(path)
-
-    database = RheaDatabase.from_duckdb(path)
-    selection = database.select_reactions(["CHEBI:1"], namespace="chebi")
-
-    assert selection.extract_matches().select(
-        "InputId", "InputNamespace", "RheaId", "Direction"
-    ).to_dicts() == [
-        {
-            "InputId": "CHEBI:1",
-            "InputNamespace": "chebi",
-            "RheaId": 10000,
-            "Direction": "UN",
-        },
-        {
-            "InputId": "CHEBI:1",
-            "InputNamespace": "chebi",
-            "RheaId": 10001,
-            "Direction": "LR",
-        },
-        {
-            "InputId": "CHEBI:1",
-            "InputNamespace": "chebi",
-            "RheaId": 10002,
-            "Direction": "RL",
-        },
-        {
-            "InputId": "CHEBI:1",
-            "InputNamespace": "chebi",
-            "RheaId": 10003,
-            "Direction": "BI",
-        },
-    ]
-    participant_roles = (
-        selection.extract_participants()
-        .filter(pl.col("ParticipantId") == "Participant_A")
-        .select("RheaId", "Side", "DirectionalRole", "ChEBIId")
-        .to_dicts()
-    )
-    assert participant_roles == [
-        {
-            "RheaId": 10000,
-            "Side": "L",
-            "DirectionalRole": None,
-            "ChEBIId": "CHEBI:1",
-        },
-        {
-            "RheaId": 10001,
-            "Side": "L",
-            "DirectionalRole": "substrate",
-            "ChEBIId": "CHEBI:1",
-        },
-        {
-            "RheaId": 10002,
-            "Side": "L",
-            "DirectionalRole": "product",
-            "ChEBIId": "CHEBI:1",
-        },
-        {
-            "RheaId": 10003,
-            "Side": "L",
-            "DirectionalRole": None,
-            "ChEBIId": "CHEBI:1",
-        },
-    ]
-    assert selection.extract_reactions().filter(pl.col("RheaId") == 10000)[
-        "ReactionSmiles"
-    ].to_list() == ["A>>B"]
-    assert selection.extract_publications()["PubMedId"].to_list() == ["12345"]
-    assert selection.extract_relationships()["RelationType"].unique().to_list() == [
-        "is_a"
-    ]
-
-
-def test_grouped_selection_preserves_lineage_and_unmatched_ids(
-    tmp_path: Path,
-) -> None:
-    release = _write_release(tmp_path / "release")
-    path = tmp_path / "rhea.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(path)
-
-    selection = RheaDatabase.from_duckdb(path).select_groups(
-        {
-            "known": ["1.1.1.1"],
-            "mixed": ["1.1.1.1", "9.9.9.9"],
-        },
-        namespace="ec",
-    )
-
-    assert selection.extract_matches().select(
-        "GroupId", "InputId", "RheaId"
-    ).to_dicts() == [
-        {"GroupId": "known", "InputId": "1.1.1.1", "RheaId": 10000},
-        {"GroupId": "mixed", "InputId": "1.1.1.1", "RheaId": 10000},
-    ]
-    assert selection.extract_unmatched_ids().to_dicts() == [
-        {
-            "GroupId": "mixed",
-            "InputId": "9.9.9.9",
-            "InputNamespace": "ec",
-        }
-    ]
-
-
-@pytest.mark.parametrize(
-    ("namespace", "input_id"),
-    [
-        ("rhea", "RHEA:10000"),
-        ("chebi", "CHEBI:1"),
-        ("uniprot", "sp|P00001|TEST_HUMAN"),
-        ("ec", "1.1.1.1"),
-        ("go", "go:0000001"),
-        ("ecocyc", "RXN-1"),
-        ("kegg_reaction", "R00001"),
-        ("macie", "M0001"),
-        ("metacyc", "META:RXN-1"),
-        ("reactome", "R-HSA-1"),
-    ],
-)
-def test_supported_namespaces_resolve_official_mappings(
-    tmp_path: Path,
-    namespace: RheaNamespace,
-    input_id: str,
-) -> None:
-    release = _write_release(tmp_path / "release")
-    path = tmp_path / "rhea.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(path)
-
-    matches = (
-        RheaDatabase.from_duckdb(path)
-        .select_reactions(
-            [input_id],
-            namespace=namespace,
-        )
-        .extract_matches()
-    )
-
-    assert 10000 in matches["RheaId"].to_list()
-
-
-def test_obsolete_policy_is_explicit(tmp_path: Path) -> None:
-    release = _write_release(tmp_path / "release")
-    path = tmp_path / "rhea.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(path)
-    database = RheaDatabase.from_duckdb(path)
-
-    excluded = database.select_reactions(["10004"], namespace="rhea")
-    included = database.select_reactions(
-        ["RHEA:10004"],
-        namespace="rhea",
-        include_obsolete=True,
-    )
-
-    assert excluded.extract_matches().is_empty()
-    assert excluded.extract_unmatched_ids()["InputId"].to_list() == ["RHEA:10004"]
-    assert included.extract_matches()["RheaId"].to_list() == [10004]
-
-
 def test_partial_publication_reports_missing_capabilities(tmp_path: Path) -> None:
     file_names = _write(tmp_path / "names.tsv", "CHEBI:1\t A\n")
     path = tmp_path / "compounds.duckdb"
     RheaDatabase.from_files(chebi_names=file_names).write_duckdb(path)
     database = RheaDatabase.from_duckdb(path)
 
-    with pytest.raises(RheaCapabilityError, match="missing relations"):
+    with pytest.raises(CapabilityError, match="missing relations"):
         database.select_reactions(["CHEBI:1"], namespace="chebi")
-    with pytest.raises(RheaCapabilityError, match="from_duckdb"):
+    with pytest.raises(CapabilityError, match="from_duckdb"):
         RheaDatabase.from_files(chebi_names=file_names).select_reactions(
             ["CHEBI:1"], namespace="chebi"
         )

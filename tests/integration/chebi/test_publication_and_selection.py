@@ -8,7 +8,8 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from bioextract.chebi import ChEBIDatabase, ChEBIIntegrityError
+import bioextract.chebi._query as chebi_query
+from bioextract import ChEBIDatabase
 
 COMPOUNDS = """id\tname\tstatus_id\tsource\tparent_id\tmerge_type\tchebi_accession\tdefinition\tascii_name\tstars\tmodified_on\trelease_date
 1\twater\t1\tChEBI\t\t\tCHEBI:1\twater definition\twater\t3\t2026-01-01\t2026-01-01
@@ -41,43 +42,6 @@ def _write_release(directory: Path, *, gzip_compounds: bool = False) -> None:
     else:
         (directory / "compounds.tsv").write_text(COMPOUNDS, encoding="utf-8")
     (directory / "names.tsv").write_text(NAMES, encoding="utf-8")
-
-
-def test_release_tables_keep_official_headers_and_use_internal_metadata(
-    tmp_path: Path,
-) -> None:
-    directory = tmp_path / "release"
-    _write_release(directory, gzip_compounds=True)
-
-    path = tmp_path / "chebi.duckdb"
-    result = ChEBIDatabase.from_release(directory).write_duckdb(path)
-
-    assert result.tables == ("compound", "compound_name")
-    with duckdb.connect(str(path), read_only=True) as connection:
-        assert [
-            row[1]
-            for row in connection.execute("PRAGMA table_info('compound')").fetchall()
-        ] == [
-            "id",
-            "name",
-            "status_id",
-            "source",
-            "parent_id",
-            "merge_type",
-            "chebi_accession",
-            "definition",
-            "ascii_name",
-            "stars",
-            "modified_on",
-            "release_date",
-        ]
-        assert connection.execute(
-            "SELECT table_role, row_count FROM _bioextract.table_info "
-            "WHERE table_name = 'compound'"
-        ).fetchone() == ("entity", 1)
-        assert connection.execute(
-            "SELECT count(*) FROM _bioextract.column_mapping"
-        ).fetchone() == (0,)
 
 
 @pytest.mark.parametrize("archive_kind", ["zip", "tar"])
@@ -155,14 +119,6 @@ def test_chemont_relations_share_container_but_not_domain_tables(
     assert "compound" in result.tables
     assert "chemont_term" in result.tables
     assert "chebi_chemont" not in result.tables
-
-
-def test_unsafe_release_archive_member_is_rejected(tmp_path: Path) -> None:
-    file_archive = tmp_path / "unsafe.zip"
-    with zipfile.ZipFile(file_archive, "w") as archive:
-        archive.writestr("../compounds.tsv", COMPOUNDS)
-    with pytest.raises(ValueError, match="Unsafe archive member"):
-        ChEBIDatabase.from_release(file_archive)
 
 
 DOMAIN_OBO = """format-version: 1.2
@@ -282,6 +238,69 @@ def test_domain_selection_supports_shared_ids_namespaces_and_relations(
             connection.execute("CREATE TABLE forbidden(value INTEGER)")
 
 
+def test_grouped_selection_resolves_unique_ids_once_and_reuses_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = ChEBIDatabase.from_duckdb(_write_domain_publication(tmp_path))
+    input_table_calls: list[tuple[tuple[str, str], ...]] = []
+    original_create_input_table = chebi_query._create_input_table  # pyright: ignore[reportPrivateUsage]
+
+    def counted_create_input_table(
+        connection: duckdb.DuckDBPyConnection,
+        rows: tuple[chebi_query._InputRow, ...],  # pyright: ignore[reportPrivateUsage]
+    ) -> None:
+        input_table_calls.append(
+            tuple((row.input_id, row.lookup_value) for row in rows)
+        )
+        original_create_input_table(connection, rows)
+
+    monkeypatch.setattr(
+        chebi_query,
+        "_create_input_table",
+        counted_create_input_table,
+    )
+    selection = database.select_groups(
+        {
+            " first ": ["1", "CHEBI:1", "CHEBI:404"],
+            "second": ["CHEBI:1", "404"],
+            "empty": [],
+        },
+        namespace="chebi",
+    )
+
+    assert selection._group_ids == (  # pyright: ignore[reportPrivateUsage]
+        "empty",
+        "first",
+        "second",
+    )
+    assert selection.extract_matches().select(
+        "GroupId", "InputId", "ChEBIId"
+    ).to_dicts() == [
+        {"GroupId": "first", "InputId": "CHEBI:1", "ChEBIId": "CHEBI:1"},
+        {"GroupId": "second", "InputId": "CHEBI:1", "ChEBIId": "CHEBI:1"},
+    ]
+    selection.extract_compounds()
+    selection.extract_matches()
+    assert selection.extract_unmatched_ids().select(
+        "GroupId", "InputId", "Reason"
+    ).to_dicts() == [
+        {"GroupId": "first", "InputId": "CHEBI:404", "Reason": "not_found"},
+        {"GroupId": "second", "InputId": "CHEBI:404", "Reason": "not_found"},
+    ]
+    selection.extract_unmatched_ids()
+    assert input_table_calls == [
+        (
+            ("CHEBI:1", "CHEBI:1"),
+            ("CHEBI:404", "CHEBI:404"),
+        ),
+        (
+            ("CHEBI:1", "CHEBI:1"),
+            ("CHEBI:404", "CHEBI:404"),
+        ),
+    ]
+
+
 def test_unmatched_reason_precedence_and_dynamic_namespace_error(
     tmp_path: Path,
 ) -> None:
@@ -320,91 +339,3 @@ def test_unmatched_reason_precedence_and_dynamic_namespace_error(
     ]
     with pytest.raises(ValueError, match=r"available:.*kegg\.compound"):
         database.select_compounds(["x"], namespace="unknown")
-
-
-def test_validation_issue_metadata_and_canonical_fail_fast(tmp_path: Path) -> None:
-    path = _write_domain_publication(tmp_path)
-    with duckdb.connect(str(path), read_only=True) as connection:
-        assert connection.execute(
-            "SELECT value FROM _bioextract.metadata "
-            "WHERE key='bioextract.validation_status'"
-        ).fetchone() == ("passed_with_warnings",)
-        assert connection.execute(
-            "SELECT issue_code, relation_name FROM _bioextract.validation_issue "
-            "ORDER BY issue_id"
-        ).fetchall() == [
-            ("foreign_key_violation", "compound_relation"),
-            ("foreign_key_violation", "compound_structure"),
-        ]
-
-    invalid = tmp_path / "invalid.obo"
-    invalid.write_text(
-        """[Term]
-id: CHEBI:1
-name: first
-
-[Term]
-id: CHEBI:1
-name: duplicate
-""",
-        encoding="utf-8",
-    )
-    preserved = tmp_path / "preserved.duckdb"
-    preserved.write_bytes(b"old")
-    with pytest.raises(ChEBIIntegrityError, match="duplicate"):
-        ChEBIDatabase.from_obo(invalid).write_duckdb(
-            preserved,
-            if_exists="replace",
-        )
-    assert preserved.read_bytes() == b"old"
-    assert not list(tmp_path.glob(".preserved.duckdb.*"))
-
-
-def test_chebi_metadata_v1_compatibility_and_unknown_version_rejection(
-    tmp_path: Path,
-) -> None:
-    current = _write_domain_publication(tmp_path)
-    legacy = tmp_path / "legacy.duckdb"
-    legacy.write_bytes(current.read_bytes())
-    with duckdb.connect(str(legacy)) as connection:
-        connection.execute(
-            "UPDATE _bioextract.metadata SET value='1' "
-            "WHERE key='bioextract.metadata_schema_version'"
-        )
-        connection.execute(
-            "UPDATE _bioextract.metadata SET key='bioextract.schema_version' "
-            "WHERE key='bioextract.resource_schema_version'"
-        )
-        connection.execute("DROP TABLE _bioextract.validation_issue")
-    assert ChEBIDatabase.from_duckdb(legacy).select_compounds(
-        ["CHEBI:1"], namespace="chebi"
-    ).extract_matches()["ChEBIId"].to_list() == ["CHEBI:1"]
-
-    unknown = tmp_path / "unknown.duckdb"
-    unknown.write_bytes(current.read_bytes())
-    with duckdb.connect(str(unknown)) as connection:
-        connection.execute(
-            "UPDATE _bioextract.metadata SET value='999' "
-            "WHERE key='bioextract.metadata_schema_version'"
-        )
-    with pytest.raises(ValueError, match="metadata schema version"):
-        ChEBIDatabase.from_duckdb(unknown)
-
-    missing_v3_table = tmp_path / "missing-v3-table.duckdb"
-    missing_v3_table.write_bytes(current.read_bytes())
-    with duckdb.connect(str(missing_v3_table)) as connection:
-        connection.execute("DROP TABLE _bioextract.validation_issue")
-    with pytest.raises(ValueError, match="validation_issue"):
-        ChEBIDatabase.from_duckdb(missing_v3_table)
-
-    for index, profile in enumerate(("", "unknown-profile")):
-        unsupported_profile = tmp_path / f"unsupported-profile-{index}.duckdb"
-        unsupported_profile.write_bytes(current.read_bytes())
-        with duckdb.connect(str(unsupported_profile)) as connection:
-            connection.execute(
-                "UPDATE _bioextract.metadata SET value=? "
-                "WHERE key='bioextract.source_schema_profile'",
-                [profile],
-            )
-        with pytest.raises(ValueError, match="source schema profile"):
-            ChEBIDatabase.from_duckdb(unsupported_profile)

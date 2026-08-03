@@ -12,7 +12,8 @@ and tidy writing. The current architecture is documented in
 
 ## Automated Tests
 
-[`tests/test_go_tidy.py`](../../tests/test_go_tidy.py) verifies:
+[`tests/integration/go/test_ontology.py`](../../tests/integration/go/test_ontology.py)
+verifies:
 
 - ontology, relation, synonym, subset, ancestor, and depth frame contracts
 - subset discovery and term selection by namespace, subset, primary ID, and
@@ -20,7 +21,10 @@ and tidy writing. The current architecture is documented in
 - obsolete-term defaults and subcellular-component compatibility output
 - direct and legacy tidy writers
 
-[`tests/test_kegg_tidy.py`](../../tests/test_kegg_tidy.py) verifies:
+[`tests/unit/kegg/brite/test_parser.py`](../../tests/unit/kegg/brite/test_parser.py)
+and
+[`tests/integration/kegg/brite/test_publication.py`](../../tests/integration/kegg/brite/test_publication.py)
+verify:
 
 - pathway-level and entry/KO parsing variants
 - BRITE tidy frame schemas and single-relation Parquet output
@@ -35,7 +39,7 @@ Run the focused contract with:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m pytest \
-  tests/test_go_tidy.py tests/test_kegg_tidy.py
+  tests/integration/go tests/unit/kegg/brite tests/integration/kegg/brite
 ```
 
 Real-snapshot validation should additionally confirm that produced schemas

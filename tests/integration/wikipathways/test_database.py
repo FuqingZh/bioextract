@@ -285,11 +285,13 @@ def test_single_and_grouped_selection(tmp_path: Path) -> None:
     assert selection.extract_unmatched_ids().to_dicts() == [{"InputId": "MISSING"}]
 
     grouped = db.select_groups({"A": ["2687"], "B": ["2687", "MISSING"]})
-    assert grouped.extract_mapping().columns[0] == "GroupId"
-    assert grouped.extract_mapping().height == 2
-    assert grouped.extract_unmatched_ids().to_dicts() == [
-        {"GroupId": "B", "InputId": "MISSING"}
-    ]
+    df_grouped_mapping = grouped.extract_mapping()
+    assert grouped.extract_mapping() is df_grouped_mapping
+    assert df_grouped_mapping.columns[0] == "GroupId"
+    assert df_grouped_mapping.height == 2
+    df_unmatched = grouped.extract_unmatched_ids()
+    assert grouped.extract_unmatched_ids() is df_unmatched
+    assert df_unmatched.to_dicts() == [{"GroupId": "B", "InputId": "MISSING"}]
 
 
 def test_build_tidy_writes_duckdb_without_sidecar(tmp_path: Path) -> None:

@@ -151,15 +151,19 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     )
 
     grouped = db.select_groups(
-        {"up": ["P12345"], "down": ["MISSING"]},
+        {"up": ["P12345"], "down": ["P12345", "MISSING"]},
     )
 
-    assert grouped.extract_mapping().columns[:3] == [
+    df_mapping = grouped.extract_mapping()
+    assert grouped.extract_mapping() is df_mapping
+    assert df_mapping.columns[:3] == [
         "GroupId",
         "InputId",
         "InputNamespace",
     ]
-    assert grouped.extract_mapping().select("GroupId", "MemberDb").to_dicts() == [
+    assert df_mapping.select("GroupId", "MemberDb").to_dicts() == [
+        {"GroupId": "down", "MemberDb": "PFAM"},
+        {"GroupId": "down", "MemberDb": "SMART"},
         {"GroupId": "up", "MemberDb": "PFAM"},
         {"GroupId": "up", "MemberDb": "SMART"},
     ]

@@ -8,36 +8,45 @@ from typing import Protocol, cast
 
 import pytest
 
-from bioextract._tidy import TidyDataset
-from bioextract.chebi import ChEBIDatabase
-from bioextract.eggnog import EggNOGDatabase, EggnogSelection
-from bioextract.go import GODatabase, GoSubsetId
-from bioextract.interpro import (
+from bioextract import (
+    ChEBIDatabase,
+    EggNOGDatabase,
+    GODatabase,
     InterProDatabase,
-    InterProSelection,
+    KEGGDatabase,
+    OmniPathDatabase,
+    ReactomeDatabase,
+    RheaDatabase,
+    STRINGDatabase,
+    UniProtDatabase,
+    WikiPathwaysDatabase,
 )
-from bioextract.kegg import KEGGDatabase
-from bioextract.kegg.brite import (
+from bioextract._tidy import TidyDataset
+from bioextract.chebi._query import ChEBICompoundSelection
+from bioextract.eggnog.eggnog import EggnogSelection
+from bioextract.go.go import GoSubsetId
+from bioextract.interpro.interpro import InterProSelection
+from bioextract.kegg.brite.tidy import (
     build_tidy_frames as build_kegg_tidy_frames,
 )
 from bioextract.kegg.kegg import KeggSelection
-from bioextract.omnipath import OmniPathDatabase
+from bioextract.kegg.metabolic.core import KEGGMetabolicSelection
 from bioextract.omnipath.omnipath import OmniPathSelection
-from bioextract.reactome import ReactomeDatabase
 from bioextract.reactome.reactome import ReactomeSelection
-from bioextract.rhea import RheaDatabase, RheaReactionSelection, RheaWriteResult
-from bioextract.stringdb import STRINGDatabase
+from bioextract.rhea._query import RheaReactionSelection
+from bioextract.rhea.rhea import RheaWriteResult
 from bioextract.stringdb.stringdb import StringSelection
-from bioextract.uniprot import UniProtDatabase
-from bioextract.wikipathways import WikiPathwaysDatabase
+from bioextract.uniprot._query import UniProtSelection
 from bioextract.wikipathways.wikipathways import WikiPathwaysSelection
 
-PUBLIC_CLASSES = (
+BEHAVIOR_CLASSES = (
     ChEBIDatabase,
+    ChEBICompoundSelection,
     GODatabase,
     GoSubsetId,
     KEGGDatabase,
     KeggSelection,
+    KEGGMetabolicSelection,
     ReactomeDatabase,
     ReactomeSelection,
     WikiPathwaysDatabase,
@@ -47,6 +56,7 @@ PUBLIC_CLASSES = (
     InterProDatabase,
     InterProSelection,
     UniProtDatabase,
+    UniProtSelection,
     STRINGDatabase,
     StringSelection,
     OmniPathDatabase,
@@ -57,9 +67,9 @@ PUBLIC_CLASSES = (
     TidyDataset,
 )
 
-PUBLIC_FUNCTIONS = (("kegg.brite.build_tidy_frames", build_kegg_tidy_frames),)
+BEHAVIOR_FUNCTIONS = (("kegg.brite.build_tidy_frames", build_kegg_tidy_frames),)
 
-EXPECTED_PUBLIC_TARGET_COUNT = 146
+EXPECTED_BEHAVIOR_TARGET_COUNT = 188
 
 
 class _FunctionDescriptor(Protocol):
@@ -70,8 +80,8 @@ class _FunctionProperty(Protocol):
     fget: FunctionType | None
 
 
-def iter_public_docstring_targets() -> Iterator[tuple[str, object, str | None]]:
-    for cls in PUBLIC_CLASSES:
+def iter_behavior_docstring_targets() -> Iterator[tuple[str, object, str | None]]:
+    for cls in BEHAVIOR_CLASSES:
         yield cls.__name__, cls, None
         for member_name, raw_member in vars(cls).items():
             if member_name.startswith("_"):
@@ -89,17 +99,17 @@ def iter_public_docstring_targets() -> Iterator[tuple[str, object, str | None]]:
                 f".{member_name}",
             )
 
-    for label, function in PUBLIC_FUNCTIONS:
+    for label, function in BEHAVIOR_FUNCTIONS:
         yield label, function, f"{function.__name__}("
 
 
-PUBLIC_DOCSTRING_TARGETS = tuple(iter_public_docstring_targets())
+BEHAVIOR_DOCSTRING_TARGETS = tuple(iter_behavior_docstring_targets())
 
 
-def test_public_docstring_target_matrix_is_complete() -> None:
-    assert len(PUBLIC_CLASSES) == 22
-    assert len(PUBLIC_FUNCTIONS) == 1
-    assert len(PUBLIC_DOCSTRING_TARGETS) == EXPECTED_PUBLIC_TARGET_COUNT
+def test_behavior_docstring_target_matrix_is_complete() -> None:
+    assert len(BEHAVIOR_CLASSES) == 25
+    assert len(BEHAVIOR_FUNCTIONS) == 1
+    assert len(BEHAVIOR_DOCSTRING_TARGETS) == EXPECTED_BEHAVIOR_TARGET_COUNT
 
 
 def test_maintenance_helpers_are_not_public_api() -> None:
@@ -113,10 +123,10 @@ def test_maintenance_helpers_are_not_public_api() -> None:
 # use the symbol still requires review against its call sites and producer tests.
 @pytest.mark.parametrize(
     ("label", "target", "usage_token"),
-    PUBLIC_DOCSTRING_TARGETS,
-    ids=[target[0] for target in PUBLIC_DOCSTRING_TARGETS],
+    BEHAVIOR_DOCSTRING_TARGETS,
+    ids=[target[0] for target in BEHAVIOR_DOCSTRING_TARGETS],
 )
-def test_public_api_docstring_has_direct_example(
+def test_behavior_docstring_has_direct_example(
     label: str,
     target: object,
     usage_token: str | None,

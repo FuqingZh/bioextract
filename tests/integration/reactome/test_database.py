@@ -122,6 +122,7 @@ def test_grouped_selection_preserves_groups(tmp_path: Path) -> None:
         "ReactomeUrl",
     ]
     assert df_mapping.filter(df_mapping["InputId"] == "P04637").height == 4
+    assert selection.extract_mapping() is df_mapping
     assert selection.extract_unmatched_ids().to_dicts() == [
         {"GroupId": "TumorA", "InputId": "MISSING"}
     ]

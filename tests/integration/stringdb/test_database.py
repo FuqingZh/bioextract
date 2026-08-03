@@ -6,6 +6,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+import bioextract.stringdb.stringdb as stringdb_module
 from bioextract.stringdb import STRINGDatabase
 
 
@@ -101,7 +102,7 @@ def test_extract_string_mapping_accepts_hash_string_id_header(tmp_path: Path) ->
     ]
 
 
-def test_stringdb_single_query_smoke(tmp_path: Path) -> None:
+def test_stringdb_single_query_minimal_round_trip(tmp_path: Path) -> None:
     file_aliases = tmp_path / "aliases.txt"
     file_links = tmp_path / "links.txt"
     _write_demo_string_files(aliases=file_aliases, links=file_links)
@@ -138,7 +139,7 @@ def test_selection_exposes_group_mode(tmp_path: Path) -> None:
     assert db.select_groups({"G1": ["TP53"]}).is_grouped is True
 
 
-def test_stringdb_group_query_smoke(tmp_path: Path) -> None:
+def test_stringdb_group_query_minimal_round_trip(tmp_path: Path) -> None:
     file_aliases = tmp_path / "aliases.txt"
     file_links = tmp_path / "links.txt"
     _write_demo_string_files(aliases=file_aliases, links=file_links)
@@ -742,3 +743,92 @@ def test_group_selection_reuses_cached_frames_and_recomputes_edges(
             "Score": 800,
         },
     ]
+
+
+def test_group_selection_resolves_normalized_ids_once_then_expands_membership(
+    tmp_path: Path,
+) -> None:
+    file_aliases = tmp_path / "aliases.txt"
+    file_links = tmp_path / "links.txt"
+    _write_demo_string_files(aliases=file_aliases, links=file_links)
+
+    selection = STRINGDatabase.from_files(
+        aliases=file_aliases,
+        links=file_links,
+    ).select_groups(
+        {
+            "G1": ["sp|P04637|P53_HUMAN", "EGFR", "MISSING"],
+            "G2": ["P04637", "CDK2", "MISSING"],
+        }
+    )
+
+    assert selection._df_input_ids.to_dicts() == [  # pyright: ignore[reportPrivateUsage]
+        {"InputId": "CDK2"},
+        {"InputId": "EGFR"},
+        {"InputId": "MISSING"},
+        {"InputId": "P04637"},
+    ]
+    group_membership = selection._df_group_membership  # pyright: ignore[reportPrivateUsage]
+    assert group_membership is not None
+    assert group_membership.filter(
+        pl.col("InputId").is_in(["MISSING", "P04637"])
+    ).to_dicts() == [
+        {"GroupId": "G1", "InputId": "MISSING"},
+        {"GroupId": "G1", "InputId": "P04637"},
+        {"GroupId": "G2", "InputId": "MISSING"},
+        {"GroupId": "G2", "InputId": "P04637"},
+    ]
+
+    shared_mapping = selection.extract_string_mapping().filter(
+        pl.col("InputId") == "P04637"
+    )
+    assert shared_mapping.group_by("GroupId").len().sort("GroupId").to_dicts() == [
+        {"GroupId": "G1", "len": 2},
+        {"GroupId": "G2", "len": 2},
+    ]
+    assert selection.extract_unmatched_ids().to_dicts() == [
+        {"GroupId": "G1", "InputId": "MISSING"},
+        {"GroupId": "G2", "InputId": "MISSING"},
+    ]
+    assert selection.extract_edges().select("GroupId", "StringIdB").to_dicts() == [
+        {"GroupId": "G1", "StringIdB": "9606.ENSP0002"},
+        {"GroupId": "G1", "StringIdB": "9606.ENSP9999"},
+        {"GroupId": "G2", "StringIdB": "9606.ENSP0003"},
+    ]
+
+
+def test_group_selection_builds_one_data_scan_per_cached_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_aliases = tmp_path / "aliases.txt"
+    file_links = tmp_path / "links.txt"
+    _write_demo_string_files(aliases=file_aliases, links=file_links)
+    database = STRINGDatabase.from_files(aliases=file_aliases, links=file_links)
+    _ = database._alias_schema  # pyright: ignore[reportPrivateUsage]
+
+    original_scan_aliases = stringdb_module.scan_aliases
+    original_scan_links = stringdb_module.scan_links
+    scan_counts = {"aliases": 0, "links": 0}
+
+    def counted_scan_aliases(file_aliases: Path, version: str) -> pl.LazyFrame:
+        scan_counts["aliases"] += 1
+        return original_scan_aliases(file_aliases, version)
+
+    def counted_scan_links(file_links: Path, version: str) -> pl.LazyFrame:
+        scan_counts["links"] += 1
+        return original_scan_links(file_links, version)
+
+    monkeypatch.setattr(stringdb_module, "scan_aliases", counted_scan_aliases)
+    monkeypatch.setattr(stringdb_module, "scan_links", counted_scan_links)
+
+    selection = database.select_groups(
+        {
+            "G1": ["sp|P04637|P53_HUMAN", "EGFR"],
+            "G2": ["P04637", "CDK2"],
+        }
+    )
+    assert selection.extract_string_mapping() is selection.extract_string_mapping()
+    assert selection.extract_unmatched_ids() is selection.extract_unmatched_ids()
+    assert selection.extract_edges() is selection.extract_edges()
+    assert scan_counts == {"aliases": 1, "links": 1}
