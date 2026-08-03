@@ -14,8 +14,8 @@ when a domain does not yet have a dedicated architecture document.
 1. Read the repository-wide
    [Domain Access Architecture](architecture/20260729-v1.0-domain-access-architecture.md)
    before adding a resource, public query method, or storage strategy.
-2. Read the shared [Tidy Dataset Contract](architecture/tidy-dataset-contract.md)
-   before changing generated Parquet, DuckDB, or embedded provenance behavior.
+2. Read the shared [Materialized Dataset Contract](architecture/tidy-dataset-contract.md)
+   before changing DuckDB publication or embedded provenance behavior.
 3. Read the resource-specific architecture document before changing a public DB
    handle, schema, selection rule, or write contract.
 4. Read the repository-wide [Test Standard](testing/README.md), then the
@@ -44,12 +44,11 @@ when a domain does not yet have a dedicated architecture document.
 
 The current
 [Storage And Publication Convergence Plan](implementation-plan/20260803-v1.0-storage-publication-convergence-implementation-plan.md)
-defines the accepted direct-access versus materialization boundary, DuckDB-only
+records the accepted direct-access versus materialization boundary, DuckDB-only
 bioextract publication contract, metadata v1 reset, former-Parquet resource
-migrations, eggNOG SQLite behavior, GO subcell cleanup, and formal rebuild
-gates. Until its slices land, it supersedes older documents only as the target
-storage and migration direction; current code and resource documents continue
-to describe implemented behavior.
+migrations, eggNOG SQLite behavior, and GO subcell cleanup. Slices 1–4 and the
+Slice 5 current-documentation work are code/docs complete; formal rebuild
+acceptance remains pending.
 
 The current
 [Test Suite Layering Plan](implementation-plan/20260731-v1.0-test-suite-layering.md)

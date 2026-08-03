@@ -1,5 +1,15 @@
 # UniProtKB Domain Access Plan
 
+Storage status: superseded by the current
+[Storage And Publication Convergence Plan](20260803-v1.0-storage-publication-convergence-implementation-plan.md).
+The decisions and measurements below remain historical; metadata v3 and the
+former single-relation Parquet comparison are not current publication authority.
+
+Storage status: superseded by the current
+[Storage And Publication Convergence Plan](20260803-v1.0-storage-publication-convergence-implementation-plan.md).
+The decisions and measurements below remain historical; metadata v3 and the
+former single-relation Parquet comparison are not current publication authority.
+
 Date: 2026-07-30
 Status: implemented
 
