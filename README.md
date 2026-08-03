@@ -154,18 +154,21 @@ Tables include `term`, `term_relation`, `term_synonym`, `term_xref`,
 
 ## KEGG
 
-An independent KEGG mapping or BRITE relation is published as Parquet:
+An independent KEGG mapping or BRITE profile is published as one-table DuckDB:
 
 ```python
 from bioextract import KEGGDatabase
 
-KEGGDatabase.from_brite_json("br08901.json").write_parquet(
-    "out/kegg.parquet"
-)
+source = KEGGDatabase.from_brite_json("br08901.json")
+source.write_duckdb("out/kegg-brite.duckdb")
+
+published = KEGGDatabase.from_duckdb("out/kegg-brite.duckdb")
+with published.connect() as connection:
+    pathway_count = connection.sql("SELECT count(*) FROM pathway").fetchone()[0]
 ```
 
 When multiple KEGG products share a directory, use the smallest useful
-qualifier, such as `kegg_gene_annotation.parquet`.
+qualifier, such as `kegg-mapping.duckdb` or `kegg-brite.duckdb`.
 
 A compound/reaction/enzyme/module snapshot is a multi-relation metabolic
 publication:
@@ -380,7 +383,7 @@ Official two-dimensional source headers are retained unless a minimal
 deterministic mapping is required to make them queryable. Any such mapping is
 recorded in embedded provenance.
 
-Example names such as `go.duckdb` and `kegg.parquet` are product guidance, not
+Example names such as `go.duckdb` and `kegg.duckdb` are product guidance, not
 format standards or compatibility identifiers. Machine identity comes from
 embedded metadata.
 

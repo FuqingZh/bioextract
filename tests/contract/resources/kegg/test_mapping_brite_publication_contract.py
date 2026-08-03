@@ -238,6 +238,19 @@ def test_mapping_publication_validates_column_provenance(tmp_path: Path) -> None
         KEGGDatabase.from_duckdb(path)
 
 
+def test_brite_publication_rejects_forged_column_provenance(tmp_path: Path) -> None:
+    path = tmp_path / "brite.duckdb"
+    _brite_source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "INSERT INTO _bioextract.column_mapping VALUES "
+            "('pathway', 'forged', 'forged', 'generated_snake_case')"
+        )
+
+    with pytest.raises(ValueError, match="BRITE column provenance inventory"):
+        KEGGDatabase.from_duckdb(path)
+
+
 def test_brite_publication_rejects_mapping_selection(tmp_path: Path) -> None:
     path = tmp_path / "brite.duckdb"
     _brite_source(tmp_path).write_duckdb(path)

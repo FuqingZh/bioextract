@@ -1095,6 +1095,15 @@ def _validate_tidy_publication(
             ).fetchone()
             if actual is None or int(actual[0]) != int(row_count):
                 raise ValueError(f"KEGG {scope} row-count drift: {table_name}")
+        observed_column_mapping = {
+            tuple(str(value) for value in row)
+            for row in connection.execute(
+                "SELECT table_name, source_column, output_column, reason "
+                "FROM _bioextract.column_mapping"
+            ).fetchall()
+        }
+        if scope == "brite" and observed_column_mapping:
+            raise ValueError("KEGG BRITE column provenance inventory is unsupported")
         if scope == "mapping":
             expected_column_mapping = {
                 ("mapping", source_column, output_column, "generated_snake_case")
@@ -1109,13 +1118,6 @@ def _validate_tidy_publication(
                     "GeneSymbol": "gene_symbol",
                     "GeneDescription": "gene_description",
                 }.items()
-            }
-            observed_column_mapping = {
-                tuple(str(value) for value in row)
-                for row in connection.execute(
-                    "SELECT table_name, source_column, output_column, reason "
-                    "FROM _bioextract.column_mapping"
-                ).fetchall()
             }
             if observed_column_mapping != expected_column_mapping:
                 raise ValueError(
