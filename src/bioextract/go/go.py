@@ -215,6 +215,8 @@ class GODatabase:
             ['alt_id', 'ancestor_all', 'depth', 'edge', 'subset_definition', 'subset_membership', 'synonym', 'term', 'xref']
         """
         if self._tidy is not None:
+            if self._publication_path is not None:
+                self._assert_publication_identity()
             return self._tidy
 
         if self._publication_path is not None:
@@ -298,7 +300,9 @@ class GODatabase:
             ... ).to_dicts()
             [{'input_go_id': 'GO:1234567', 'go_id': 'GO:0000002'}]
         """
-        frame_names = {"term", "alt_id"}
+        frame_names = {"term"}
+        if term_ids is not None and resolve_alt_ids:
+            frame_names.add("alt_id")
         if subset_id is not None:
             frame_names.add("subset_membership")
         frames = self._collect_frames(frame_names)
@@ -311,7 +315,7 @@ class GODatabase:
             df_input_terms = create_go_term_input_frame(term_ids)
             df_term = select_terms_by_ids(
                 df_term,
-                frames["alt_id"],
+                frames.get("alt_id", _empty_alt_id_frame()),
                 df_input_terms,
                 resolve_alt_ids=resolve_alt_ids,
             )
@@ -475,7 +479,11 @@ class GODatabase:
 
     def _assert_publication_identity(self) -> None:
         path = self._publication_path
-        if path is None or _file_identity(path) != self._publication_identity:
+        try:
+            current_identity = None if path is None else _file_identity(path)
+        except OSError:
+            current_identity = None
+        if current_identity != self._publication_identity:
             raise IntegrityError(
                 "GO publication was replaced; reopen it with from_duckdb()"
             )
@@ -628,6 +636,15 @@ def select_terms_by_ids(
         how="vertical",
     ).unique(subset=["input_go_id", "go_id"], keep="first", maintain_order=True)
     return df_term_ids.join(df_term, on="go_id", how="inner")
+
+
+def _empty_alt_id_frame() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "alt_go_id": pl.Series([], dtype=pl.String),
+            "primary_go_id": pl.Series([], dtype=pl.String),
+        }
+    )
 
 
 _GO_TABLE_CONTRACTS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {

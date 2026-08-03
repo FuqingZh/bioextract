@@ -97,6 +97,7 @@ def test_from_duckdb_rejects_inventory_role_and_physical_schema_drift(
 def test_reopened_handle_rejects_replaced_publication(tmp_path: Path) -> None:
     publication = _write_publication(tmp_path)
     reopened = GODatabase.from_duckdb(publication)
+    reopened.build_tidy()
     replacement_dir = tmp_path / "replacement"
     replacement_dir.mkdir()
     replacement = _write_publication(replacement_dir)
@@ -106,3 +107,16 @@ def test_reopened_handle_rejects_replaced_publication(tmp_path: Path) -> None:
         reopened.connect()
     with pytest.raises(IntegrityError, match="replaced"):
         reopened.select_terms(term_ids=["GO:0000001"])
+    with pytest.raises(IntegrityError, match="replaced"):
+        reopened.build_tidy()
+
+
+def test_reopened_handle_translates_vanished_publication_to_integrity_error(
+    tmp_path: Path,
+) -> None:
+    publication = _write_publication(tmp_path)
+    reopened = GODatabase.from_duckdb(publication)
+    publication.unlink()
+
+    with pytest.raises(IntegrityError, match="replaced"):
+        reopened.connect()
