@@ -425,6 +425,48 @@ def test_from_duckdb_rejects_duplicate_column_provenance_keys(
         InterProDatabase.from_duckdb(path)
 
 
+def test_from_duckdb_rejects_duplicate_source_file_keys(tmp_path: Path) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "CREATE TABLE source_copy AS SELECT * FROM _bioextract.source_file; "
+            "DROP TABLE _bioextract.source_file; "
+            "CREATE TABLE _bioextract.source_file AS SELECT * FROM source_copy; "
+            "INSERT INTO _bioextract.source_file SELECT * FROM source_copy LIMIT 1; "
+            "DROP TABLE source_copy"
+        )
+
+    with pytest.raises(IntegrityError, match="duplicate source-file keys"):
+        InterProDatabase.from_duckdb(path)
+
+
+def test_from_duckdb_rejects_duplicate_validation_issue_keys(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "CREATE TABLE issue_copy AS SELECT * FROM _bioextract.validation_issue; "
+            "DROP TABLE _bioextract.validation_issue; "
+            "CREATE TABLE _bioextract.validation_issue AS SELECT * FROM issue_copy; "
+            "INSERT INTO _bioextract.validation_issue VALUES "
+            "(1, 'warning', 'test', 'source', 'mapping', NULL, NULL, NULL, NULL, "
+            "NULL, 'test'), "
+            "(1, 'warning', 'test', 'source', 'mapping', NULL, NULL, NULL, NULL, "
+            "NULL, 'test'); "
+            "UPDATE _bioextract.metadata SET value='2' "
+            "WHERE key='bioextract.validation_issue_count'; "
+            "UPDATE _bioextract.metadata SET value='passed_with_warnings' "
+            "WHERE key='bioextract.validation_status'; "
+            "DROP TABLE issue_copy"
+        )
+
+    with pytest.raises(IntegrityError, match="duplicate validation-issue keys"):
+        InterProDatabase.from_duckdb(path)
+
+
 def test_reopened_handle_rejects_atomically_replaced_publication(
     tmp_path: Path,
 ) -> None:

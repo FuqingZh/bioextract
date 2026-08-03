@@ -705,6 +705,24 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
                 raise ValueError("InterPro publication has duplicate metadata keys")
             if metadata.get("bioextract.metadata_schema_version") != "1":
                 raise ValueError("Unsupported InterPro metadata schema version")
+            validation_issue_ids = [
+                int(row[0])
+                for row in connection.execute(
+                    "SELECT issue_id FROM _bioextract.validation_issue"
+                ).fetchall()
+            ]
+            if len(set(validation_issue_ids)) != len(validation_issue_ids):
+                raise ValueError(
+                    "InterPro publication has duplicate validation-issue keys"
+                )
+            source_file_keys = [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT logical_name FROM _bioextract.source_file"
+                ).fetchall()
+            ]
+            if len(set(source_file_keys)) != len(source_file_keys):
+                raise ValueError("InterPro publication has duplicate source-file keys")
             validate_duckdb_metadata_v1(connection, metadata)
             if metadata.get("bioextract.resource_name") != "interpro":
                 raise ValueError("DuckDB file is not a bioextract InterPro publication")
