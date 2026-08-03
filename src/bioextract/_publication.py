@@ -37,6 +37,40 @@ _CANONICAL_METADATA_KEYS = {
     "bioextract.scope",
     "bioextract.column_mapping",
 }
+_METADATA_V1_TABLE_SCHEMAS = {
+    "metadata": (("key", "VARCHAR", True, True), ("value", "VARCHAR", True, False)),
+    "source_file": (
+        ("logical_name", "VARCHAR", True, True),
+        ("display_path", "VARCHAR", True, False),
+        ("bytes", "UBIGINT", True, False),
+        ("media_type", "VARCHAR", True, False),
+        ("sha256", "VARCHAR", False, False),
+    ),
+    "table_info": (
+        ("table_name", "VARCHAR", True, True),
+        ("table_role", "VARCHAR", True, False),
+        ("row_count", "UBIGINT", True, False),
+    ),
+    "column_mapping": (
+        ("table_name", "VARCHAR", True, True),
+        ("source_column", "VARCHAR", True, True),
+        ("output_column", "VARCHAR", True, False),
+        ("reason", "VARCHAR", True, False),
+    ),
+    "validation_issue": (
+        ("issue_id", "UBIGINT", True, True),
+        ("severity", "VARCHAR", True, False),
+        ("issue_code", "VARCHAR", True, False),
+        ("source_name", "VARCHAR", True, False),
+        ("relation_name", "VARCHAR", True, False),
+        ("identifier_namespace", "VARCHAR", False, False),
+        ("identifier_value", "VARCHAR", False, False),
+        ("referenced_relation", "VARCHAR", False, False),
+        ("referenced_identifier", "VARCHAR", False, False),
+        ("source_record_number", "UBIGINT", False, False),
+        ("message", "VARCHAR", True, False),
+    ),
+}
 _SQL_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -114,6 +148,17 @@ def validate_duckdb_metadata_v1(
             "Metadata v1 requires exactly the five _bioextract relations: "
             f"expected={sorted(BIOEXTRACT_RELATIONS)}, actual={sorted(metadata_tables)}"
         )
+    for table_name, expected_schema in _METADATA_V1_TABLE_SCHEMAS.items():
+        observed_schema = tuple(
+            (str(row[1]), str(row[2]), bool(row[3]), bool(row[5]))
+            for row in connection.execute(
+                f"PRAGMA table_info('_bioextract.{table_name}')"
+            ).fetchall()
+        )
+        if observed_schema != expected_schema:
+            raise ValueError(
+                f"Metadata v1 provenance table schema is unsupported: {table_name}"
+            )
     required = {
         "bioextract.resource_name",
         "bioextract.resource_schema_version",

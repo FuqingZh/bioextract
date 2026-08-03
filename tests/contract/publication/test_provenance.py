@@ -177,6 +177,47 @@ def test_v1_reader_rejects_invalid_release_provenance(
             validate_duckdb_metadata_v1(connection, metadata)
 
 
+@pytest.mark.parametrize(
+    ("table_name", "corruption"),
+    [
+        (
+            "metadata",
+            "ALTER TABLE _bioextract.metadata ADD COLUMN forged VARCHAR",
+        ),
+        (
+            "source_file",
+            "ALTER TABLE _bioextract.source_file ALTER bytes TYPE BIGINT",
+        ),
+        (
+            "table_info",
+            "ALTER TABLE _bioextract.table_info ADD COLUMN forged VARCHAR",
+        ),
+        (
+            "column_mapping",
+            "ALTER TABLE _bioextract.column_mapping ADD COLUMN forged VARCHAR",
+        ),
+        (
+            "validation_issue",
+            "ALTER TABLE _bioextract.validation_issue ADD COLUMN forged VARCHAR",
+        ),
+    ],
+)
+def test_v1_reader_requires_exact_provenance_table_schemas(
+    tmp_path: Path,
+    table_name: str,
+    corruption: str,
+) -> None:
+    path = tmp_path / "schema.duckdb"
+    _dataset(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(corruption)
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+        with pytest.raises(ValueError, match=rf"schema.*{table_name}"):
+            validate_duckdb_metadata_v1(connection, metadata)
+
+
 def test_v1_reader_rejects_release_source_without_release(tmp_path: Path) -> None:
     path = tmp_path / "source-only.duckdb"
     dataset = _dataset(tmp_path)

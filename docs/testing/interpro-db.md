@@ -39,8 +39,12 @@ It does not cover:
   capability, source-role, table-role, schema/type, row-count, and column
   provenance inventories, including an incompatible persisted InterPro
   content-validation result.
+- metadata v1 requires exact names, types, nullability, and primary keys for
+  all five `_bioextract` tables.
 - `connect()` returns distinct caller-owned read-only connections.
 - a reopened handle rejects an atomically replaced publication path.
+- relative publication paths remain bound across working-directory changes,
+  and cached XML frames reject source identity changes.
 - reopened selections preserve normalization, unique lookup, grouped fan-out,
   and unmatched behavior.
 - `if_exists="fail"` and `"replace"` retain atomic publication behavior.

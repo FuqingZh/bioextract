@@ -129,8 +129,9 @@ without forcing a full materialized DataFrame before write.
 `from_duckdb()` accepts only metadata v1 publications with exact InterPro
 resource identity, resource schema version, source profile, capability list,
 source-role inventory, table names and roles, physical column types, row
-counts, and column provenance. `connect()` returns a new caller-owned read-only
-DuckDB connection on every call. Source-build content validation is persisted
+counts, exact five-table provenance schemas and keys, and column provenance.
+Relative paths are resolved when opened; `connect()` returns a new caller-owned
+read-only DuckDB connection on every call. Source-build content validation is persisted
 as the profile-bound `bioextract.interpro_content_validation` result; reopen
 checks that bounded result and does not rescan billion-row biological tables.
 The reopened handle is pinned to the validated file identity; atomic path
@@ -138,6 +139,8 @@ replacement requires constructing a new handle before further SQL access.
 Lazy source plans are likewise pinned to the validated raw-file identities;
 the writer rechecks them immediately before its atomic commit and preserves an
 existing destination if a source changed.
+Cached XML lookup frames are bound to the XML file identity and reject source
+changes rather than serving stale enrichment.
 
 ## Pfam Compact Contract
 

@@ -86,8 +86,11 @@ class InterProDatabase:
     _frames_xml: dict[str, pl.DataFrame] | None = field(
         default=None, init=False, repr=False
     )
+    _xml_source_identity: tuple[int, int, int, int, int] | None = field(
+        default=None, init=False, repr=False
+    )
     _publication_path: Path | None = field(default=None, init=False, repr=False)
-    _publication_identity: tuple[int, int, int, int] | None = field(
+    _publication_identity: tuple[int, int, int, int, int] | None = field(
         default=None, init=False, repr=False
     )
     _capabilities: frozenset[str] = field(
@@ -155,7 +158,7 @@ class InterProDatabase:
             >>> db.select_ids(["P12345"]).extract_mapping().height  # doctest: +SKIP
             1
         """
-        publication_path = Path(path)
+        publication_path = Path(path).resolve()
         identity_before = _file_identity(publication_path)
         try:
             capabilities, release_version = _validate_interpro_publication(
@@ -479,8 +482,21 @@ class InterProDatabase:
                 "xml_frame() requires an InterPro XML source handle; the "
                 "publication retains enriched mapping values, not XML lookup frames"
             )
+        xml_path = self.snapshot.file_interpro_xml
+        if (
+            xml_path is not None
+            and self._xml_source_identity is not None
+            and _file_identity(xml_path) != self._xml_source_identity
+        ):
+            raise IntegrityError("InterPro XML source changed after cache load")
         if self._frames_xml is None:
-            self._frames_xml = read_interpro_xml_frames(self.snapshot.file_interpro_xml)
+            identity_before = _file_identity(xml_path) if xml_path is not None else None
+            self._frames_xml = read_interpro_xml_frames(xml_path)
+            identity_after = _file_identity(xml_path) if xml_path is not None else None
+            if identity_after != identity_before:
+                self._frames_xml = None
+                raise IntegrityError("InterPro XML source changed during cache load")
+            self._xml_source_identity = identity_after
         return self._frames_xml[frame_name]
 
     def _tidy_sources(self) -> tuple[TidySource, ...]:
@@ -662,7 +678,7 @@ def _validate_file(
     *,
     label: str,
 ) -> Path:
-    file_path = Path(file_path)
+    file_path = Path(file_path).resolve()
     if not file_path.exists():
         raise FileNotFoundError(f"{label} not found: {file_path}")
     return file_path
@@ -737,6 +753,24 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
             ]
             if len(set(source_file_keys)) != len(source_file_keys):
                 raise ValueError("InterPro publication has duplicate source-file keys")
+            table_info_keys = [
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT table_name FROM _bioextract.table_info"
+                ).fetchall()
+            ]
+            if len(set(table_info_keys)) != len(table_info_keys):
+                raise ValueError("InterPro publication has duplicate table-info keys")
+            column_mapping_keys = [
+                (str(row[0]), str(row[1]))
+                for row in connection.execute(
+                    "SELECT table_name, source_column FROM _bioextract.column_mapping"
+                ).fetchall()
+            ]
+            if len(set(column_mapping_keys)) != len(column_mapping_keys):
+                raise ValueError(
+                    "InterPro publication has duplicate column-provenance keys"
+                )
             validate_duckdb_metadata_v1(connection, metadata)
             if metadata.get("bioextract.resource_name") != "interpro":
                 raise ValueError("DuckDB file is not a bioextract InterPro publication")
@@ -921,6 +955,12 @@ def _source_output_columns(table: str) -> list[tuple[str, str]]:
     return list(zip(sources, outputs, strict=True))
 
 
-def _file_identity(path: Path) -> tuple[int, int, int, int]:
+def _file_identity(path: Path) -> tuple[int, int, int, int, int]:
     stat = path.stat()
-    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+    return (
+        stat.st_dev,
+        stat.st_ino,
+        stat.st_size,
+        stat.st_mtime_ns,
+        stat.st_ctime_ns,
+    )

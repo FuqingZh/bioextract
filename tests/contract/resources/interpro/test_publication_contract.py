@@ -412,7 +412,7 @@ def test_from_duckdb_normalizes_null_capability_metadata(tmp_path: Path) -> None
             "DROP TABLE metadata_copy"
         )
 
-    with pytest.raises(IntegrityError, match="capabilities must be text"):
+    with pytest.raises(IntegrityError, match="provenance table schema"):
         InterProDatabase.from_duckdb(path)
 
 
@@ -525,6 +525,32 @@ def test_reopened_handle_rejects_atomically_replaced_publication(
         reopened.connect()
 
 
+def test_reopened_relative_path_is_bound_to_resolved_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    monkeypatch.chdir(tmp_path)
+    reopened = InterProDatabase.from_duckdb("interpro.duckdb")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    with reopened.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM mapping").fetchone() == (1,)
+
+
+def test_reopened_handle_identity_includes_ctime(tmp_path: Path) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    reopened = InterProDatabase.from_duckdb(path)
+    path.chmod(path.stat().st_mode | 0o100)
+
+    with pytest.raises(IntegrityError, match="was replaced"):
+        reopened.connect()
+
+
 def test_retained_lazy_dataset_rejects_changed_source_before_commit(
     tmp_path: Path,
 ) -> None:
@@ -542,3 +568,15 @@ def test_retained_lazy_dataset_rejects_changed_source_before_commit(
     with pytest.raises(IntegrityError, match="source changed"):
         dataset.write_duckdb(path, if_exists="replace")
     assert path.read_bytes() == before
+
+
+def test_xml_cache_rejects_source_identity_change(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    assert source.xml_frame("entry").height == 1
+    xml_path = source.snapshot.file_interpro_xml
+    assert xml_path is not None
+    with gzip.open(xml_path, "at", encoding="utf-8") as handle:
+        handle.write("\n")
+
+    with pytest.raises(IntegrityError, match="XML source changed"):
+        source.xml_frame("entry")
