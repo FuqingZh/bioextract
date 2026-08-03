@@ -4,7 +4,7 @@ import json
 import os
 import tarfile
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -75,6 +75,22 @@ class GoSubsetId(StrEnum):
 @dataclass(frozen=True, slots=True)
 class _GoSnapshot:
     file_obo: Path | None = None
+
+
+class _ReopenedGoTidyDataset(TidyDataset):
+    def write_duckdb(
+        self,
+        path: os.PathLike[str] | str,
+        *,
+        table_names: Mapping[str, str] | None = None,
+        if_exists: str = "fail",
+        preserve_source_headers: Collection[str] = (),
+        include_source_hashes: bool = False,
+    ) -> DuckDBWriteResult:
+        del path, table_names, if_exists, preserve_source_headers, include_source_hashes
+        raise CapabilityError(
+            "write_duckdb() requires a GO OBO source handle, not a reopened dataset"
+        )
 
 
 @dataclass(slots=True)
@@ -161,9 +177,11 @@ class GODatabase:
         identity_before = _file_identity(publication_path)
         try:
             _validate_go_publication(publication_path)
+            identity_after = _file_identity(publication_path)
         except (KeyError, TypeError, ValueError) as error:
             raise IntegrityError(str(error)) from error
-        identity_after = _file_identity(publication_path)
+        except OSError as error:
+            raise IntegrityError("GO publication changed during validation") from error
         if identity_after != identity_before:
             raise IntegrityError("GO publication changed during validation")
         result = cls(snapshot=_GoSnapshot())
@@ -224,7 +242,7 @@ class GODatabase:
                 frame_name: frame.lazy()
                 for frame_name, frame in self._read_publication_frames().items()
             }
-            self._tidy = TidyDataset(
+            self._tidy = _ReopenedGoTidyDataset(
                 frames=frames,
                 source=(),
                 resource_schema_version=SCHEMA_VERSION,
