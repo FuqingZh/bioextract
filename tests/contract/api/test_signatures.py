@@ -87,6 +87,7 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
         chebi.ChEBIDatabase.from_obo: ("path", "sdf", "chemont_obo"),
         chebi.ChEBIDatabase.from_duckdb: ("path",),
         go.GODatabase.from_obo: ("path",),
+        go.GODatabase.from_duckdb: ("path",),
         kegg.KEGGDatabase.from_brite_json: ("path",),
         kegg.KEGGDatabase.from_mapping_files: (
             "uniprot_conversion",

@@ -1,18 +1,25 @@
 from __future__ import annotations
 
+import json
 import os
 import tarfile
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
+import duckdb
 import polars as pl
 
-from bioextract._publication import DuckDBWriteResult
+from bioextract._publication import (
+    BIOEXTRACT_RELATIONS,
+    DuckDBWriteResult,
+    validate_duckdb_metadata_v1,
+)
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
+from bioextract.errors import CapabilityError, IntegrityError
 
 from .ontology.constant import (
     ASSET_SPECS,
@@ -67,7 +74,23 @@ class GoSubsetId(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class _GoSnapshot:
-    file_obo: Path
+    file_obo: Path | None = None
+
+
+class _ReopenedGoTidyDataset(TidyDataset):
+    def write_duckdb(
+        self,
+        path: os.PathLike[str] | str,
+        *,
+        table_names: Mapping[str, str] | None = None,
+        if_exists: str = "fail",
+        preserve_source_headers: Collection[str] = (),
+        include_source_hashes: bool = False,
+    ) -> DuckDBWriteResult:
+        del path, table_names, if_exists, preserve_source_headers, include_source_hashes
+        raise CapabilityError(
+            "write_duckdb() requires a GO OBO source handle, not a reopened dataset"
+        )
 
 
 @dataclass(slots=True)
@@ -96,6 +119,10 @@ class GODatabase:
 
     snapshot: _GoSnapshot
     _tidy: TidyDataset | None = field(default=None, init=False, repr=False)
+    _publication_path: Path | None = field(default=None, init=False, repr=False)
+    _publication_identity: tuple[int, int, int, int, int] | None = field(
+        default=None, init=False, repr=False
+    )
 
     @classmethod
     def from_obo(
@@ -124,6 +151,77 @@ class GODatabase:
         source_path = _resolve_obo_input(Path(path))
         return cls(snapshot=_GoSnapshot(file_obo=source_path))
 
+    @classmethod
+    def from_duckdb(cls, path: os.PathLike[str] | str) -> GODatabase:
+        """Open a validated GO ontology publication for domain and SQL access.
+
+        Args:
+            path: A bioextract GO metadata-v1 DuckDB publication.
+
+        Returns:
+            A publication-backed handle pinned to the validated file identity.
+
+        Raises:
+            FileNotFoundError: If the publication does not exist.
+            IntegrityError: If the publication contract is invalid or the file
+                changes while it is being validated.
+
+        Examples:
+            Reopen a publication for ontology selection:
+
+            >>> db = GODatabase.from_duckdb("tidy/go.duckdb")  # doctest: +SKIP
+            >>> db.select_terms(term_ids=["GO:0005575"]).height  # doctest: +SKIP
+            1
+        """
+        publication_path = Path(path).absolute()
+        identity_before = _file_identity(publication_path)
+        try:
+            _validate_go_publication(publication_path)
+            identity_after = _file_identity(publication_path)
+        except (KeyError, TypeError, ValueError) as error:
+            raise IntegrityError(str(error)) from error
+        except OSError as error:
+            raise IntegrityError("GO publication changed during validation") from error
+        if identity_after != identity_before:
+            raise IntegrityError("GO publication changed during validation")
+        result = cls(snapshot=_GoSnapshot())
+        result._publication_path = publication_path
+        result._publication_identity = identity_after
+        return result
+
+    def connect(self) -> duckdb.DuckDBPyConnection:
+        """Return a fresh caller-owned read-only DuckDB connection.
+
+        Raises:
+            CapabilityError: If this handle was created from an OBO source.
+            IntegrityError: If the validated publication path was replaced.
+
+        Examples:
+            Query the publication through native DuckDB SQL:
+
+            >>> db = GODatabase.from_duckdb("tidy/go.duckdb")  # doctest: +SKIP
+            >>> with db.connect() as connection:  # doctest: +SKIP
+            ...     count = connection.sql("SELECT count(*) FROM term").fetchone()[0]
+            >>> count >= 0  # doctest: +SKIP
+            True
+        """
+        path = self._publication_path
+        if path is None:
+            raise CapabilityError("connect() requires GODatabase.from_duckdb()")
+        self._assert_publication_identity()
+        try:
+            connection = duckdb.connect(str(path), read_only=True)
+        except duckdb.Error as error:
+            raise IntegrityError(
+                "GO publication became unavailable; reopen it with from_duckdb()"
+            ) from error
+        try:
+            self._assert_publication_identity()
+        except BaseException:
+            connection.close()
+            raise
+        return connection
+
     def build_tidy(self) -> TidyDataset:
         """Build the GO tidy dataset.
 
@@ -140,8 +238,31 @@ class GODatabase:
             ['alt_id', 'ancestor_all', 'depth', 'edge', 'subset_definition', 'subset_membership', 'synonym', 'term', 'xref']
         """
         if self._tidy is not None:
+            if self._publication_path is not None:
+                self._assert_publication_identity()
             return self._tidy
 
+        if self._publication_path is not None:
+            frames = {
+                frame_name: frame.lazy()
+                for frame_name, frame in self._read_publication_frames().items()
+            }
+            self._tidy = _ReopenedGoTidyDataset(
+                frames=frames,
+                source=(),
+                resource_schema_version=SCHEMA_VERSION,
+                source_schema_profile="gene-ontology-obo-v1",
+                build_id_prefix="go-ontology-publication",
+                assets=tuple(
+                    TidyAsset(path=path, kind=kind, frame_name=frame_name)
+                    for path, kind, frame_name in ASSET_SPECS
+                ),
+                resource_name="go",
+            )
+            return self._tidy
+
+        if self.snapshot.file_obo is None:
+            raise CapabilityError("GO OBO source is unavailable")
         records = scan_obo_term_records(self.snapshot.file_obo)
         subset_definitions = read_obo_subset_definitions(self.snapshot.file_obo)
         frames = {
@@ -202,10 +323,12 @@ class GODatabase:
             ... ).to_dicts()
             [{'input_go_id': 'GO:1234567', 'go_id': 'GO:0000002'}]
         """
-        frames = {
-            frame_name: frame.collect()
-            for frame_name, frame in self.build_tidy().frames.items()
-        }
+        frame_names = {"term"}
+        if term_ids is not None and resolve_alt_ids:
+            frame_names.add("alt_id")
+        if subset_id is not None:
+            frame_names.add("subset_membership")
+        frames = self._collect_frames(frame_names)
         df_term = frames["term"]
         if not include_obsolete:
             df_term = df_term.filter(~pl.col("is_obsolete"))
@@ -215,7 +338,7 @@ class GODatabase:
             df_input_terms = create_go_term_input_frame(term_ids)
             df_term = select_terms_by_ids(
                 df_term,
-                frames["alt_id"],
+                frames.get("alt_id", _empty_alt_id_frame()),
                 df_input_terms,
                 resolve_alt_ids=resolve_alt_ids,
             )
@@ -268,10 +391,7 @@ class GODatabase:
             >>> db.list_subsets().row(0, named=True)
             {'subset_id': 'goslim_generic', 'subset_name': 'Generic GO slim', 'num_terms': 5}
         """
-        frames = {
-            frame_name: frame.collect()
-            for frame_name, frame in self.build_tidy().frames.items()
-        }
+        frames = self._collect_frames({"subset_membership", "subset_definition"})
         df_membership = frames["subset_membership"]
         df_definition = frames["subset_definition"]
         df_counts = (
@@ -309,6 +429,8 @@ class GODatabase:
             ...     "term_relation" in result.tables
             True
         """
+        if self._publication_path is not None:
+            raise CapabilityError("write_duckdb() requires a GO OBO source handle")
         return self.build_tidy().write_duckdb(
             Path(path),
             table_names={
@@ -339,10 +461,7 @@ class GODatabase:
             ['GO:0005575', 'GO:0005737']
         """
         return extract_subcell_frame(
-            {
-                frame_name: frame.collect()
-                for frame_name, frame in self.build_tidy().frames.items()
-            },
+            self._collect_frames({"term", "depth"}),
             include_obsolete=include_obsolete,
         )
 
@@ -380,6 +499,48 @@ class GODatabase:
             path
         )
         return path
+
+    def _assert_publication_identity(self) -> None:
+        path = self._publication_path
+        try:
+            current_identity = None if path is None else _file_identity(path)
+        except OSError:
+            current_identity = None
+        if current_identity != self._publication_identity:
+            raise IntegrityError(
+                "GO publication was replaced; reopen it with from_duckdb()"
+            )
+
+    def _collect_frames(self, frame_names: set[str]) -> dict[str, pl.DataFrame]:
+        if self._publication_path is not None:
+            return self._read_publication_frames(frame_names)
+        return {
+            frame_name: self.build_tidy().frames[frame_name].collect()
+            for frame_name in frame_names
+        }
+
+    def _read_publication_frames(
+        self, frame_names: set[str] | None = None
+    ) -> dict[str, pl.DataFrame]:
+        table_names = {
+            "term": "term",
+            "edge": "term_relation",
+            "synonym": "term_synonym",
+            "xref": "term_xref",
+            "alt_id": "term_alternate_id",
+            "subset_membership": "subset_membership",
+            "subset_definition": "subset_definition",
+            "ancestor_all": "term_ancestor",
+            "depth": "term_depth",
+        }
+        selected_names = set(table_names) if frame_names is None else frame_names
+        with self.connect() as connection:
+            return {
+                frame_name: pl.read_database(  # pyright: ignore[reportUnknownMemberType]
+                    f'SELECT * FROM "{table_names[frame_name]}"', connection
+                )
+                for frame_name in selected_names
+            }
 
 
 def normalize_go_namespace(namespace: str) -> str:
@@ -498,3 +659,177 @@ def select_terms_by_ids(
         how="vertical",
     ).unique(subset=["input_go_id", "go_id"], keep="first", maintain_order=True)
     return df_term_ids.join(df_term, on="go_id", how="inner")
+
+
+def _empty_alt_id_frame() -> pl.DataFrame:
+    return pl.DataFrame(
+        {
+            "alt_go_id": pl.Series([], dtype=pl.String),
+            "primary_go_id": pl.Series([], dtype=pl.String),
+        }
+    )
+
+
+_GO_TABLE_CONTRACTS: dict[str, tuple[str, tuple[tuple[str, str], ...]]] = {
+    "term": (
+        "canonical",
+        (
+            ("go_id", "VARCHAR"),
+            ("term_name", "VARCHAR"),
+            ("namespace", "VARCHAR"),
+            ("definition", "VARCHAR"),
+            ("is_obsolete", "BOOLEAN"),
+            ("comment", "VARCHAR"),
+        ),
+    ),
+    "term_relation": (
+        "canonical",
+        (
+            ("child_go_id", "VARCHAR"),
+            ("parent_go_id", "VARCHAR"),
+            ("relation_type", "VARCHAR"),
+            ("source_clause", "VARCHAR"),
+        ),
+    ),
+    "term_synonym": (
+        "canonical",
+        (
+            ("go_id", "VARCHAR"),
+            ("synonym_text", "VARCHAR"),
+            ("synonym_scope", "VARCHAR"),
+            ("synonym_type_name", "VARCHAR"),
+            ("dbxref_text", "VARCHAR"),
+        ),
+    ),
+    "term_xref": (
+        "canonical",
+        (
+            ("go_id", "VARCHAR"),
+            ("xref_text", "VARCHAR"),
+            ("xref_db", "VARCHAR"),
+            ("xref_id", "VARCHAR"),
+        ),
+    ),
+    "term_alternate_id": (
+        "canonical",
+        (("alt_go_id", "VARCHAR"), ("primary_go_id", "VARCHAR")),
+    ),
+    "subset_membership": (
+        "canonical",
+        (("go_id", "VARCHAR"), ("subset_id", "VARCHAR")),
+    ),
+    "subset_definition": (
+        "canonical",
+        (("subset_id", "VARCHAR"), ("subset_name", "VARCHAR")),
+    ),
+    "term_ancestor": (
+        "derived",
+        (
+            ("go_id", "VARCHAR"),
+            ("ancestor_go_id", "VARCHAR"),
+            ("min_distance", "INTEGER"),
+        ),
+    ),
+    "term_depth": (
+        "derived",
+        (
+            ("go_id", "VARCHAR"),
+            ("namespace", "VARCHAR"),
+            ("min_depth_from_root", "INTEGER"),
+            ("max_depth_from_root", "INTEGER"),
+        ),
+    ),
+}
+
+
+def _validate_go_publication(path: Path) -> None:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    try:
+        with duckdb.connect(str(path), read_only=True) as connection:
+            metadata_rows = connection.execute(
+                "SELECT key, value FROM _bioextract.metadata"
+            ).fetchall()
+            metadata = {str(row[0]): str(row[1]) for row in metadata_rows}
+            if len(metadata) != len(metadata_rows):
+                raise ValueError("GO publication has duplicate metadata keys")
+            if metadata.get("bioextract.metadata_schema_version") != "1":
+                raise ValueError("Unsupported GO metadata schema version")
+            validate_duckdb_metadata_v1(connection, metadata)
+            if metadata.get("bioextract.resource_name") != "go":
+                raise ValueError("DuckDB file is not a bioextract GO publication")
+            if metadata.get("bioextract.source_schema_profile") != (
+                "gene-ontology-obo-v1"
+            ):
+                raise ValueError("Unsupported GO source schema profile")
+            if metadata.get("bioextract.resource_schema_version") != SCHEMA_VERSION:
+                raise ValueError("Unsupported GO resource schema version")
+            if "bioextract.scope" in metadata:
+                raise ValueError("GO publication scope is unsupported")
+
+            source_rows = connection.execute(
+                "SELECT logical_name, display_path, bytes, media_type, sha256 "
+                "FROM _bioextract.source_file"
+            ).fetchall()
+            if len(source_rows) != 1 or source_rows[0][0] != "go_obo":
+                raise ValueError("GO source role inventory is unsupported")
+            embedded_sources: object = json.loads(metadata["bioextract.sources"])
+            if (
+                not isinstance(embedded_sources, list)
+                or len(cast(list[object], embedded_sources)) != 1
+            ):
+                raise ValueError("GO embedded source inventory is unsupported")
+            if int(source_rows[0][2]) < 0:
+                raise ValueError("GO source byte count is unsupported")
+
+            relations = {
+                (str(row[0]), str(row[1]), str(row[2]))
+                for row in connection.execute(
+                    "SELECT table_schema, table_name, table_type "
+                    "FROM information_schema.tables "
+                    "WHERE table_schema NOT IN ('information_schema', 'pg_catalog')"
+                ).fetchall()
+            }
+            expected_relations = {
+                ("_bioextract", name, "BASE TABLE") for name in BIOEXTRACT_RELATIONS
+            } | {("main", name, "BASE TABLE") for name in _GO_TABLE_CONTRACTS}
+            if relations != expected_relations:
+                raise ValueError("GO physical table/view inventory is unsupported")
+
+            info_rows = connection.execute(
+                "SELECT table_name, table_role, row_count FROM _bioextract.table_info"
+            ).fetchall()
+            recorded = {str(row[0]): (str(row[1]), int(row[2])) for row in info_rows}
+            if len(recorded) != len(info_rows) or set(recorded) != set(
+                _GO_TABLE_CONTRACTS
+            ):
+                raise ValueError("GO table inventory does not match metadata")
+            for table_name, (role, row_count) in recorded.items():
+                expected_role, expected_schema = _GO_TABLE_CONTRACTS[table_name]
+                if role != expected_role or row_count < 0:
+                    raise ValueError("GO table capability inventory is unsupported")
+                actual_schema = tuple(
+                    (str(row[1]), str(row[2]))
+                    for row in connection.execute(
+                        f'PRAGMA table_info("{table_name}")'
+                    ).fetchall()
+                )
+                if actual_schema != expected_schema:
+                    raise ValueError(f"GO table schema is unsupported: {table_name}")
+            if connection.execute(
+                "SELECT count(*) FROM _bioextract.column_mapping"
+            ).fetchone() != (0,):
+                raise ValueError("GO column provenance inventory is unsupported")
+    except duckdb.Error as error:
+        raise ValueError(f"Cannot open GO DuckDB publication: {path}") from error
+
+
+def _file_identity(path: Path) -> tuple[int, int, int, int, int]:
+    stat = path.stat()
+    return (
+        stat.st_dev,
+        stat.st_ino,
+        stat.st_size,
+        stat.st_mtime_ns,
+        stat.st_ctime_ns,
+    )

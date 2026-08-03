@@ -150,6 +150,43 @@ def test_go_db_build_tidy_exposes_frames_and_writes_duckdb(tmp_path: Path) -> No
     }
 
 
+def test_go_duckdb_reopen_preserves_domain_and_native_sql_behavior(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "go-basic.obo"
+    publication = tmp_path / "go.duckdb"
+    write_minimal_obo(source_path)
+    source = GODatabase.from_obo(source_path)
+    expected_terms = source.select_terms(
+        term_ids=["GO:1234567", "GO:0005575"],
+        include_obsolete=True,
+    )
+    expected_subsets = source.list_subsets()
+    expected_subcell = source.extract_subcell()
+    source.write_duckdb(publication)
+
+    reopened = GODatabase.from_duckdb(publication)
+    assert reopened.select_terms(
+        term_ids=["GO:1234567", "GO:0005575"],
+        include_obsolete=True,
+    ).equals(expected_terms)
+    assert reopened.list_subsets().equals(expected_subsets)
+    assert reopened.extract_subcell().equals(expected_subcell)
+
+    first = reopened.connect()
+    second = reopened.connect()
+    try:
+        assert first is not second
+        assert first.execute(
+            "SELECT term_name FROM term WHERE go_id='GO:0005737'"
+        ).fetchone() == ("cytoplasm",)
+        with pytest.raises(duckdb.Error):
+            first.execute("CREATE TABLE forbidden(value INTEGER)")
+    finally:
+        first.close()
+        second.close()
+
+
 def test_go_db_lists_subsets(tmp_path: Path) -> None:
     file_in = tmp_path / "go-basic.obo"
     write_minimal_obo(file_in)
