@@ -46,6 +46,7 @@ def test_removed_legacy_writer_apis_are_not_exported() -> None:
     assert not hasattr(StringSelection, "with_score_min")
     assert not hasattr(eggnog.EggNOGDatabase, "from_files")
     assert not hasattr(kegg.KEGGDatabase, "write_parquet")
+    assert not hasattr(interpro.InterProDatabase, "write_parquet")
 
 
 def test_resource_factories_do_not_expose_limits() -> None:
@@ -110,6 +111,7 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "protein_to_interpro",
             "interpro_xml",
         ),
+        interpro.InterProDatabase.from_duckdb: ("path",),
         uniprot.UniProtDatabase.from_idmapping: ("path", "release_version"),
         uniprot.UniProtDatabase.from_knowledgebase: (
             "entries",

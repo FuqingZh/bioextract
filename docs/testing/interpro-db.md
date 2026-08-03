@@ -14,8 +14,8 @@ The InterProDatabase test standard covers:
 - full mapping extraction
 - single and grouped UniProt selection
 - unmapped reporting
-- lazy tidy writing of one canonical parquet
-- raw-to-Pfam compact generation without a full mapping prerequisite
+- one capability-driven DuckDB publication
+- DuckDB reopen, native read-only SQL, and domain-selection parity
 
 It does not cover:
 
@@ -32,7 +32,23 @@ It does not cover:
 - `select_ids(..., namespace="uniprot")` returns filtered rows.
 - `select_groups(..., namespace="uniprot")` preserves `GroupId`.
 - unmapped IDs are reported correctly.
-- `write_parquet(path)` writes canonical mapping output with provenance.
+- mapping-only construction writes only the `mapping` DuckDB relation.
+- XML-capable construction writes `mapping`, `protein_term`, `term`, and
+  `term_xref` in one DuckDB.
+- `from_duckdb()` rejects non-v1 metadata and forged resource, profile,
+  capability, source-role, table-role, schema/type, row-count, and column
+  provenance inventories, including an incompatible persisted InterPro
+  content-validation result.
+- metadata v1 requires exact names, types, nullability, and primary keys for
+  all five `_bioextract` tables.
+- `connect()` returns distinct caller-owned read-only connections.
+- a reopened handle rejects an atomically replaced publication path.
+- relative publication paths remain bound across working-directory changes,
+  and cached XML frames reject source identity changes.
+- reopened selections preserve normalization, unique lookup, grouped fan-out,
+  and unmatched behavior.
+- `if_exists="fail"` and `"replace"` retain atomic publication behavior.
+- retained lazy datasets reject changed source identities before atomic commit.
 - invalid `namespace` raises targeted `ValueError`.
 - duplicate positional Pfam matches collapse to one protein-term row.
 - non-PFAM signatures are excluded.
@@ -41,22 +57,18 @@ It does not cover:
   mapping relationships absent from the XML raise targeted `ValueError`.
 - a raw Pfam ID paired with the wrong InterPro ID fails even when both IDs exist
   independently in XML.
-- formal manifests contain hashes for both raw sources and all three assets.
-- `config="mapping"` remains the default and `config="pfam"` selects the
-  compact contract.
-- unknown configurations and Pfam requests without XML fail explicitly.
+- requested source hashes cover every configured raw source.
 - all three Pfam output frames are lazy and expose the exact public schemas.
 
 ## Real-Data Validation
 
-Canonical and compact publication validate the explicitly assigned
+The unified publication validates the explicitly assigned
 `protein2ipr.dat.gz` and `interpro.xml.gz` roles by content. XML official
-metadata supplies release identity; paths do not. Canonical acceptance checks
-include exact schema, readable row count, and a deterministic sample after
-write. Compact acceptance checks include:
+metadata supplies release identity; paths do not. Acceptance checks include
+exact metadata, capability and schema inventories, readable row counts, a
+deterministic sample after write, and:
 
-- exact schemas for `protein_term.parquet`, `term.parquet`, and
-  `term_xref.parquet`
+- exact schemas for `mapping`, `protein_term`, `term`, and `term_xref`
 - global `UniProtId + PfamId` uniqueness
 - one non-empty name per published Pfam ID
 - complete Pfam-to-InterPro xrefs
@@ -64,6 +76,7 @@ write. Compact acceptance checks include:
   deterministic UniProt sample
 - recorded output sizes, elapsed time, peak RSS, and selected-ID query time
 
-Keep full-snapshot runs outside the default pytest suite. The observed canonical
-and compact 108.0 baselines are recorded in the
+Keep full-snapshot runs outside the default pytest suite. Historical canonical
+and compact Parquet measurements, which predate unified DuckDB publication and
+are not its size or reopen baseline, are recorded in the
 [InterPro 108.0 benchmark](../benchmarks/20260714-v1.0-interpro-108-benchmark.md).

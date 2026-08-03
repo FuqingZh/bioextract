@@ -5,13 +5,12 @@ from typing import Literal
 import polars as pl
 from polars._typing import SchemaDict
 
-SCHEMA_VERSION = "interpro-mapping-v0.1"
+SCHEMA_VERSION = "interpro-v1"
 MEDIA_TYPE_XML_GZIP = "application/gzip+xml"
 MEDIA_TYPE_TSV_GZIP = "application/gzip+tab-separated-values"
 
 NAMESPACE_VALUES = ("uniprot",)
 InterProNamespace = Literal["uniprot"]
-InterProTidyConfig = Literal["mapping", "pfam"]
 
 COLS_MAPPING = [
     "UniProtId",
@@ -53,4 +52,4 @@ SCHEMA_GROUP_INPUT_IDS: SchemaDict = {
     "InputId": pl.String,
 }
 
-ASSET_SPECS = (("mapping.parquet", "canonical", "mapping"),)
+ASSET_SPECS = (("mapping", "canonical", "mapping"),)

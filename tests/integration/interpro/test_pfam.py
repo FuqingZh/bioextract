@@ -6,7 +6,6 @@ from pathlib import Path
 import duckdb
 import polars as pl
 import pytest
-from polars.testing import assert_frame_equal
 
 import bioextract.interpro as interpro
 from bioextract.interpro import InterProDatabase
@@ -80,7 +79,7 @@ def test_write_pfam_duckdb_emits_compact_relations(tmp_path: Path) -> None:
     )
     result = db.write_duckdb(path)
 
-    assert result.tables == ("protein_term", "term", "term_xref")
+    assert result.tables == ("mapping", "protein_term", "term", "term_xref")
     with duckdb.connect(str(path), read_only=True) as connection:
         df_protein_term = pl.read_database(  # pyright: ignore[reportUnknownMemberType]  # Polars-DuckDB boundary
             "SELECT * FROM protein_term", connection
@@ -130,11 +129,11 @@ def test_build_pfam_tidy_keeps_lazy_frames(tmp_path: Path) -> None:
         protein_to_interpro=file_protein2ipr,
         interpro_xml=file_xml,
     )
-    dataset = db.build_tidy(config="pfam")
+    dataset = db.build_tidy()
     result = dataset.write_duckdb(tmp_path / "interpro_pfam.duckdb")
 
-    assert dataset.resource_schema_version == "interpro-pfam-v0.1"
-    assert result.tables == ("protein_term", "term", "term_xref")
+    assert dataset.resource_schema_version == "interpro-v1"
+    assert result.tables == ("mapping", "protein_term", "term", "term_xref")
     assert all(isinstance(frame, pl.LazyFrame) for frame in dataset.frames.values())
     assert dataset.frames["protein_term"].collect_schema() == pl.Schema(
         {"UniProtId": pl.String, "PfamId": pl.String}
@@ -194,17 +193,17 @@ def test_build_pfam_tidy_keeps_lazy_frames(tmp_path: Path) -> None:
         (
             ["P12345\tIPR000001\tInterPro name\tPF12\t10\t80"],
             None,
-            "invalid PFAM member IDs",
+            "absent from XML member metadata",
         ),
         (
             ["P12345\tIPR999999\tMissing reference\tPF99999\t10\t80"],
             None,
-            "incomplete PFAM metadata",
+            "absent from XML entry metadata",
         ),
         (
             ["P12345\tIPR999999\tMismatched reference\tPF00051\t10\t80"],
             None,
-            "incomplete PFAM metadata",
+            "absent from XML entry metadata",
         ),
     ],
 )
@@ -224,7 +223,7 @@ def test_build_pfam_tidy_rejects_invalid_contracts(
         InterProDatabase.from_mapping_files(
             protein_to_interpro=file_protein2ipr,
             interpro_xml=file_xml,
-        ).build_tidy(config="pfam")
+        ).build_tidy()
 
 
 def test_build_pfam_tidy_uses_xml_release_not_parent_directories(
@@ -242,44 +241,29 @@ def test_build_pfam_tidy_uses_xml_release_not_parent_directories(
     dataset = InterProDatabase.from_mapping_files(
         protein_to_interpro=file_protein2ipr,
         interpro_xml=file_xml,
-    ).build_tidy(config="pfam")
+    ).build_tidy()
     assert dataset.release_version == "109.0"
     assert dataset.release_version_source == "official_metadata"
     assert dataset.source_schema_version is None
 
 
-def test_tidy_config_defaults_to_mapping(tmp_path: Path) -> None:
+def test_tidy_relations_follow_source_capabilities(tmp_path: Path) -> None:
     file_protein2ipr, file_xml = write_interpro_snapshot(tmp_path)
     db = InterProDatabase.from_mapping_files(
         protein_to_interpro=file_protein2ipr,
         interpro_xml=file_xml,
     )
 
-    assert set(db.build_tidy().frames) == {"mapping"}
-    assert set(db.build_tidy(config="mapping").frames) == {"mapping"}
-    assert_frame_equal(
-        db.build_tidy().frames["mapping"].collect(),
-        db.build_tidy(config="mapping").frames["mapping"].collect(),
+    assert set(db.build_tidy().frames) == {
+        "mapping",
+        "protein_term",
+        "term",
+        "term_xref",
+    }
+    mapping_only = InterProDatabase.from_mapping_files(
+        protein_to_interpro=file_protein2ipr
     )
-
-
-def test_pfam_config_requires_xml(tmp_path: Path) -> None:
-    file_protein2ipr, _file_xml = write_interpro_snapshot(tmp_path)
-    db = InterProDatabase.from_mapping_files(protein_to_interpro=file_protein2ipr)
-
-    with pytest.raises(ValueError, match="XML file is required"):
-        db.build_tidy(config="pfam")
-
-
-def test_rejects_unknown_tidy_config(tmp_path: Path) -> None:
-    file_protein2ipr, file_xml = write_interpro_snapshot(tmp_path)
-    db = InterProDatabase.from_mapping_files(
-        protein_to_interpro=file_protein2ipr,
-        interpro_xml=file_xml,
-    )
-
-    with pytest.raises(ValueError, match="tidy config"):
-        db.build_tidy(config="unknown")  # type: ignore[arg-type]
+    assert set(mapping_only.build_tidy().frames) == {"mapping"}
 
 
 def test_standalone_pfam_api_is_not_exported() -> None:

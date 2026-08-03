@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -103,6 +103,7 @@ class TidyDataset:
     source_schema_version: str | None = None
     scope: str | None = None
     extra_metadata: Mapping[str, str] | None = None
+    before_duckdb_commit: Callable[[], None] | None = None
 
     def write_parquet(
         self,
@@ -204,6 +205,7 @@ class TidyDataset:
             release_version_source=self.release_version_source,
             if_exists=if_exists,
             extra_metadata=self.extra_metadata,
+            before_commit=self.before_duckdb_commit,
         )
 
     @property
