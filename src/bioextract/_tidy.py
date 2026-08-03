@@ -145,6 +145,7 @@ class TidyDataset:
             source_schema_profile=self.source_schema_profile,
             source_schema_version=self.source_schema_version,
             sources=self._source_records,
+            scope=self.scope,
             release_version=self.release_version,
             release_version_source=self.release_version_source,
             if_exists=if_exists,

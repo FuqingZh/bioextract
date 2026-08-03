@@ -1099,7 +1099,8 @@ def _validate_tidy_publication(
             organism_code = metadata["bioextract.organism_code"]
             mismatch = connection.execute(
                 "SELECT count(*) FROM mapping "
-                "WHERE organism_code != ? "
+                "WHERE organism_code IS NULL OR kegg_gene_id IS NULL "
+                "OR organism_code != ? "
                 "OR NOT starts_with(kegg_gene_id, ?)",
                 [organism_code, f"{organism_code}:"],
             ).fetchone()

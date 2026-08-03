@@ -194,6 +194,17 @@ def test_mapping_publication_validates_recorded_organism(tmp_path: Path) -> None
         KEGGDatabase.from_duckdb(path)
 
 
+@pytest.mark.parametrize("column", ["organism_code", "kegg_gene_id"])
+def test_mapping_publication_rejects_null_identity(tmp_path: Path, column: str) -> None:
+    path = tmp_path / "mapping.duckdb"
+    _mapping_source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(f'UPDATE mapping SET "{column}"=NULL')
+
+    with pytest.raises(ValueError, match="recorded organism_code"):
+        KEGGDatabase.from_duckdb(path)
+
+
 def test_tidy_profiles_validate_source_roles(tmp_path: Path) -> None:
     path = tmp_path / "brite.duckdb"
     _brite_source(tmp_path).write_duckdb(path)
