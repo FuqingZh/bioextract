@@ -20,7 +20,7 @@ The domain contract is primary. Storage is an execution strategy:
 - add convenience methods only when they encode resource-owned ID resolution,
   relationship traversal, grouping, or unmatched-ID accounting.
 
-Materialized writers use `write_duckdb(file_out)` with an explicit destination.
+Materialized writers use `write_duckdb(path)` with an explicit destination.
 Readers use `XDatabase.from_duckdb(path)`, and every `connect()` call returns a
 fresh caller-owned read-only DuckDB connection. Writers validate into a
 staging file and atomically publish only after success. Publication provenance
