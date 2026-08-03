@@ -9,6 +9,7 @@ import duckdb
 import polars as pl
 import pytest
 
+from bioextract.errors import CapabilityError, IntegrityError
 from bioextract.uniprot import UniProtDatabase
 
 
@@ -189,6 +190,31 @@ def test_from_duckdb_discriminates_uniprot_profiles(tmp_path: Path) -> None:
         )
     with pytest.raises(ValueError, match="source schema profile"):
         UniProtDatabase.from_duckdb(path)
+
+
+def test_profile_capabilities_and_selection_honor_pinned_identity(
+    tmp_path: Path,
+) -> None:
+    mapping_path = tmp_path / "mapping.duckdb"
+    UniProtDatabase.from_idmapping(
+        _write_idmapping(tmp_path / "mapping.tab.gz")
+    ).write_duckdb(mapping_path, allow_all_taxa=True)
+    mapping = UniProtDatabase.from_duckdb(mapping_path)
+    with pytest.raises(CapabilityError):
+        mapping.select_ids(["P12345"], namespace="uniprot")
+
+    knowledgebase_path = tmp_path / "knowledgebase.duckdb"
+    replacement = tmp_path / "replacement.duckdb"
+    source = UniProtDatabase.from_knowledgebase(
+        entries=_write_dat(tmp_path / "entries.dat.gz")
+    )
+    source.write_duckdb(knowledgebase_path)
+    source.write_duckdb(replacement)
+    knowledgebase = UniProtDatabase.from_duckdb(knowledgebase_path)
+    os.replace(replacement, knowledgebase_path)
+
+    with pytest.raises(IntegrityError, match="replaced"):
+        knowledgebase.select_ids(["P12345"], namespace="uniprot").extract_proteins()
 
 
 def test_reopened_mapping_lazy_frame_owns_and_releases_connection(

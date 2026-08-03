@@ -10,6 +10,7 @@ import polars as pl
 
 from bioextract._publication import DuckDBWriteResult
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
+from bioextract.errors import CapabilityError, IntegrityError
 
 from ._knowledgebase import write_knowledgebase
 from ._query import UniProtSelection, make_selection, validate_publication
@@ -129,7 +130,7 @@ class UniProtDatabase:
         profile, metadata = validate_publication(publication)
         identity_after = _file_identity(publication)
         if identity_after != identity_before:
-            raise ValueError("UniProt publication changed during validation")
+            raise IntegrityError("UniProt publication changed during validation")
         return cls(
             f"{profile}_publication",
             _duckdb_path=publication,
@@ -157,7 +158,7 @@ class UniProtDatabase:
             <LazyFrame ...>
         """
         if self._mode not in {"idmapping", "idmapping_publication"}:
-            raise ValueError("Operation requires UniProt idmapping mode")
+            raise CapabilityError("UniProt publication has no idmapping capability")
         normalized = normalize_taxids(tuple(taxon_ids or ()))
         frame = self._scan_mapping(normalized)
         validate_mapping_schema(frame)
@@ -243,17 +244,17 @@ class UniProtDatabase:
             <duckdb.DuckDBPyConnection ...>
         """
         if self._mode not in {"knowledgebase_publication", "idmapping_publication"}:
-            raise ValueError("Operation requires a UniProt DuckDB publication")
+            raise CapabilityError("connect() requires UniProtDatabase.from_duckdb()")
         if self._duckdb_path is None:
             raise RuntimeError("UniProt DuckDB path is unavailable")
         if _file_identity(self._duckdb_path) != self._duckdb_identity:
-            raise RuntimeError(
+            raise IntegrityError(
                 "UniProt publication was replaced; reopen it with from_duckdb()"
             )
         connection = duckdb.connect(str(self._duckdb_path), read_only=True)
         if _file_identity(self._duckdb_path) != self._duckdb_identity:
             connection.close()
-            raise RuntimeError(
+            raise IntegrityError(
                 "UniProt publication was replaced; reopen it with from_duckdb()"
             )
         return connection
@@ -320,11 +321,11 @@ class UniProtDatabase:
 
     def _require_mode(self, mode: str) -> None:
         if self._mode != mode:
-            raise ValueError(f"Operation requires UniProt {mode} mode")
+            raise CapabilityError(f"Operation requires UniProt {mode} capability")
 
     def _required_source_path(self) -> Path:
         if self._mode != "idmapping":
-            raise ValueError("Operation requires UniProt idmapping source mode")
+            raise CapabilityError("Operation requires UniProt idmapping source")
         if self._source_path is None:
             raise RuntimeError("UniProt idmapping source is unavailable")
         return self._source_path

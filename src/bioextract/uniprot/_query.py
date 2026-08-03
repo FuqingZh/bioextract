@@ -387,9 +387,7 @@ class UniProtSelection:
     ) -> pl.DataFrame:
         del table
         matches = self._matches()
-        database = self.database
-        path = database._duckdb_path  # pyright: ignore[reportPrivateUsage]
-        with duckdb.connect(str(path), read_only=True) as connection:
+        with self.database.connect() as connection:
             connection.execute(
                 "CREATE TEMP TABLE _selection("
                 "GroupId VARCHAR, InputId VARCHAR, InputNamespace VARCHAR, "
@@ -441,13 +439,11 @@ class UniProtSelection:
         return matches
 
     def _query_identifier_matches(self) -> pl.DataFrame:
-        database = self.database
-        path = database._duckdb_path  # pyright: ignore[reportPrivateUsage]
         inputs = pl.DataFrame(
             {"InputId": self.input_ids},
             schema={"InputId": pl.String},
         )
-        with duckdb.connect(str(path), read_only=True) as connection:
+        with self.database.connect() as connection:
             connection.execute("CREATE TEMP TABLE _inputs(InputId VARCHAR)")
             if inputs.height:
                 connection.executemany("INSERT INTO _inputs VALUES (?)", inputs.rows())
