@@ -14,8 +14,8 @@ The InterProDatabase test standard covers:
 - full mapping extraction
 - single and grouped UniProt selection
 - unmapped reporting
-- lazy tidy writing of one canonical parquet
-- raw-to-Pfam compact generation without a full mapping prerequisite
+- one capability-driven DuckDB publication
+- DuckDB reopen, native read-only SQL, and domain-selection parity
 
 It does not cover:
 
@@ -32,7 +32,16 @@ It does not cover:
 - `select_ids(..., namespace="uniprot")` returns filtered rows.
 - `select_groups(..., namespace="uniprot")` preserves `GroupId`.
 - unmapped IDs are reported correctly.
-- `write_parquet(path)` writes canonical mapping output with provenance.
+- mapping-only construction writes only the `mapping` DuckDB relation.
+- XML-capable construction writes `mapping`, `protein_term`, `term`, and
+  `term_xref` in one DuckDB.
+- `from_duckdb()` rejects non-v1 metadata and forged resource, profile,
+  capability, source-role, table-role, schema/type, row-count, and column
+  provenance inventories.
+- `connect()` returns distinct caller-owned read-only connections.
+- reopened selections preserve normalization, unique lookup, grouped fan-out,
+  and unmatched behavior.
+- `if_exists="fail"` and `"replace"` retain atomic publication behavior.
 - invalid `namespace` raises targeted `ValueError`.
 - duplicate positional Pfam matches collapse to one protein-term row.
 - non-PFAM signatures are excluded.
@@ -41,22 +50,18 @@ It does not cover:
   mapping relationships absent from the XML raise targeted `ValueError`.
 - a raw Pfam ID paired with the wrong InterPro ID fails even when both IDs exist
   independently in XML.
-- formal manifests contain hashes for both raw sources and all three assets.
-- `config="mapping"` remains the default and `config="pfam"` selects the
-  compact contract.
-- unknown configurations and Pfam requests without XML fail explicitly.
+- requested source hashes cover every configured raw source.
 - all three Pfam output frames are lazy and expose the exact public schemas.
 
 ## Real-Data Validation
 
-Canonical and compact publication validate the explicitly assigned
+The unified publication validates the explicitly assigned
 `protein2ipr.dat.gz` and `interpro.xml.gz` roles by content. XML official
-metadata supplies release identity; paths do not. Canonical acceptance checks
-include exact schema, readable row count, and a deterministic sample after
-write. Compact acceptance checks include:
+metadata supplies release identity; paths do not. Acceptance checks include
+exact metadata, capability and schema inventories, readable row counts, a
+deterministic sample after write, and:
 
-- exact schemas for `protein_term.parquet`, `term.parquet`, and
-  `term_xref.parquet`
+- exact schemas for `mapping`, `protein_term`, `term`, and `term_xref`
 - global `UniProtId + PfamId` uniqueness
 - one non-empty name per published Pfam ID
 - complete Pfam-to-InterPro xrefs

@@ -3,7 +3,6 @@ from __future__ import annotations
 import gzip
 from pathlib import Path
 
-import polars as pl
 import pytest
 
 from bioextract.interpro import InterProDatabase
@@ -172,19 +171,23 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     ]
 
 
-def test_write_parquet_writes_mapping_without_sidecar(tmp_path: Path) -> None:
+def test_mapping_only_duckdb_round_trip_preserves_domain_selection(
+    tmp_path: Path,
+) -> None:
     files = write_interpro_fixture(tmp_path)
     db = InterProDatabase.from_mapping_files(
         protein_to_interpro=files["protein2ipr"],
-        interpro_xml=files["xml"],
     )
 
-    path = tmp_path / "interpro.parquet"
-    result = db.write_parquet(path)
+    path = tmp_path / "interpro.duckdb"
+    result = db.write_duckdb(path)
+    reopened = InterProDatabase.from_duckdb(path)
 
     assert result.path == path
-    assert not (tmp_path / "manifest.json").exists()
-    assert pl.read_parquet(path).height == 3
+    assert result.tables == ("mapping",)
+    selection = reopened.select_ids(["P12345", "MISSING"])
+    assert selection.extract_mapping().height == 2
+    assert selection.extract_unmatched_ids().to_dicts() == [{"InputId": "MISSING"}]
 
 
 @pytest.mark.parametrize(

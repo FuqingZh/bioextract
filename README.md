@@ -252,8 +252,11 @@ db = InterProDatabase.from_mapping_files(
     protein_to_interpro="108.0/raw/protein2ipr.dat.gz",
     interpro_xml="108.0/raw/interpro.xml.gz",
 )
-db.write_parquet("out/interpro.parquet")
-db.write_duckdb("out/interpro_pfam.duckdb", config="pfam")
+db.write_duckdb("out/interpro.duckdb")
+
+published = InterProDatabase.from_duckdb("out/interpro.duckdb")
+with published.connect() as connection:
+    print(connection.sql("SHOW TABLES").fetchall())
 ```
 
 ## UniProt

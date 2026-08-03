@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import json
 import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import duckdb
 import polars as pl
 
-from bioextract._publication import DuckDBWriteResult, ParquetWriteResult
+from bioextract._publication import (
+    BIOEXTRACT_RELATIONS,
+    DuckDBWriteResult,
+    validate_duckdb_metadata_v1,
+)
 from bioextract._shared import (
     create_group_input_frames,
     create_input_id_frame,
@@ -28,9 +34,9 @@ from .constant import (
     SCHEMA_UNMAPPED,
     SCHEMA_VERSION,
     InterProNamespace,
-    InterProTidyConfig,
 )
 from .util import (
+    extract_mapping_frame,
     extract_unmatched_ids_frame,
     read_interpro_xml_frames,
     read_mapping_frame,
@@ -46,7 +52,7 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class _InterProSnapshot:
-    file_protein2ipr: Path
+    file_protein2ipr: Path | None = None
     file_interpro_xml: Path | None = None
 
 
@@ -77,6 +83,11 @@ class InterProDatabase:
     _frames_xml: dict[str, pl.DataFrame] | None = field(
         default=None, init=False, repr=False
     )
+    _publication_path: Path | None = field(default=None, init=False, repr=False)
+    _capabilities: frozenset[str] = field(
+        default_factory=lambda: frozenset[str](), init=False
+    )
+    release_version: str | None = field(default=None, init=False)
 
     @classmethod
     def from_mapping_files(
@@ -126,6 +137,39 @@ class InterProDatabase:
                 file_interpro_xml=file_interpro_xml,
             ),
         )
+
+    @classmethod
+    def from_duckdb(cls, path: os.PathLike[str] | str) -> InterProDatabase:
+        """Open a validated InterPro publication for domain and SQL access.
+
+        Examples:
+            >>> db = InterProDatabase.from_duckdb(  # doctest: +SKIP
+            ...     "tidy/data.duckdb"
+            ... )
+            >>> db.select_ids(["P12345"]).extract_mapping().height  # doctest: +SKIP
+            1
+        """
+        publication_path = Path(path)
+        capabilities, release_version = _validate_interpro_publication(publication_path)
+        result = cls(snapshot=_InterProSnapshot())
+        result._publication_path = publication_path
+        result._capabilities = capabilities
+        result.release_version = release_version
+        return result
+
+    def connect(self) -> duckdb.DuckDBPyConnection:
+        """Return a fresh caller-owned read-only publication connection.
+
+        Examples:
+            >>> db = InterProDatabase.from_duckdb("tidy/data.duckdb")  # doctest: +SKIP
+            >>> with db.connect() as connection:  # doctest: +SKIP
+            ...     count = connection.sql("SELECT count(*) FROM mapping").fetchone()
+            ...     count[0] >= 0
+            True
+        """
+        if self._publication_path is None:
+            raise ValueError("connect() requires InterProDatabase.from_duckdb()")
+        return duckdb.connect(str(self._publication_path), read_only=True)
 
     def select_ids(
         self,
@@ -222,37 +266,36 @@ class InterProDatabase:
             [('P12345', 'PF00051', 10, 80), ('P12345', 'SM00130', 12, 76)]
         """
         if self._df_mapping is None:
-            self._df_mapping = read_mapping_frame(
-                self.snapshot.file_protein2ipr,
-                df_interpro_entry=self.xml_frame("entry"),
-                df_interpro_member=self.xml_frame("member"),
-            )
+            if self._publication_path is not None:
+                with self.connect() as connection:
+                    self._df_mapping = pl.read_database(  # pyright: ignore[reportUnknownMemberType]  # Polars-DuckDB boundary
+                        "SELECT * FROM mapping", connection
+                    ).rename(
+                        {name: source for source, name in _MAPPING_COLUMNS.items()}
+                    )
+            else:
+                self._df_mapping = read_mapping_frame(
+                    self._require_mapping_source(action="extract mappings"),
+                    df_interpro_entry=self.xml_frame("entry"),
+                    df_interpro_member=self.xml_frame("member"),
+                )
         return self._df_mapping
 
     def build_tidy(
         self,
-        *,
-        config: InterProTidyConfig = "mapping",
     ) -> TidyDataset:
-        """Build one configured lazy tidy dataset.
-
-        Args:
-            config: `"mapping"` builds the canonical `mapping.parquet` plan;
-                `"pfam"` builds `protein_term`, `term`, and `term_xref` plans.
+        """Build all lazy relations supported by the configured source files.
 
         Returns:
-            A tidy dataset whose lazy frames and asset contract match `config`.
+            A mapping dataset, plus compact Pfam relations when XML is present.
 
         Raises:
-            ValueError: If `config` is unknown, Pfam XML is absent, or Pfam
-                snapshot metadata and raw mappings fail strict validation.
+            ValueError: If snapshot metadata and raw mappings fail validation.
 
         Notes:
-            The mapping configuration accepts missing XML and leaves its
-            enrichment fields null. The Pfam configuration requires both
-            logical source roles and does not depend on a previously written
-            canonical mapping. Paths never supply release identity; official
-            XML metadata does.
+            Mapping accepts missing XML and leaves enrichment fields null.
+            Pfam relations are added when XML is available. Paths never supply
+            release identity; official XML metadata does.
 
         Examples:
             The XML below includes an INTERPRO release record whose official
@@ -265,21 +308,9 @@ class InterProDatabase:
             ...     interpro_xml="fixtures/interpro/108.0/raw/interpro.xml.gz",
             ... )
             >>> sorted(db.build_tidy().frames)
-            ['mapping']
-
-            Build the compact Pfam plan from the same raw snapshot:
-
-            >>> sorted(db.build_tidy(config="pfam").frames)
-            ['protein_term', 'term', 'term_xref']
+            ['mapping', 'protein_term', 'term', 'term_xref']
         """
-        self._validate_tidy_config(config)
-        if config == "pfam":
-            return build_pfam_tidy_dataset(
-                file_protein2ipr=self.snapshot.file_protein2ipr,
-                file_interpro_xml=self._require_interpro_xml(
-                    action="build the Pfam tidy configuration"
-                ),
-            )
+        file_protein2ipr = self._require_mapping_source(action="build a publication")
 
         release_version = (
             read_interpro_release_version(self.snapshot.file_interpro_xml)
@@ -288,22 +319,26 @@ class InterProDatabase:
         )
         if self.snapshot.file_interpro_xml is not None:
             validate_mapping_xml_relationships(
-                self.snapshot.file_protein2ipr,
+                file_protein2ipr,
                 df_interpro_entry=self.xml_frame("entry"),
                 df_interpro_member=self.xml_frame("member"),
             )
-        return TidyDataset(
+        dataset = TidyDataset(
             frames={
                 "mapping": scan_mapping_frame(
-                    self.snapshot.file_protein2ipr,
+                    file_protein2ipr,
                     df_interpro_entry=self.xml_frame("entry"),
                     df_interpro_member=self.xml_frame("member"),
                 )
             },
             source=self._tidy_sources(),
             resource_schema_version=SCHEMA_VERSION,
-            source_schema_profile="interpro-protein2ipr-v1",
-            build_id_prefix=f"interpro-mapping-{self.snapshot.file_protein2ipr.stem}",
+            source_schema_profile=(
+                "interpro-protein2ipr-xml-v1"
+                if self.snapshot.file_interpro_xml is not None
+                else "interpro-protein2ipr-v1"
+            ),
+            build_id_prefix=f"interpro-{file_protein2ipr.stem}",
             assets=tuple(
                 TidyAsset(path=path, kind=kind, frame_name=frame_name)
                 for path, kind, frame_name in ASSET_SPECS
@@ -313,38 +348,38 @@ class InterProDatabase:
             release_version_source=(
                 "official_metadata" if release_version is not None else None
             ),
+            extra_metadata={
+                "bioextract.capabilities": (
+                    "mapping,pfam"
+                    if self.snapshot.file_interpro_xml is not None
+                    else "mapping"
+                )
+            },
         )
-
-    def write_parquet(
-        self,
-        path: os.PathLike[str] | str,
-        *,
-        if_exists: str = "fail",
-    ) -> ParquetWriteResult:
-        """Atomically publish the canonical InterPro mapping as one Parquet.
-
-        Examples:
-            >>> from tempfile import TemporaryDirectory
-            >>> db = InterProDatabase.from_mapping_files(
-            ...     protein_to_interpro="fixtures/interpro/108.0/raw/protein2ipr.dat.gz"
-            ... )
-            >>> with TemporaryDirectory() as dir_out:
-            ...     result = db.write_parquet(
-            ...         Path(dir_out) / "interpro.parquet"
-            ...     )
-            ...     result.resource_name.startswith("interpro-")
-            True
-        """
-        return self.build_tidy().write_parquet(path, if_exists=if_exists)
+        if self.snapshot.file_interpro_xml is None:
+            return dataset
+        pfam = build_pfam_tidy_dataset(
+            file_protein2ipr=file_protein2ipr,
+            file_interpro_xml=self.snapshot.file_interpro_xml,
+        )
+        dataset.frames = {**dataset.frames, **pfam.frames}
+        dataset.assets = (
+            *dataset.assets,
+            *(
+                TidyAsset(asset.path, "compact", asset.frame_name)
+                for asset in pfam.assets
+            ),
+        )
+        return dataset
 
     def write_duckdb(
         self,
         path: os.PathLike[str] | str,
         *,
-        config: InterProTidyConfig = "pfam",
         if_exists: str = "fail",
+        include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
-        """Atomically publish a multi-relation InterPro product as DuckDB.
+        """Publish every relation available from this source handle as DuckDB.
 
         Examples:
             >>> from tempfile import TemporaryDirectory
@@ -354,16 +389,15 @@ class InterProDatabase:
             ... )
             >>> with TemporaryDirectory() as dir_out:
             ...     result = db.write_duckdb(
-            ...         Path(dir_out) / "interpro_pfam.duckdb"
+            ...         Path(dir_out) / "interpro.duckdb"
             ...     )
             ...     result.tables
-            ('protein_term', 'term', 'term_xref')
+            ('mapping', 'protein_term', 'term', 'term_xref')
         """
-        if config != "pfam":
-            raise ValueError("write_duckdb() currently supports config='pfam' only")
-        return self.build_tidy(config=config).write_duckdb(
+        return self.build_tidy().write_duckdb(
             path,
             if_exists=if_exists,
+            include_source_hashes=include_source_hashes,
         )
 
     def xml_frame(self, frame_name: str) -> pl.DataFrame:
@@ -398,7 +432,9 @@ class InterProDatabase:
         sources = [
             TidySource(
                 logical_name="protein_to_interpro",
-                path=self.snapshot.file_protein2ipr,
+                path=self._require_mapping_source(
+                    action="describe publication sources"
+                ),
                 media_type=MEDIA_TYPE_TSV_GZIP,
             )
         ]
@@ -412,17 +448,15 @@ class InterProDatabase:
             )
         return tuple(sources)
 
-    @staticmethod
-    def _validate_tidy_config(config: str) -> None:
-        if config not in {"mapping", "pfam"}:
-            raise ValueError(
-                f"InterPro tidy config must be one of ['mapping', 'pfam']: {config!r}"
-            )
-
     def _require_interpro_xml(self, *, action: str) -> Path:
         if self.snapshot.file_interpro_xml is None:
             raise ValueError(f"InterPro XML file is required to {action}")
         return self.snapshot.file_interpro_xml
+
+    def _require_mapping_source(self, *, action: str) -> Path:
+        if self.snapshot.file_protein2ipr is None:
+            raise ValueError(f"InterPro mapping source is required to {action}")
+        return self.snapshot.file_protein2ipr
 
 
 @dataclass(slots=True)
@@ -488,14 +522,35 @@ class InterProSelection:
             [('P12345', 'PF00051'), ('P12345', 'SM00130')]
         """
         if self._df_mapping is None:
-            self._df_mapping = select_mapping_frame(
-                self.dataset.snapshot.file_protein2ipr,
-                self._df_input_ids,
-                df_group_membership=self._df_group_membership,
-                namespace=self.namespace,
-                df_interpro_entry=self.dataset.xml_frame("entry"),
-                df_interpro_member=self.dataset.xml_frame("member"),
-            )
+            if self.dataset._publication_path is not None:  # pyright: ignore[reportPrivateUsage]
+                selected = extract_mapping_frame(
+                    self.dataset.extract_mapping(),
+                    self._df_input_ids,
+                    namespace=self.namespace,
+                )
+                if self._df_group_membership is None:
+                    self._df_mapping = selected
+                else:
+                    columns = ["GroupId", *selected.columns]
+                    self._df_mapping = (
+                        self._df_group_membership.join(
+                            selected, on="InputId", how="inner"
+                        )
+                        .select(columns)
+                        .unique()
+                        .sort(columns)
+                    )
+            else:
+                self._df_mapping = select_mapping_frame(
+                    self.dataset._require_mapping_source(  # pyright: ignore[reportPrivateUsage]
+                        action="select mappings"
+                    ),
+                    self._df_input_ids,
+                    df_group_membership=self._df_group_membership,
+                    namespace=self.namespace,
+                    df_interpro_entry=self.dataset.xml_frame("entry"),
+                    df_interpro_member=self.dataset.xml_frame("member"),
+                )
         return self._df_mapping
 
     def extract_unmatched_ids(self) -> pl.DataFrame:
@@ -533,3 +588,191 @@ def _validate_file(
     if not file_path.exists():
         raise FileNotFoundError(f"{label} not found: {file_path}")
     return file_path
+
+
+_MAPPING_COLUMNS = {
+    "UniProtId": "uniprot_id",
+    "InterProId": "interpro_id",
+    "InterProName": "interpro_name",
+    "InterProType": "interpro_type",
+    "MemberDb": "member_db",
+    "MemberDbId": "member_db_id",
+    "Start": "start",
+    "End": "end",
+}
+_TABLE_CONTRACTS = {
+    "mapping": (
+        "canonical",
+        [
+            (name, "BIGINT" if name in {"start", "end"} else "VARCHAR")
+            for name in _MAPPING_COLUMNS.values()
+        ],
+    ),
+    "protein_term": (
+        "compact",
+        [("uniprot_id", "VARCHAR"), ("pfam_id", "VARCHAR")],
+    ),
+    "term": (
+        "compact",
+        [("pfam_id", "VARCHAR"), ("pfam_name", "VARCHAR")],
+    ),
+    "term_xref": (
+        "compact",
+        [
+            ("pfam_id", "VARCHAR"),
+            ("interpro_id", "VARCHAR"),
+            ("interpro_name", "VARCHAR"),
+            ("interpro_type", "VARCHAR"),
+        ],
+    ),
+}
+
+
+def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | None]:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    try:
+        with duckdb.connect(str(path), read_only=True) as connection:
+            metadata = dict(
+                connection.execute(
+                    "SELECT key, value FROM _bioextract.metadata"
+                ).fetchall()
+            )
+            if metadata.get("bioextract.metadata_schema_version") != "1":
+                raise ValueError("Unsupported InterPro metadata schema version")
+            validate_duckdb_metadata_v1(connection, metadata)
+            if metadata.get("bioextract.resource_name") != "interpro":
+                raise ValueError("DuckDB file is not a bioextract InterPro publication")
+            if metadata.get("bioextract.resource_schema_version") != SCHEMA_VERSION:
+                raise ValueError("Unsupported InterPro resource schema version")
+
+            capabilities = frozenset(
+                value.strip()
+                for value in metadata.get("bioextract.capabilities", "").split(",")
+                if value.strip()
+            )
+            profile_value = metadata.get("bioextract.source_schema_profile")
+            if not isinstance(profile_value, str):
+                raise ValueError(
+                    "InterPro publication is missing source schema profile"
+                )
+            profile_contracts = {
+                "interpro-protein2ipr-v1": (
+                    frozenset({"mapping"}),
+                    {"mapping"},
+                    {"protein_to_interpro"},
+                ),
+                "interpro-protein2ipr-xml-v1": (
+                    frozenset({"mapping", "pfam"}),
+                    set(_TABLE_CONTRACTS),
+                    {"protein_to_interpro", "interpro_xml"},
+                ),
+            }
+            expected = profile_contracts.get(profile_value)
+            if expected is None:
+                raise ValueError("Unsupported InterPro source schema profile")
+            expected_capabilities, expected_tables, expected_sources = expected
+            if capabilities != expected_capabilities:
+                raise ValueError("InterPro capability inventory is unsupported")
+
+            source_rows = connection.execute(
+                "SELECT logical_name, display_path, bytes, media_type, sha256 "
+                "FROM _bioextract.source_file ORDER BY logical_name"
+            ).fetchall()
+            source_roles = {str(row[0]) for row in source_rows}
+            if source_roles != expected_sources:
+                raise ValueError("InterPro source role inventory is unsupported")
+            embedded_sources = json.loads(metadata["bioextract.sources"])
+            table_sources = [
+                {
+                    "logical_name": str(row[0]),
+                    "path": str(row[1]),
+                    "bytes": int(row[2]),
+                    "media_type": str(row[3]),
+                    **({"sha256": str(row[4])} if row[4] is not None else {}),
+                }
+                for row in source_rows
+            ]
+            if (
+                sorted(embedded_sources, key=lambda item: item["logical_name"])
+                != table_sources
+            ):
+                raise ValueError("InterPro embedded source inventory is unsupported")
+            expected_media_types = {
+                "protein_to_interpro": MEDIA_TYPE_TSV_GZIP,
+                "interpro_xml": MEDIA_TYPE_XML_GZIP,
+            }
+            if any(row[3] != expected_media_types[str(row[0])] for row in source_rows):
+                raise ValueError("InterPro source media-type inventory is unsupported")
+
+            provenance_tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema='_bioextract' AND table_type='BASE TABLE'"
+                ).fetchall()
+            }
+            if provenance_tables != BIOEXTRACT_RELATIONS:
+                raise ValueError("InterPro provenance table inventory is unsupported")
+            physical_tables = {
+                str(row[0])
+                for row in connection.execute(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema='main' AND table_type='BASE TABLE'"
+                ).fetchall()
+            }
+            rows = connection.execute(
+                "SELECT table_name, table_role, row_count FROM _bioextract.table_info"
+            ).fetchall()
+            recorded = {str(row[0]): (str(row[1]), int(row[2])) for row in rows}
+            if set(recorded) != expected_tables or physical_tables != expected_tables:
+                raise ValueError("InterPro table inventory does not match capabilities")
+            for table_name, (role, row_count) in recorded.items():
+                expected_role, expected_columns = _TABLE_CONTRACTS[table_name]
+                if role != expected_role:
+                    raise ValueError("InterPro table role inventory is unsupported")
+                columns = [
+                    (str(row[1]), str(row[2]))
+                    for row in connection.execute(
+                        f'PRAGMA table_info("{table_name}")'
+                    ).fetchall()
+                ]
+                if columns != expected_columns:
+                    raise ValueError(
+                        f"InterPro table schema is unsupported: {table_name}"
+                    )
+                actual_count = connection.execute(
+                    f'SELECT count(*) FROM "{table_name}"'
+                ).fetchone()
+                if actual_count is None or int(actual_count[0]) != row_count:
+                    raise ValueError(f"InterPro row-count drift: {table_name}")
+
+            observed_mappings = {
+                tuple(str(value) for value in row)
+                for row in connection.execute(
+                    "SELECT table_name, source_column, output_column, reason "
+                    "FROM _bioextract.column_mapping"
+                ).fetchall()
+            }
+            expected_mappings = {
+                (table, source, output, "generated_snake_case")
+                for table in expected_tables
+                for source, output in _source_output_columns(table)
+                if source != output
+            }
+            if observed_mappings != expected_mappings:
+                raise ValueError("InterPro column provenance inventory is unsupported")
+            return capabilities, metadata.get("bioextract.release_version")
+    except duckdb.Error as error:
+        raise ValueError(f"Cannot open InterPro DuckDB publication: {path}") from error
+
+
+def _source_output_columns(table: str) -> list[tuple[str, str]]:
+    sources = {
+        "mapping": list(_MAPPING_COLUMNS),
+        "protein_term": ["UniProtId", "PfamId"],
+        "term": ["PfamId", "PfamName"],
+        "term_xref": ["PfamId", "InterProId", "InterProName", "InterProType"],
+    }[table]
+    outputs = [name for name, _type in _TABLE_CONTRACTS[table][1]]
+    return list(zip(sources, outputs, strict=True))

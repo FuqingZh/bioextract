@@ -16,8 +16,8 @@ The current version covers:
 - optional `interpro.xml.gz` enrichment of entry type and member database
 - full mapping extraction
 - single and grouped UniProt selection
-- flat tidy writing to one canonical `mapping.parquet`
-- direct raw-to-Pfam compact publication
+- capability-driven publication to one DuckDB file
+- validated DuckDB reopening for domain selection and read-only SQL
 
 It intentionally does not cover:
 
@@ -63,7 +63,7 @@ df_unmapped = selection.extract_unmatched_ids()
 
 Grouped selections mirror the other DB contracts by prepending `GroupId`.
 
-Compact Pfam publication is an InterPro tidy configuration:
+Publication writes every relation available from the constructed handle:
 
 ```python
 from bioextract import InterProDatabase
@@ -73,10 +73,11 @@ db = InterProDatabase.from_mapping_files(
     interpro_xml="108.0/raw/interpro.xml.gz",
 )
 
-result = db.write_duckdb(
-    "108.0/interpro_pfam.duckdb",
-    config="pfam",
-)
+result = db.write_duckdb("108.0/tidy/data.duckdb")
+
+published = InterProDatabase.from_duckdb("108.0/tidy/data.duckdb")
+with published.connect() as connection:
+    table_names = connection.sql("SHOW TABLES").fetchall()
 ```
 
 The arguments declare the two logical source roles. Paths and basenames do not
@@ -107,42 +108,50 @@ The contract stays row-level:
 
 ## Publication
 
-`write_parquet(path)` publishes the independent InterPro mapping.
-`write_duckdb(path, config="pfam")` publishes the related Pfam
-`protein_term`, `term`, and `term_xref` relations together.
+`write_duckdb(path)` publishes every relation supported by the constructed
+source handle. A mapping-only handle publishes `mapping`. When InterPro XML is
+also present, the same file additionally contains `protein_term`, `term`, and
+`term_xref`. Missing XML produces absent Pfam relations, not misleading empty
+tables and not a different container.
 
 The write path is lazy:
 
 1. scan `protein2ipr.dat.gz`
 2. lazy-join XML-derived entry/member lookup frames when present
-3. `sink_parquet()` to a staging artifact before atomic publication
+3. stream each relation through temporary transfer Parquet into staged DuckDB
+4. validate metadata v1 and atomically commit the completed database
 
 This keeps the main publication path aligned with the shared tidy contract
 without forcing a full materialized DataFrame before write.
 
-`build_tidy()` exposes the lazy relation plan; `write_parquet(path)` and
-`write_duckdb(path)` publish its single- and multi-relation products.
+`build_tidy()` exposes the capability-driven lazy relation plan.
+
+`from_duckdb()` accepts only metadata v1 publications with exact InterPro
+resource identity, resource schema version, source profile, capability list,
+source-role inventory, table names and roles, physical column types, row
+counts, and column provenance. `connect()` returns a new caller-owned read-only
+DuckDB connection on every call.
 
 ## Pfam Compact Contract
 
 Pfam publication reads `protein2ipr.dat.gz` and `interpro.xml.gz` directly.
-It does not consume or require the full `tidy/mapping.parquet`.
+It does not consume or require a prior mapping publication.
 
-`protein_term.parquet`:
+`protein_term`:
 
 ```text
 UniProtId
 PfamId
 ```
 
-`term.parquet`:
+`term`:
 
 ```text
 PfamId
 PfamName
 ```
 
-`term_xref.parquet`:
+`term_xref`:
 
 ```text
 PfamId
@@ -160,8 +169,9 @@ member relationships are validated against XML by the exact
 `InterProId + PfamId` pair, so a valid Pfam ID cannot hide a mismatched
 InterPro reference.
 
-The compact manifest schema is `interpro-pfam-v0.1`. Source and asset hashes
-are optional API costs and are enabled for formal resource publication.
+The publication resource schema is `interpro-v1`. The source profile and
+`bioextract.capabilities` distinguish mapping-only from mapping-plus-Pfam
+publications. Source hashes remain an optional writer cost.
 
 All three published frames remain lazy. XML parsing materializes one compact
 Pfam metadata index, and a streaming raw-file aggregation materializes one
