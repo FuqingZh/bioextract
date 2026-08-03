@@ -15,8 +15,8 @@ The first version covers:
 - explicit file-based construction, with no hidden directory naming contract
 - UniProt, NCBI GeneID, and KEGG gene input selection
 - single and grouped selections
-- one wide `mapping.parquet` tidy artifact
-- optional manifest writing through the shared `TidyDataset` contract
+- one wide `mapping` relation in a metadata-v1 DuckDB publication
+- embedded source-role provenance with no sidecar manifest
 
 The first version intentionally does not cover:
 
@@ -77,6 +77,11 @@ grouped = db.select_groups(
     namespace="uniprot",
 )
 df_grouped = grouped.extract_mapping()
+
+result = db.write_duckdb("kegg-mapping.duckdb")
+published = KEGGDatabase.from_duckdb(result.path)
+with published.connect() as connection:
+    row_count = connection.sql("SELECT count(*) FROM mapping").fetchone()[0]
 ```
 
 The accepted `namespace` values are:
@@ -92,7 +97,7 @@ the semantic kind of the input ID values.
 
 ## Output Contract
 
-`extract_mapping()` and `mapping.parquet` expose one wide table:
+`extract_mapping()` exposes one wide public DataFrame:
 
 ```text
 OrganismCode
@@ -146,11 +151,15 @@ InputNamespace
 
 ## Tidy Dataset
 
-`build_tidy()` emits:
+`write_duckdb()` publishes one physical relation:
 
 ```text
-mapping.parquet
+main.mapping
 ```
+
+The DuckDB relation retains the former normalized publication columns in
+`snake_case`; reopening restores the documented `extract_mapping()` column
+names and preserves single/grouped selection and unmatched-ID behavior.
 
 Suggested schema version:
 
@@ -158,9 +167,11 @@ Suggested schema version:
 kegg-mapping-v0.1
 ```
 
-The existing BRITE JSON path keeps its current `pathway.parquet` contract.
-`KEGGDatabase` internally distinguishes snapshot kinds and dispatches
-`build_tidy()` accordingly.
+The mapping profile is identified by `kegg-organism-mapping-files-v1`, scope
+`mapping`, schema version `kegg-mapping-v0.1`, exact table role `canonical`,
+and embedded `bioextract.organism_code`. `from_duckdb()` rejects mismatched
+profiles, schemas, roles, table inventories, and row counts. Every `connect()`
+call creates a fresh caller-owned read-only connection.
 
 ## Implementation Notes
 
@@ -185,6 +196,7 @@ Focused tests cover:
 - `select_groups(..., namespace="uniprot")`
 - unmapped IDs for single and grouped selections
 - missing optional files with null output columns
-- `build_tidy()` and `write_parquet(path)` for the mapping relation
+- `build_tidy()`, `write_duckdb(path)`, and metadata-v1 reopening
+- fresh read-only native connections and atomic `if_exists` behavior
 - invalid `namespace`
 - mapping APIs called on a BRITE snapshot

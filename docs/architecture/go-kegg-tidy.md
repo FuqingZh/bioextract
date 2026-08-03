@@ -7,8 +7,8 @@ Status: current
 ## Goal
 
 `bioextract` owns local resource snapshot access. GO exposes a multi-relation
-ontology and publishes it as DuckDB. A KEGG BRITE or mapping product is an
-independent relation and publishes as Parquet.
+ontology and publishes it as DuckDB. KEGG BRITE and mapping products are
+independent one-relation DuckDB capability profiles.
 
 The implemented MVP covers:
 
@@ -18,7 +18,8 @@ The implemented MVP covers:
 - KEGG BRITE JSON to pathway tidy tables
 - in-memory use through `build_tidy().frames`
 - persisted GO use through `write_duckdb(path)`
-- persisted KEGG use through `write_parquet(path)`
+- persisted KEGG use through `write_duckdb(path)`, `from_duckdb(path)`, and a
+  fresh caller-owned read-only `connect()` connection
 
 The MVP intentionally does not cover:
 
@@ -43,9 +44,12 @@ go_result = go.write_duckdb("out/go.duckdb")
 
 kegg_tidy = KEGGDatabase.from_brite_json("br08901.json").build_tidy()
 df_pathway = kegg_tidy.frames["pathway"]
-kegg_result = KEGGDatabase.from_brite_json("br08901.json").write_parquet(
-    "out/kegg.parquet"
+kegg_result = KEGGDatabase.from_brite_json("br08901.json").write_duckdb(
+    "out/kegg.duckdb"
 )
+published_kegg = KEGGDatabase.from_duckdb(kegg_result.path)
+with published_kegg.connect() as connection:
+    pathway_count = connection.sql("SELECT count(*) FROM pathway").fetchone()[0]
 ```
 
 Legacy directory writers remain only for migration. New callers use the
@@ -87,11 +91,14 @@ term_ancestor
 term_depth
 ```
 
-KEGG BRITE output:
+KEGG BRITE DuckDB tables:
 
 ```text
-kegg.parquet
+pathway
 ```
 
-GO provenance and table counts are stored in `_bioextract`. KEGG provenance is
-embedded in the Parquet footer. Neither output requires a sidecar.
+GO and KEGG provenance and table counts are stored in the metadata-v1
+`_bioextract` relations. A reopened KEGG BRITE publication validates resource
+identity, the `kegg-brite-json-v1` profile, the BRITE resource schema version,
+the `brite` scope, and the exact `pathway` table/role/count before exposing
+read-only SQL. Neither output requires a sidecar.

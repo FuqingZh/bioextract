@@ -101,6 +101,8 @@ class TidyDataset:
     release_version: str | None = None
     release_version_source: str | None = None
     source_schema_version: str | None = None
+    scope: str | None = None
+    extra_metadata: Mapping[str, str] | None = None
 
     def write_parquet(
         self,
@@ -143,6 +145,7 @@ class TidyDataset:
             source_schema_profile=self.source_schema_profile,
             source_schema_version=self.source_schema_version,
             sources=self._source_records,
+            scope=self.scope,
             release_version=self.release_version,
             release_version_source=self.release_version_source,
             if_exists=if_exists,
@@ -156,6 +159,7 @@ class TidyDataset:
         table_names: Mapping[str, str] | None = None,
         if_exists: str = "fail",
         preserve_source_headers: Collection[str] = (),
+        include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
         """Publish all configured relations as one provenance-aware DuckDB.
 
@@ -194,10 +198,12 @@ class TidyDataset:
             resource_schema_version=self.resource_schema_version,
             source_schema_profile=self.source_schema_profile,
             source_schema_version=self.source_schema_version,
-            sources=self._source_records,
+            sources=self._source_records_with_hashes(include_source_hashes),
+            scope=self.scope,
             release_version=self.release_version,
             release_version_source=self.release_version_source,
             if_exists=if_exists,
+            extra_metadata=self.extra_metadata,
         )
 
     @property
@@ -228,6 +234,22 @@ class TidyDataset:
                 )
             )
         return tuple(records)
+
+    def _source_records_with_hashes(
+        self, include_source_hashes: bool
+    ) -> tuple[SourceFileRecord, ...]:
+        records = self._source_records
+        if not include_source_hashes:
+            return records
+        return tuple(
+            SourceFileRecord(
+                logical_name=record.logical_name,
+                path=record.path,
+                media_type=record.media_type,
+                sha256=record.sha256 or calculate_file_sha256(record.path),
+            )
+            for record in records
+        )
 
 
 def calculate_file_sha256(file_path: Path) -> str:

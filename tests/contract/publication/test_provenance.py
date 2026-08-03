@@ -59,6 +59,24 @@ def test_parquet_publication_embeds_provenance_without_sidecar(
     assert metadata[b"bioextract.release_version"] == b"2026-07-29"
 
 
+def test_parquet_publication_retains_dataset_scope(tmp_path: Path) -> None:
+    path = tmp_path / "scoped.parquet"
+    dataset = _dataset(tmp_path)
+    dataset.scope = "mapping"
+    dataset.write_parquet(path)
+
+    metadata = dict(
+        duckdb.connect()
+        .execute(
+            "SELECT key, value FROM parquet_kv_metadata(?) "
+            "WHERE CAST(key AS VARCHAR)='bioextract.scope'",
+            [str(path)],
+        )
+        .fetchall()
+    )
+    assert metadata[b"bioextract.scope"] == b"mapping"
+
+
 def test_duckdb_writes_source_schema_version_only_when_authoritative(
     tmp_path: Path,
 ) -> None:
@@ -82,6 +100,26 @@ def test_duckdb_writes_source_schema_version_only_when_authoritative(
             "SELECT value FROM _bioextract.metadata "
             "WHERE key='bioextract.source_schema_version'"
         ).fetchone() == ("official-schema-2026",)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "bioextract.release_version",
+        "bioextract.release_version_source",
+        "bioextract.scope",
+        "bioextract.source_schema_version",
+    ],
+)
+def test_extra_metadata_cannot_forge_optional_canonical_keys(
+    tmp_path: Path, key: str
+) -> None:
+    dataset = _dataset(tmp_path)
+    dataset.release_version = None
+    dataset.extra_metadata = {key: "forged"}
+
+    with pytest.raises(ValueError, match="canonical publication metadata keys"):
+        dataset.write_duckdb(tmp_path / "forged.duckdb")
 
 
 @pytest.mark.parametrize(

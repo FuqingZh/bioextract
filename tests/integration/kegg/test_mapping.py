@@ -244,15 +244,18 @@ def test_optional_mapping_files_leave_nullable_columns(tmp_path: Path) -> None:
     assert row["GeneDescription"] is None
 
 
-def test_write_parquet_writes_mapping_without_sidecar(tmp_path: Path) -> None:
+def test_write_duckdb_reopens_mapping_without_sidecar(tmp_path: Path) -> None:
     db = create_mapping_db(write_kegg_mapping_fixture(tmp_path))
 
-    path = tmp_path / "kegg.parquet"
-    result = db.write_parquet(path)
+    path = tmp_path / "kegg.duckdb"
+    result = db.write_duckdb(path)
 
     assert result.path == path
     assert not (tmp_path / "manifest.json").exists()
-    assert pl.read_parquet(path).height == 3
+    reopened = KEGGDatabase.from_duckdb(path)
+    assert reopened.extract_mapping().equals(db.extract_mapping())
+    with reopened.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM mapping").fetchone() == (3,)
 
 
 def test_mapping_validates_kind_and_snapshot_kind(tmp_path: Path) -> None:
