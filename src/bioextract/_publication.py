@@ -85,15 +85,6 @@ class SourceFileRecord:
 
 
 @dataclass(frozen=True, slots=True)
-class ParquetWriteResult:
-    """Describe one successfully committed Parquet publication."""
-
-    path: Path
-    resource_name: str
-    resource_schema_version: str
-
-
-@dataclass(frozen=True, slots=True)
 class DuckDBWriteResult:
     """Describe one successfully committed multi-relation DuckDB publication."""
 
@@ -247,62 +238,6 @@ def validate_duckdb_validation_state(
         raise ValueError(
             "Publication validation_status does not match validation_issue_count"
         )
-
-
-def write_parquet_publication(
-    frame: pl.LazyFrame,
-    path: os.PathLike[str] | str,
-    *,
-    resource_name: str,
-    resource_schema_version: str,
-    source_schema_profile: str,
-    source_schema_version: str | None = None,
-    sources: Sequence[SourceFileRecord],
-    scope: str | None = None,
-    release_version: str | None = None,
-    release_version_source: str | None = None,
-    if_exists: str = "fail",
-    normalize_columns: bool = True,
-) -> ParquetWriteResult:
-    """Atomically stream one relation to Parquet with embedded provenance."""
-    destination = _prepare_destination(path, if_exists=if_exists)
-    column_mappings: tuple[tuple[str, str, str, str], ...] = ()
-    if normalize_columns:
-        frame, column_mappings = _normalize_lazy_columns(frame, table_name="data")
-    publication_metadata = _publication_metadata(
-        resource_name=resource_name,
-        resource_schema_version=resource_schema_version,
-        source_schema_profile=source_schema_profile,
-        source_schema_version=source_schema_version,
-        sources=sources,
-        scope=scope,
-        release_version=release_version,
-        release_version_source=release_version_source,
-    )
-    publication_metadata["bioextract.column_mapping"] = json.dumps(
-        [
-            {
-                "source_column": source_column,
-                "output_column": output_column,
-                "reason": reason,
-            }
-            for _, source_column, output_column, reason in column_mappings
-        ],
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    stage = _create_stage_path(destination, suffix=".parquet")
-    try:
-        frame.sink_parquet(stage, metadata=publication_metadata)
-        _validate_parquet_publication(stage, publication_metadata)
-        os.replace(stage, destination)
-    finally:
-        stage.unlink(missing_ok=True)
-    return ParquetWriteResult(
-        path=destination,
-        resource_name=resource_name,
-        resource_schema_version=resource_schema_version,
-    )
 
 
 def write_duckdb_publication(
@@ -613,27 +548,6 @@ def _source_payload(source: SourceFileRecord) -> dict[str, str | int]:
         "media_type": source.media_type,
         **({"sha256": source.sha256} if source.sha256 is not None else {}),
     }
-
-
-def _validate_parquet_publication(
-    path: Path,
-    metadata: Mapping[str, str],
-) -> None:
-    pl.scan_parquet(path).collect_schema()
-    connection = duckdb.connect()
-    try:
-        rows = connection.execute(
-            "SELECT CAST(key AS VARCHAR), CAST(value AS VARCHAR) "
-            "FROM parquet_kv_metadata(?) "
-            "WHERE CAST(key AS VARCHAR) LIKE 'bioextract.%'",
-            [str(path)],
-        ).fetchall()
-    finally:
-        connection.close()
-    observed = dict(rows)
-    missing = sorted(set(metadata) - set(observed))
-    if missing:
-        raise RuntimeError(f"Parquet publication is missing provenance keys: {missing}")
 
 
 def _validate_duckdb_publication(

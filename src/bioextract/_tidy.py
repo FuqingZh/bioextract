@@ -10,11 +10,9 @@ import polars as pl
 
 from bioextract._publication import (
     DuckDBWriteResult,
-    ParquetWriteResult,
     RelationSpec,
     SourceFileRecord,
     write_duckdb_publication,
-    write_parquet_publication,
 )
 
 
@@ -104,54 +102,6 @@ class TidyDataset:
     scope: str | None = None
     extra_metadata: Mapping[str, str] | None = None
     before_duckdb_commit: Callable[[], None] | None = None
-
-    def write_parquet(
-        self,
-        path: os.PathLike[str] | str,
-        *,
-        if_exists: str = "fail",
-        preserve_source_headers: bool = False,
-    ) -> ParquetWriteResult:
-        """Publish a single-relation dataset as one provenance-aware Parquet.
-
-        Examples:
-            >>> from tempfile import TemporaryDirectory
-            >>> dataset = TidyDataset(
-            ...     frames={"term": pl.DataFrame({"id": ["T1"]}).lazy()},
-            ...     source=TidySource(
-            ...         "source", Path("data/source.tsv"), "text/plain"
-            ...     ),
-            ...     resource_schema_version="example-v1",
-            ...     source_schema_profile="example-source-v1",
-            ...     build_id_prefix="example",
-            ...     assets=(TidyAsset("term.parquet", "canonical", "term"),),
-            ... )
-            >>> with TemporaryDirectory() as dir_out:
-            ...     dataset.write_parquet(
-            ...         Path(dir_out) / "example.parquet"
-            ...     ).resource_schema_version
-            'example-v1'
-        """
-        if len(self.assets) != 1:
-            raise ValueError(
-                "write_parquet() requires exactly one published relation; "
-                "use write_duckdb() for a multi-relation dataset"
-            )
-        asset = self.assets[0]
-        return write_parquet_publication(
-            self.frames[asset.frame_name],
-            path,
-            resource_name=self.resource_name or self.build_id_prefix,
-            resource_schema_version=self.resource_schema_version,
-            source_schema_profile=self.source_schema_profile,
-            source_schema_version=self.source_schema_version,
-            sources=self._source_records,
-            scope=self.scope,
-            release_version=self.release_version,
-            release_version_source=self.release_version_source,
-            if_exists=if_exists,
-            normalize_columns=not preserve_source_headers,
-        )
 
     def write_duckdb(
         self,

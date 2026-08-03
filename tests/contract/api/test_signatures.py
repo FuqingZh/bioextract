@@ -43,6 +43,7 @@ def test_legacy_database_type_aliases_are_not_exported(
 
 def test_removed_legacy_writer_apis_are_not_exported() -> None:
     assert not hasattr(TidyDataset, "write")
+    assert not hasattr(TidyDataset, "write_parquet")
     assert not hasattr(StringSelection, "with_score_min")
     assert not hasattr(eggnog.EggNOGDatabase, "from_files")
     assert not hasattr(eggnog.EggNOGDatabase, "write_parquet")

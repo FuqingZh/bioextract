@@ -35,17 +35,9 @@ def _dataset(tmp_path: Path, *, relation_count: int = 1) -> TidyDataset:
     )
 
 
-def test_publication_is_atomic_and_requires_snake_case_tables(
+def test_publication_requires_snake_case_tables(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "example.parquet"
-    _dataset(tmp_path).write_parquet(path)
-    original = path.read_bytes()
-
-    with pytest.raises(FileExistsError):
-        _dataset(tmp_path).write_parquet(path)
-    assert path.read_bytes() == original
-
     dataset = _dataset(tmp_path, relation_count=2)
     with pytest.raises(ValueError, match="snake_case"):
         dataset.write_duckdb(
@@ -54,16 +46,11 @@ def test_publication_is_atomic_and_requires_snake_case_tables(
         )
 
 
-@pytest.mark.parametrize("container", ["parquet", "duckdb"])
 def test_failed_replacement_preserves_existing_publication(
     tmp_path: Path,
-    container: str,
 ) -> None:
-    path = tmp_path / f"example.{container}"
-    if container == "parquet":
-        _dataset(tmp_path).write_parquet(path)
-    else:
-        _dataset(tmp_path).write_duckdb(path)
+    path = tmp_path / "example.duckdb"
+    _dataset(tmp_path).write_duckdb(path)
     original = path.read_bytes()
 
     source = tmp_path / "bad-source.tsv"
@@ -81,10 +68,7 @@ def test_failed_replacement_preserves_existing_publication(
         assets=(TidyAsset("relation.parquet", "canonical", "relation"),),
     )
     with pytest.raises(pl.exceptions.InvalidOperationError):
-        if container == "parquet":
-            dataset.write_parquet(path, if_exists="replace")
-        else:
-            dataset.write_duckdb(path, if_exists="replace")
+        dataset.write_duckdb(path, if_exists="replace")
 
     assert path.read_bytes() == original
 

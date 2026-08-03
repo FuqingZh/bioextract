@@ -14,16 +14,14 @@ The domain contract is primary. Storage is an execution strategy:
 
 - consume an official indexed or inexpensive representation directly when it
   is already fit for use;
-- publish one independent relation as Parquet;
-- publish related relations that are normally queried together as one DuckDB;
+- publish canonical relations that are normally queried together as one DuckDB;
 - keep ordinary filtering, sorting, grouping, and SQL in Polars or DuckDB;
 - add convenience methods only when they encode resource-owned ID resolution,
   relationship traversal, grouping, or unmatched-ID accounting.
 
 Canonical writers always require an explicit `path`. They validate into a
-staging file and atomically publish only after success. Parquet provenance is
-embedded in footer metadata; DuckDB provenance lives in the `_bioextract`
-schema. No sidecar manifest is required.
+staging file and atomically publish only after success. Publication provenance
+lives in the DuckDB `_bioextract` schema. No sidecar manifest is required.
 
 Read the
 [Domain Access Architecture](docs/architecture/20260729-v1.0-domain-access-architecture.md)
@@ -384,8 +382,8 @@ returned or consumed by database methods but are not stable package exports.
 Do not depend on their deep module paths for compatibility.
 
 There are no abbreviated `*Db` aliases, legacy score-filter names, or
-directory writers. Use `with_min_combined_score()`, `write_parquet()`, and
-`write_duckdb()` directly.
+directory writers. Use `with_min_combined_score()` and `write_duckdb()`
+directly.
 
 Table names, view names, and generated columns use singular `snake_case`.
 Official two-dimensional source headers are retained unless a minimal

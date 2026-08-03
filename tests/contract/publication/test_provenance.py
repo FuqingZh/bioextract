@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
@@ -35,46 +34,6 @@ def _dataset(tmp_path: Path, *, relation_count: int = 1) -> TidyDataset:
         resource_name="example",
         release_version="2026-07-29",
     )
-
-
-def test_parquet_publication_embeds_provenance_without_sidecar(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "example.parquet"
-    result = _dataset(tmp_path).write_parquet(path)
-
-    assert result.path == path
-    assert not (tmp_path / "manifest.json").exists()
-    metadata = dict(
-        duckdb.connect()
-        .execute(
-            "SELECT key, value FROM parquet_kv_metadata(?) "
-            "WHERE CAST(key AS VARCHAR) LIKE 'bioextract.%'",
-            [str(path)],
-        )
-        .fetchall()
-    )
-    assert metadata[b"bioextract.resource_name"] == b"example"
-    assert metadata[b"bioextract.resource_schema_version"] == b"example-v1"
-    assert metadata[b"bioextract.release_version"] == b"2026-07-29"
-
-
-def test_parquet_publication_retains_dataset_scope(tmp_path: Path) -> None:
-    path = tmp_path / "scoped.parquet"
-    dataset = _dataset(tmp_path)
-    dataset.scope = "mapping"
-    dataset.write_parquet(path)
-
-    metadata = dict(
-        duckdb.connect()
-        .execute(
-            "SELECT key, value FROM parquet_kv_metadata(?) "
-            "WHERE CAST(key AS VARCHAR)='bioextract.scope'",
-            [str(path)],
-        )
-        .fetchall()
-    )
-    assert metadata[b"bioextract.scope"] == b"mapping"
 
 
 def test_duckdb_writes_source_schema_version_only_when_authoritative(
@@ -140,7 +99,7 @@ def test_publication_rejects_invalid_release_provenance(
     dataset.release_version = release_version
     dataset.release_version_source = release_version_source
     with pytest.raises(ValueError, match=message):
-        dataset.write_parquet(tmp_path / "invalid-release.parquet")
+        dataset.write_duckdb(tmp_path / "invalid-release.duckdb")
 
 
 @pytest.mark.parametrize(
@@ -289,10 +248,9 @@ def test_v1_reader_reports_missing_validation_issue_table(tmp_path: Path) -> Non
             validate_duckdb_metadata_v1(connection, metadata)
 
 
-@pytest.mark.parametrize("container", ["parquet", "duckdb"])
 @pytest.mark.parametrize("logical_name", ["", "   "])
 def test_tidy_source_logical_name_must_be_nonempty_after_normalization(
-    tmp_path: Path, container: str, logical_name: str
+    tmp_path: Path, logical_name: str
 ) -> None:
     dataset = _dataset(tmp_path)
     source = dataset._sources[0]  # pyright: ignore[reportPrivateUsage]
@@ -301,43 +259,27 @@ def test_tidy_source_logical_name_must_be_nonempty_after_normalization(
     )
 
     with pytest.raises(ValueError, match="logical_name must be non-empty"):
-        if container == "parquet":
-            dataset.write_parquet(tmp_path / "invalid.parquet")
-        else:
-            dataset.write_duckdb(tmp_path / "invalid.duckdb")
+        dataset.write_duckdb(tmp_path / "invalid.duckdb")
 
 
-@pytest.mark.parametrize("container", ["parquet", "duckdb"])
 def test_tidy_source_logical_name_is_normalized_before_publication(
-    tmp_path: Path, container: str
+    tmp_path: Path,
 ) -> None:
     dataset = _dataset(tmp_path)
     source = dataset._sources[0]  # pyright: ignore[reportPrivateUsage]
     dataset.source = TidySource(
         " source ", source.path, source.media_type, source.sha256
     )
-    path = tmp_path / f"normalized.{container}"
-    if container == "parquet":
-        dataset.write_parquet(path)
-        with duckdb.connect() as connection:
-            value = connection.execute(
-                "SELECT decode(value) FROM parquet_kv_metadata(?) "
-                "WHERE CAST(key AS VARCHAR)='bioextract.sources'",
-                [str(path)],
-            ).fetchone()
-        assert value is not None
-        assert json.loads(value[0])[0]["logical_name"] == "source"
-    else:
-        dataset.write_duckdb(path)
-        with duckdb.connect(str(path), read_only=True) as connection:
-            assert connection.execute(
-                "SELECT logical_name FROM _bioextract.source_file"
-            ).fetchone() == ("source",)
+    path = tmp_path / "normalized.duckdb"
+    dataset.write_duckdb(path)
+    with duckdb.connect(str(path), read_only=True) as connection:
+        assert connection.execute(
+            "SELECT logical_name FROM _bioextract.source_file"
+        ).fetchone() == ("source",)
 
 
-@pytest.mark.parametrize("container", ["parquet", "duckdb"])
 def test_tidy_source_rejects_normalized_logical_name_collisions(
-    tmp_path: Path, container: str
+    tmp_path: Path,
 ) -> None:
     dataset = _dataset(tmp_path)
     source = dataset._sources[0]  # pyright: ignore[reportPrivateUsage]
@@ -347,10 +289,7 @@ def test_tidy_source_rejects_normalized_logical_name_collisions(
     )
 
     with pytest.raises(ValueError, match="unique after normalization"):
-        if container == "parquet":
-            dataset.write_parquet(tmp_path / "collision.parquet")
-        else:
-            dataset.write_duckdb(tmp_path / "collision.duckdb")
+        dataset.write_duckdb(tmp_path / "collision.duckdb")
 
 
 def test_duckdb_publication_has_internal_provenance_schema(
