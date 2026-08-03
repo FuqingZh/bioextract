@@ -173,7 +173,7 @@ class GODatabase:
             >>> db.select_terms(term_ids=["GO:0005575"]).height  # doctest: +SKIP
             1
         """
-        publication_path = Path(path).resolve()
+        publication_path = Path(path).absolute()
         identity_before = _file_identity(publication_path)
         try:
             _validate_go_publication(publication_path)
@@ -209,7 +209,12 @@ class GODatabase:
         if path is None:
             raise CapabilityError("connect() requires GODatabase.from_duckdb()")
         self._assert_publication_identity()
-        connection = duckdb.connect(str(path), read_only=True)
+        try:
+            connection = duckdb.connect(str(path), read_only=True)
+        except duckdb.Error as error:
+            raise IntegrityError(
+                "GO publication became unavailable; reopen it with from_duckdb()"
+            ) from error
         try:
             self._assert_publication_identity()
         except BaseException:

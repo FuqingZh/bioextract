@@ -151,3 +151,36 @@ def test_from_duckdb_translates_disappearance_after_initial_identity_check(
     monkeypatch.setattr(go_module, "_file_identity", _disappearing_identity)
     with pytest.raises(IntegrityError, match="changed during validation"):
         GODatabase.from_duckdb(publication)
+
+
+def test_reopened_handle_detects_symlink_retargeting(tmp_path: Path) -> None:
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first = _write_publication(first_dir)
+    second = _write_publication(second_dir)
+    current = tmp_path / "current.duckdb"
+    current.symlink_to(first)
+    reopened = GODatabase.from_duckdb(current)
+    current.unlink()
+    current.symlink_to(second)
+
+    with pytest.raises(IntegrityError, match="replaced"):
+        reopened.connect()
+
+
+def test_reopened_handle_translates_connection_open_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publication = _write_publication(tmp_path)
+    reopened = GODatabase.from_duckdb(publication)
+
+    def _failed_connect(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise duckdb.Error("publication disappeared")
+
+    monkeypatch.setattr(go_module.duckdb, "connect", _failed_connect)
+    with pytest.raises(IntegrityError, match="became unavailable"):
+        reopened.connect()
