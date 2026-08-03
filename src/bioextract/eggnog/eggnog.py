@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import warnings
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,8 +20,8 @@ from .constant import (
     EggnogNamespace,
 )
 from .util import (
-    build_mapping_frame,
     extract_unmatched_ids_frame,
+    is_gzip_file,
     read_cog_fun_frame,
     select_mapping_frame,
 )
@@ -44,7 +45,7 @@ class EggNOGDatabase:
     Construction validates paths without expanding the SQLite mapping. The
     optional COG function table enriches `CogClass` and
     `CogName`; those columns remain null when the table is omitted. Materialized
-    mapping and lookup frames are cached on the handle.
+    selected mapping frames are cached on their selection handles.
 
     Examples:
         Read one enriched protein-to-COG annotation:
@@ -53,14 +54,13 @@ class EggNOGDatabase:
         ...     "fixtures/eggnog/eggnog.db",
         ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
         ... )
-        >>> db.extract_mapping().select(
+        >>> db.select_ids(["9606.ENSP1"]).extract_mapping().select(
         ...     "EggnogProteinId", "CogCategory", "CogName"
         ... ).head(1).rows()
         [('9606.ENSP1', 'E', 'Amino acid transport and metabolism')]
     """
 
     snapshot: _EggnogSnapshot
-    _df_mapping: pl.DataFrame | None = field(default=None, init=False, repr=False)
     _df_cog_fun: pl.DataFrame | None = field(default=None, init=False, repr=False)
 
     @classmethod
@@ -78,8 +78,8 @@ class EggNOGDatabase:
                 wrapper.
             cog_functions: Optional COG function table used to populate class
                 and display-name columns.
-            temp_dir: Optional scratch directory for decompressing a wrapped
-                SQLite database and staging full tidy exports.
+            temp_dir: Optional scratch directory for temporarily decompressing
+                a wrapped SQLite database.
 
         Returns:
             A lightweight handle that defers database reads until extraction.
@@ -94,7 +94,7 @@ class EggNOGDatabase:
             ...     "fixtures/eggnog/eggnog.db",
             ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
             ... )
-            >>> db.extract_mapping().select(
+            >>> db.select_ids(["9606.ENSP1"]).extract_mapping().select(
             ...     "CogCategory", "CogName"
             ... ).head(1).rows()
             [('E', 'Amino acid transport and metabolism')]
@@ -103,6 +103,15 @@ class EggNOGDatabase:
             source,
             label="eggNOG SQLite database file",
         )
+        if is_gzip_file(file_eggnog_db):
+            warnings.warn(
+                "Compressed eggNOG SQLite source detected. bioextract must fully "
+                "decompress it to a temporary SQLite file before access, and the "
+                "decompressed file is not persisted. Repeated use may repeat this cost; "
+                "for long-term use, decompress the source once and pass the .db file.",
+                UserWarning,
+                stacklevel=2,
+            )
         file_cog_fun = cog_functions
         if file_cog_fun is not None:
             file_cog_fun = _validate_file(
@@ -120,34 +129,6 @@ class EggNOGDatabase:
                 dir_tmp=dir_tmp_resolved,
             ),
         )
-
-    def extract_mapping(self) -> pl.DataFrame:
-        """Extract the full protein-to-COG mapping table.
-
-        Returns:
-            A cached frame that preserves protein-to-OG and OG-to-COG
-            many-to-many relationships. Missing optional COG metadata remains
-            null.
-
-        Examples:
-            Preserve one row for each protein, OG, and COG-category match:
-
-            >>> db = EggNOGDatabase.from_sqlite(
-            ...     "fixtures/eggnog/eggnog.db",
-            ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
-            ... )
-            >>> db.extract_mapping().select(
-            ...     "EggnogProteinId", "EggnogOgId", "CogCategory"
-            ... ).rows()
-            [('9606.ENSP1', 'OG0001', 'E'), ('9606.ENSP1', 'OG0001', 'G'), ('9606.ENSP1', 'OG0002', 'S')]
-        """
-        if self._df_mapping is None:
-            self._df_mapping = build_mapping_frame(
-                file_eggnog_db=self.snapshot.file_eggnog_db,
-                dir_tmp=self.snapshot.dir_tmp,
-                df_cog_fun=self.read_cog_fun(),
-            )
-        return self._df_mapping
 
     def select_ids(
         self,

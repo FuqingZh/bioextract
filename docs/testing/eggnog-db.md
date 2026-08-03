@@ -10,9 +10,9 @@ The EggNOGDatabase test standard covers:
 
 - lightweight construction
 - COG function lookup parsing
-- full mapping extraction
 - single and grouped eggNOG protein selection
 - unmapped reporting
+- gzip warning and temporary-storage cleanup
 
 It does not cover:
 
@@ -23,12 +23,17 @@ It does not cover:
 
 ## Unit Tests
 
-- `from_sqlite()` accepts SQLite and gzip-wrapped SQLite inputs.
-- `extract_mapping()` expands OGs and COG categories correctly.
-- `select_ids(..., namespace="eggnog_protein")` returns filtered rows.
-- `select_groups(..., namespace="eggnog_protein")` preserves `GroupId`.
+- plain SQLite is queried directly without a warning.
+- `from_sqlite()` detects gzip transport by content and warns exactly once at
+  the caller location.
+- `EggnogSelection.extract_mapping()` expands OGs and COG categories correctly.
+- `select_ids()` returns filtered rows in the fixed `eggnog_protein` namespace.
+- `select_groups()` resolves one globally unique ID set and preserves `GroupId`.
 - unmapped IDs are reported correctly.
-- gzip SQLite snapshots are decompressed under `dir_tmp`.
+- mapping and unmatched extractors reuse one Selection cache.
+- gzip SQLite snapshots use `temp_dir` only as scratch storage, clean up after
+  success and failure, and create no persistent decompressed copy.
+- the database-level eager extractor and publication writers are absent.
 - invalid `namespace` raises targeted `ValueError`.
 
 ## Real-Data Validation

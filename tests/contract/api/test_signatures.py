@@ -46,7 +46,13 @@ def test_removed_legacy_writer_apis_are_not_exported() -> None:
     assert not hasattr(TidyDataset, "write_parquet")
     assert not hasattr(StringSelection, "with_score_min")
     assert not hasattr(eggnog.EggNOGDatabase, "from_files")
+    assert not hasattr(eggnog.EggNOGDatabase, "extract_mapping")
     assert not hasattr(eggnog.EggNOGDatabase, "write_parquet")
+    assert not hasattr(eggnog.EggNOGDatabase, "write_duckdb")
+    assert not hasattr(eggnog.EggNOGDatabase, "write_tidy")
+    assert not hasattr(eggnog.EggNOGDatabase, "from_duckdb")
+    assert not hasattr(eggnog.EggNOGDatabase, "persist")
+    assert not hasattr(eggnog.EggNOGDatabase, "unpack")
     assert not hasattr(kegg.KEGGDatabase, "write_parquet")
     assert not hasattr(interpro.InterProDatabase, "write_parquet")
 
@@ -159,6 +165,8 @@ def test_phase_1_constructor_parameter_kinds_are_explicit() -> None:
         eggnog_parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
         for name in ("cog_functions", "temp_dir")
     )
+    assert "cache_dir" not in eggnog_parameters
+    assert "persist" not in eggnog_parameters
 
     string_parameters = inspect.signature(stringdb.STRINGDatabase.from_files).parameters
     assert all(
