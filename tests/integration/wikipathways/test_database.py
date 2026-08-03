@@ -7,6 +7,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from bioextract.errors import CapabilityError, IntegrityError
 from bioextract.wikipathways import WikiPathwaysDatabase
 
 
@@ -342,6 +343,110 @@ def test_species_filter_keeps_all_file_provenance(tmp_path: Path) -> None:
         "bioextract.release_version": "20260510",
         "bioextract.release_version_source": "official_metadata",
     }
+
+
+def test_duckdb_reopen_matches_source_extraction_selection_and_native_sql(
+    tmp_path: Path,
+) -> None:
+    source = WikiPathwaysDatabase.from_gmt(
+        write_wikipathways_fixture(tmp_path), species="Homo sapiens"
+    )
+    publication = tmp_path / "wikipathways.duckdb"
+    source.write_duckdb(publication)
+    reopened = WikiPathwaysDatabase.from_duckdb(publication)
+
+    assert reopened.extract_pathway().equals(source.extract_pathway())
+    assert reopened.extract_term2gene().equals(source.extract_term2gene())
+    assert reopened.extract_term2name().equals(source.extract_term2name())
+    assert (
+        reopened.select_ids(["2687", "MISSING"])
+        .extract_mapping()
+        .equals(source.select_ids(["2687", "MISSING"]).extract_mapping())
+    )
+    assert (
+        reopened.select_groups({"case": ["2687"], "control": ["435", "MISSING"]})
+        .extract_mapping()
+        .equals(
+            source.select_groups(
+                {"case": ["2687"], "control": ["435", "MISSING"]}
+            ).extract_mapping()
+        )
+    )
+
+    first = reopened.connect()
+    second = reopened.connect()
+    try:
+        assert first is not second
+        assert first.sql("SELECT count(*) FROM pathway").fetchone() == (2,)
+        with pytest.raises(duckdb.Error):
+            first.execute("CREATE TABLE forbidden(value INTEGER)")
+    finally:
+        first.close()
+        second.close()
+
+
+def test_duckdb_reopen_validates_bounded_publication_contract(tmp_path: Path) -> None:
+    source_file = write_wikipathways_fixture(tmp_path)
+
+    def publish(name: str) -> Path:
+        path = tmp_path / name
+        WikiPathwaysDatabase.from_gmt(source_file).write_duckdb(path)
+        return path
+
+    wrong_profile = publish("wrong-profile.duckdb")
+    with duckdb.connect(str(wrong_profile)) as connection:
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value='forged-v1' "
+            "WHERE key='bioextract.source_schema_profile'"
+        )
+    with pytest.raises(IntegrityError, match="source schema profile"):
+        WikiPathwaysDatabase.from_duckdb(wrong_profile)
+
+    inventory_drift = publish("inventory-drift.duckdb")
+    with duckdb.connect(str(inventory_drift)) as connection:
+        connection.execute("CREATE VIEW unrecorded AS SELECT * FROM pathway")
+    with pytest.raises(IntegrityError, match="table/view inventory"):
+        WikiPathwaysDatabase.from_duckdb(inventory_drift)
+
+    schema_drift = publish("schema-drift.duckdb")
+    with duckdb.connect(str(schema_drift)) as connection:
+        connection.execute(
+            "ALTER TABLE pathway ALTER gene_count TYPE VARCHAR USING gene_count::VARCHAR"
+        )
+    with pytest.raises(IntegrityError, match="table schema"):
+        WikiPathwaysDatabase.from_duckdb(schema_drift)
+
+
+def test_reopened_capabilities_and_cached_terminals_recheck_identity(
+    tmp_path: Path,
+) -> None:
+    source_file = write_wikipathways_fixture(tmp_path)
+    publication = tmp_path / "wikipathways.duckdb"
+    source = WikiPathwaysDatabase.from_gmt(source_file)
+    source.write_duckdb(publication)
+    reopened = WikiPathwaysDatabase.from_duckdb(publication)
+    selection = reopened.select_ids(["2687"])
+    selection.extract_mapping()
+
+    with pytest.raises(CapabilityError, match="GMT source handle"):
+        reopened.write_duckdb(tmp_path / "copy.duckdb")
+    with pytest.raises(CapabilityError, match="GMT source handle"):
+        reopened.build_tidy().write_duckdb(tmp_path / "copy.duckdb")
+    with pytest.raises(CapabilityError, match="from_duckdb"):
+        source.connect()
+
+    replacement_dir = tmp_path / "replacement"
+    replacement_dir.mkdir()
+    replacement = replacement_dir / publication.name
+    WikiPathwaysDatabase.from_gmt(source_file).write_duckdb(replacement)
+    replacement.replace(publication)
+
+    with pytest.raises(IntegrityError, match="replaced"):
+        selection.extract_mapping()
+    with pytest.raises(IntegrityError, match="replaced"):
+        reopened.extract_pathway()
+    with pytest.raises(IntegrityError, match="replaced"):
+        reopened.connect()
 
 
 def test_from_gmt_rejects_missing_and_malformed_files(
