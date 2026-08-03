@@ -226,19 +226,19 @@ the optional species row filter.
 
 ## eggNOG
 
-The canonical protein-to-orthologous-group mapping is one Parquet:
+The official SQLite representation is consumed directly during extraction:
 
 ```python
 from bioextract import EggNOGDatabase
 
-EggNOGDatabase.from_sqlite(
+db = EggNOGDatabase.from_sqlite(
     "eggnog.db.gz",
     cog_functions="cog-24.fun.tab",
-).write_parquet("out/eggnog.parquet")
+)
+mapping = db.select_ids(["9606.ENSP00000369497"]).extract_mapping()
 ```
 
-The official SQLite representation is consumed directly during extraction;
-publication is optional and exists for repeated analytical scans.
+Selections use the same source without requiring a published derivative.
 
 ## InterPro and Pfam
 

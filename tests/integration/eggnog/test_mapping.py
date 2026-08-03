@@ -5,8 +5,6 @@ import shutil
 import sqlite3
 from pathlib import Path
 
-import polars as pl
-
 from bioextract.eggnog import EggNOGDatabase
 
 
@@ -165,21 +163,6 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     assert selection.extract_unmatched_ids().to_dicts() == [
         {"GroupId": "down", "InputId": "9606.MISSING"}
     ]
-
-
-def test_write_parquet_writes_mapping_without_sidecar(tmp_path: Path) -> None:
-    files = write_eggnog_fixture(tmp_path)
-    db = EggNOGDatabase.from_sqlite(
-        files["db"],
-        cog_functions=files["cog_fun"],
-    )
-
-    path = tmp_path / "eggnog.parquet"
-    result = db.write_parquet(path)
-
-    assert result.path == path
-    assert not (tmp_path / "manifest.json").exists()
-    assert pl.read_parquet(path).height == 3
 
 
 def test_gzip_sqlite_is_decompressed_to_tmp_dir(tmp_path: Path) -> None:
