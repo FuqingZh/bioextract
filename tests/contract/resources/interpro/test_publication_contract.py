@@ -373,6 +373,18 @@ def test_from_duckdb_rejects_unrecorded_main_schema_view(tmp_path: Path) -> None
         InterProDatabase.from_duckdb(path)
 
 
+def test_from_duckdb_rejects_unrecorded_provenance_schema_view(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute("CREATE VIEW _bioextract.forged AS SELECT * FROM mapping")
+
+    with pytest.raises(IntegrityError, match="provenance table inventory"):
+        InterProDatabase.from_duckdb(path)
+
+
 def test_from_duckdb_rejects_duplicate_metadata_keys(tmp_path: Path) -> None:
     path = tmp_path / "interpro.duckdb"
     _source(tmp_path).write_duckdb(path)

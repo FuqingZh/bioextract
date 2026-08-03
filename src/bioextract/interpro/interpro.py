@@ -813,14 +813,17 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
             if any(row[3] != expected_media_types[str(row[0])] for row in source_rows):
                 raise ValueError("InterPro source media-type inventory is unsupported")
 
-            provenance_tables = {
-                str(row[0])
+            provenance_relations = {
+                (str(row[0]), str(row[1]))
                 for row in connection.execute(
-                    "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema='_bioextract' AND table_type='BASE TABLE'"
+                    "SELECT table_name, table_type FROM information_schema.tables "
+                    "WHERE table_schema='_bioextract'"
                 ).fetchall()
             }
-            if provenance_tables != BIOEXTRACT_RELATIONS:
+            expected_provenance_relations = {
+                (table, "BASE TABLE") for table in BIOEXTRACT_RELATIONS
+            }
+            if provenance_relations != expected_provenance_relations:
                 raise ValueError("InterPro provenance table inventory is unsupported")
             physical_relations = {
                 (str(row[0]), str(row[1]))
