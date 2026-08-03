@@ -764,6 +764,8 @@ def _validate_go_publication(path: Path) -> None:
                 raise ValueError("Unsupported GO source schema profile")
             if metadata.get("bioextract.resource_schema_version") != SCHEMA_VERSION:
                 raise ValueError("Unsupported GO resource schema version")
+            if "bioextract.scope" in metadata:
+                raise ValueError("GO publication scope is unsupported")
 
             source_rows = connection.execute(
                 "SELECT logical_name, display_path, bytes, media_type, sha256 "

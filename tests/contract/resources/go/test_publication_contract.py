@@ -95,6 +95,17 @@ def test_from_duckdb_rejects_inventory_role_and_physical_schema_drift(
         GODatabase.from_duckdb(publication)
 
 
+def test_from_duckdb_rejects_noncanonical_scope(tmp_path: Path) -> None:
+    publication = _write_publication(tmp_path)
+    with duckdb.connect(str(publication)) as connection:
+        connection.execute(
+            "INSERT INTO _bioextract.metadata VALUES ('bioextract.scope', 'selection')"
+        )
+
+    with pytest.raises(IntegrityError, match="scope"):
+        GODatabase.from_duckdb(publication)
+
+
 def test_reopened_handle_rejects_replaced_publication(tmp_path: Path) -> None:
     publication = _write_publication(tmp_path)
     reopened = GODatabase.from_duckdb(publication)
