@@ -4,7 +4,7 @@ import json
 import os
 import re
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
@@ -276,6 +276,7 @@ def write_duckdb_publication(
     column_mappings: Sequence[tuple[str, str, str, str]] = (),
     validation_issues: Sequence[ValidationIssue] = (),
     extra_metadata: Mapping[str, str] | None = None,
+    before_commit: Callable[[], None] | None = None,
 ) -> DuckDBWriteResult:
     """Atomically publish related lazy frames as one provenance-aware DuckDB."""
     if not relations:
@@ -358,6 +359,8 @@ def write_duckdb_publication(
                 relations=relations,
                 row_counts=row_counts,
             )
+        if before_commit is not None:
+            before_commit()
         os.replace(stage, destination)
     finally:
         stage.unlink(missing_ok=True)

@@ -342,6 +342,19 @@ class InterProDatabase:
             ['mapping', 'protein_term', 'term', 'term_xref']
         """
         file_protein2ipr = self._require_mapping_source(action="build a publication")
+        source_paths = (file_protein2ipr,) + (
+            (self.snapshot.file_interpro_xml,)
+            if self.snapshot.file_interpro_xml is not None
+            else ()
+        )
+        source_identities = {path: _file_identity(path) for path in source_paths}
+
+        def validate_source_identities() -> None:
+            if any(
+                _file_identity(path) != identity
+                for path, identity in source_identities.items()
+            ):
+                raise IntegrityError("InterPro source changed during lazy publication")
 
         release_version = (
             read_interpro_release_version(self.snapshot.file_interpro_xml)
@@ -391,6 +404,7 @@ class InterProDatabase:
                     else "mapping-v1"
                 ),
             },
+            before_duckdb_commit=validate_source_identities,
         )
         if self.snapshot.file_interpro_xml is None:
             return dataset
@@ -729,10 +743,11 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
             if metadata.get("bioextract.resource_schema_version") != SCHEMA_VERSION:
                 raise ValueError("Unsupported InterPro resource schema version")
 
+            capability_value = metadata.get("bioextract.capabilities")
+            if not isinstance(capability_value, str):
+                raise ValueError("InterPro publication capabilities must be text")
             capabilities = frozenset(
-                value.strip()
-                for value in metadata.get("bioextract.capabilities", "").split(",")
-                if value.strip()
+                value.strip() for value in capability_value.split(",") if value.strip()
             )
             profile_value = metadata.get("bioextract.source_schema_profile")
             if not isinstance(profile_value, str):
@@ -832,6 +847,14 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
                     "WHERE table_schema='main'"
                 ).fetchall()
             }
+            unexpected_schema_relations = connection.execute(
+                "SELECT table_schema, table_name FROM information_schema.tables "
+                "WHERE table_schema NOT IN ('main', '_bioextract')"
+            ).fetchall()
+            if unexpected_schema_relations:
+                raise ValueError(
+                    "InterPro publication has relations in an unsupported schema"
+                )
             rows = connection.execute(
                 "SELECT table_name, table_role, row_count FROM _bioextract.table_info"
             ).fetchall()

@@ -44,6 +44,7 @@ It does not cover:
 - reopened selections preserve normalization, unique lookup, grouped fan-out,
   and unmatched behavior.
 - `if_exists="fail"` and `"replace"` retain atomic publication behavior.
+- retained lazy datasets reject changed source identities before atomic commit.
 - invalid `namespace` raises targeted `ValueError`.
 - duplicate positional Pfam matches collapse to one protein-term row.
 - non-PFAM signatures are excluded.

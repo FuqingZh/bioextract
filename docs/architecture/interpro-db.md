@@ -135,6 +135,9 @@ as the profile-bound `bioextract.interpro_content_validation` result; reopen
 checks that bounded result and does not rescan billion-row biological tables.
 The reopened handle is pinned to the validated file identity; atomic path
 replacement requires constructing a new handle before further SQL access.
+Lazy source plans are likewise pinned to the validated raw-file identities;
+the writer rechecks them immediately before its atomic commit and preserves an
+existing destination if a source changed.
 
 ## Pfam Compact Contract
 

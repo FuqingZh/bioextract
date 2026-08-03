@@ -385,6 +385,37 @@ def test_from_duckdb_rejects_unrecorded_provenance_schema_view(
         InterProDatabase.from_duckdb(path)
 
 
+def test_from_duckdb_rejects_relations_in_additional_user_schema(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "CREATE SCHEMA forged; CREATE VIEW forged.mapping AS SELECT * FROM mapping"
+        )
+
+    with pytest.raises(IntegrityError, match="unsupported schema"):
+        InterProDatabase.from_duckdb(path)
+
+
+def test_from_duckdb_normalizes_null_capability_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "interpro.duckdb"
+    _source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "CREATE TABLE metadata_copy AS SELECT * FROM _bioextract.metadata; "
+            "DROP TABLE _bioextract.metadata; "
+            "CREATE TABLE _bioextract.metadata AS SELECT * FROM metadata_copy; "
+            "UPDATE _bioextract.metadata SET value=NULL "
+            "WHERE key='bioextract.capabilities'; "
+            "DROP TABLE metadata_copy"
+        )
+
+    with pytest.raises(IntegrityError, match="capabilities must be text"):
+        InterProDatabase.from_duckdb(path)
+
+
 def test_from_duckdb_rejects_duplicate_metadata_keys(tmp_path: Path) -> None:
     path = tmp_path / "interpro.duckdb"
     _source(tmp_path).write_duckdb(path)
@@ -492,3 +523,22 @@ def test_reopened_handle_rejects_atomically_replaced_publication(
 
     with pytest.raises(IntegrityError, match="was replaced"):
         reopened.connect()
+
+
+def test_retained_lazy_dataset_rejects_changed_source_before_commit(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    path = tmp_path / "interpro.duckdb"
+    source.write_duckdb(path)
+    before = path.read_bytes()
+    dataset = source.build_tidy()
+
+    mapping_path = source.snapshot.file_protein2ipr
+    assert mapping_path is not None
+    with gzip.open(mapping_path, "at", encoding="utf-8") as handle:
+        handle.write("P12345\tIPR000001\tKringle\tPF00051\t10\t80\n")
+
+    with pytest.raises(IntegrityError, match="source changed"):
+        dataset.write_duckdb(path, if_exists="replace")
+    assert path.read_bytes() == before
