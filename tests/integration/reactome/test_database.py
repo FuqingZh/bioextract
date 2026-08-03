@@ -316,10 +316,20 @@ def test_duckdb_reopen_rejects_wrong_identity_inventory_and_replacement(
     replacement = tmp_path / "replacement.duckdb"
     ReactomeDatabase.from_files(uniprot_mapping=file_mapping).write_duckdb(current)
     reopened = ReactomeDatabase.from_duckdb(current)
+    cached_selection = reopened.select_ids(["P04637"])
+    assert cached_selection.extract_mapping().height == 2
+    with pytest.raises(CapabilityError, match="source-file handle"):
+        reopened.build_tidy().write_duckdb(tmp_path / "invalid.duckdb")
+    with pytest.raises(CapabilityError, match="pathway metadata"):
+        reopened.extract_term2name()
     ReactomeDatabase.from_files(uniprot_mapping=file_mapping).write_duckdb(replacement)
     os.replace(replacement, current)
     with pytest.raises(IntegrityError, match="was replaced"):
         reopened.connect()
+    with pytest.raises(IntegrityError, match="was replaced"):
+        cached_selection.extract_mapping()
+    with pytest.raises(IntegrityError, match="was replaced"):
+        reopened.build_tidy()
 
 
 def test_source_handle_rejects_native_connection(tmp_path: Path) -> None:

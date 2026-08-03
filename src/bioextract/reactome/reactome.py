@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -50,6 +50,20 @@ class _ReactomeSnapshot:
     file_uniprot2reactome: Path | None = None
     file_pathways: Path | None = None
     file_relations: Path | None = None
+
+
+class _ReopenedReactomeTidyDataset(TidyDataset):
+    def write_duckdb(
+        self,
+        path: os.PathLike[str] | str,
+        *,
+        table_names: Mapping[str, str] | None = None,
+        if_exists: str = "fail",
+        preserve_source_headers: Collection[str] = (),
+        include_source_hashes: bool = False,
+    ) -> DuckDBWriteResult:
+        del path, table_names, if_exists, preserve_source_headers, include_source_hashes
+        raise CapabilityError("write_duckdb() requires a Reactome source-file handle")
 
 
 @dataclass(slots=True)
@@ -310,6 +324,7 @@ class ReactomeDatabase:
             >>> selection.extract_unmatched_ids().to_dicts()
             [{'InputId': 'MISSING'}]
         """
+        self._assert_publication_current()
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
         return ReactomeSelection(
             dataset=self,
@@ -352,6 +367,7 @@ class ReactomeDatabase:
             >>> selection.extract_unmatched_ids().to_dicts()
             [{'GroupId': 'control', 'InputId': 'MISSING'}]
         """
+        self._assert_publication_current()
         grp_in_frames = create_group_input_frames(
             ids_by_group,
             schema_groups=SCHEMA_GROUPS,
@@ -382,6 +398,7 @@ class ReactomeDatabase:
             >>> db.extract_term2gene().head(2).to_dicts()
             [{'ReactomePathwayId': 'R-HSA-6798695', 'UniProtId': 'P04637'}, {'ReactomePathwayId': 'R-HSA-6798695', 'UniProtId': 'Q9Y243'}]
         """
+        self._assert_publication_current()
         if self._df_term2gene is None:
             self._df_term2gene = extract_term2gene_frame(self._mapping_frame())
         return self._df_term2gene
@@ -409,6 +426,7 @@ class ReactomeDatabase:
             ... )
             [{'ReactomePathwayId': 'R-HSA-1640170', 'PathwayName': 'Cell Cycle'}]
         """
+        self._assert_publication_current()
         if self._df_term2name is None:
             self._df_term2name = extract_term2name_frame(self._pathway_frame())
         return self._df_term2name
@@ -433,8 +451,12 @@ class ReactomeDatabase:
             >>> db.extract_pathway_relations().head(1).to_dicts()
             [{'ParentReactomePathwayId': 'R-HSA-1640170', 'ChildReactomePathwayId': 'R-HSA-6798695'}]
         """
+        self._assert_publication_current()
         if not self._has_relation():
-            raise ValueError("Cannot extract Reactome relations without relations file")
+            self._raise_missing_capability(
+                "Cannot extract Reactome relations without relations file",
+                "Reactome publication does not contain pathway relations",
+            )
         if self._df_relations is None:
             if not self._has_pathway():
                 if self.species is not None:
@@ -475,6 +497,7 @@ class ReactomeDatabase:
             >>> sorted(db.build_tidy().frames)
             ['mapping', 'pathway', 'relation', 'term2gene', 'term2name']
         """
+        self._assert_publication_current()
         frames: dict[str, pl.DataFrame] = {}
         assets: list[TidyAsset] = []
         for path, kind, frame_name in ASSET_SPECS:
@@ -491,7 +514,12 @@ class ReactomeDatabase:
             frames[frame_name] = self._build_tidy_frame(frame_name)
             assets.append(TidyAsset(path=path, kind=kind, frame_name=frame_name))
 
-        return TidyDataset(
+        dataset_type = (
+            _ReopenedReactomeTidyDataset
+            if self._publication_path is not None
+            else TidyDataset
+        )
+        return dataset_type(
             frames={frame_name: frame.lazy() for frame_name, frame in frames.items()},
             source=self._tidy_sources(),
             resource_schema_version=SCHEMA_VERSION,
@@ -563,8 +591,9 @@ class ReactomeDatabase:
             accidental API.
         """
         if not self._has_mapping():
-            raise ValueError(
-                "Cannot extract Reactome mapping without UniProt2Reactome file"
+            self._raise_missing_capability(
+                "Cannot extract Reactome mapping without UniProt2Reactome file",
+                "Reactome publication does not contain protein-pathway mappings",
             )
         if self._df_mapping is None:
             self._df_mapping = filter_species_frame(
@@ -575,7 +604,10 @@ class ReactomeDatabase:
 
     def _pathway_frame(self) -> pl.DataFrame:
         if not self._has_pathway():
-            raise ValueError("Cannot extract Reactome pathways without pathways file")
+            self._raise_missing_capability(
+                "Cannot extract Reactome pathways without pathways file",
+                "Reactome publication does not contain pathway metadata",
+            )
         if self._df_pathways is None:
             self._df_pathways = filter_species_frame(
                 self._pathway_raw_frame(),
@@ -585,8 +617,9 @@ class ReactomeDatabase:
 
     def _mapping_raw_frame(self) -> pl.DataFrame:
         if not self._has_mapping():
-            raise ValueError(
-                "Cannot read Reactome mapping without UniProt2Reactome file"
+            self._raise_missing_capability(
+                "Cannot read Reactome mapping without UniProt2Reactome file",
+                "Reactome publication does not contain protein-pathway mappings",
             )
         if self._df_mapping_raw is None:
             if self._publication_path is None:
@@ -610,7 +643,10 @@ class ReactomeDatabase:
 
     def _pathway_raw_frame(self) -> pl.DataFrame:
         if not self._has_pathway():
-            raise ValueError("Cannot read Reactome pathways without pathways file")
+            self._raise_missing_capability(
+                "Cannot read Reactome pathways without pathways file",
+                "Reactome publication does not contain pathway metadata",
+            )
         if self._df_pathways_raw is None:
             if self._publication_path is None:
                 assert self.snapshot.file_pathways is not None
@@ -628,7 +664,10 @@ class ReactomeDatabase:
 
     def _relation_raw_frame(self) -> pl.DataFrame:
         if not self._has_relation():
-            raise ValueError("Cannot read Reactome relations without relations file")
+            self._raise_missing_capability(
+                "Cannot read Reactome relations without relations file",
+                "Reactome publication does not contain pathway relations",
+            )
         if self._df_relations_raw is None:
             if self._publication_path is None:
                 assert self.snapshot.file_relations is not None
@@ -673,6 +712,19 @@ class ReactomeDatabase:
             raise IntegrityError(
                 "Reactome publication was replaced; reopen it with from_duckdb()"
             )
+
+    def _assert_publication_current(self) -> None:
+        if self._publication_path is not None:
+            self._assert_publication_identity()
+
+    def _raise_missing_capability(
+        self,
+        source_message: str,
+        publication_message: str,
+    ) -> None:
+        if self._publication_path is not None:
+            raise CapabilityError(publication_message)
+        raise ValueError(source_message)
 
     def _read_publication_table(
         self,
@@ -789,6 +841,7 @@ class ReactomeSelection:
             >>> selection.extract_mapping()["ReactomePathwayId"].to_list()
             ['R-HSA-6798695', 'R-HSA-69563']
         """
+        self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
         if self._df_mapping is None:
             self._df_mapping = extract_mapping_frame(
                 self.dataset._mapping_frame(),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
@@ -813,6 +866,7 @@ class ReactomeSelection:
             >>> selection.extract_unmatched_ids().to_dicts()
             [{'InputId': 'MISSING'}]
         """
+        self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
         if self._df_unmapped is None:
             self._df_unmapped = extract_unmatched_ids_frame(
                 self._df_input_ids,
