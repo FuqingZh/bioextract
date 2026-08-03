@@ -33,9 +33,10 @@ It does not cover:
 
 ## Real-Data Validation
 
-Real-snapshot validation must verify the exact schema and a stable row count
-for the selected snapshot. Keep this outside the default pytest suite because
-the compressed database and decompressed workspace are large.
+Real-snapshot validation must verify the exact schema, a stable row count for
+the selected snapshot, and cleanup of the temporary SQLite workspace. Keep
+this outside the default pytest suite because the compressed database and
+decompressed workspace are large.
 
 The observed eggNOG 5.0.2 sizes and resource usage are recorded in the
 [eggNOG 5.0.2 benchmark](../benchmarks/20260608-v1.0-eggnog-5.0.2-benchmark.md).

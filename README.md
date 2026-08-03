@@ -235,7 +235,7 @@ db = EggNOGDatabase.from_sqlite(
     "eggnog.db.gz",
     cog_functions="cog-24.fun.tab",
 )
-mapping = db.extract_mapping()
+mapping = db.select_ids(["9606.ENSP00000369497"]).extract_mapping()
 ```
 
 Selections use the same source without requiring a published derivative.
