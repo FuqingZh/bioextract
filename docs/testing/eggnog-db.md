@@ -13,7 +13,6 @@ The EggNOGDatabase test standard covers:
 - full mapping extraction
 - single and grouped eggNOG protein selection
 - unmapped reporting
-- tidy writing through the temporary-TSV path
 
 It does not cover:
 
@@ -29,16 +28,14 @@ It does not cover:
 - `select_ids(..., namespace="eggnog_protein")` returns filtered rows.
 - `select_groups(..., namespace="eggnog_protein")` preserves `GroupId`.
 - unmapped IDs are reported correctly.
-- `write_parquet(path)` writes canonical mapping output with provenance.
 - gzip SQLite snapshots are decompressed under `dir_tmp`.
 - invalid `namespace` raises targeted `ValueError`.
 
 ## Real-Data Validation
 
-Real-snapshot publication must verify the exact schema, a stable row count for
-the selected snapshot, readable Parquet output, and cleanup of the temporary
-SQLite/TSV workspace. Keep this outside the default pytest suite because the
-compressed database and decompressed workspace are large.
+Real-snapshot validation must verify the exact schema and a stable row count
+for the selected snapshot. Keep this outside the default pytest suite because
+the compressed database and decompressed workspace are large.
 
 The observed eggNOG 5.0.2 sizes and resource usage are recorded in the
 [eggNOG 5.0.2 benchmark](../benchmarks/20260608-v1.0-eggnog-5.0.2-benchmark.md).

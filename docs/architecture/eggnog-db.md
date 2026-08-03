@@ -16,7 +16,6 @@ The current version covers:
 - optional `cog-24.fun.tab` lookup for COG class and display name
 - full mapping extraction
 - single and grouped selection by eggNOG protein ID
-- flat tidy writing to `mapping.parquet`
 
 It intentionally does not cover:
 
@@ -87,23 +86,6 @@ Many-to-many expansion is preserved:
 - one OG may emit multiple `CogCategory` rows
 
 This keeps the output auditable and easy to project into downstream term tables.
-
-## Publication
-
-`write_parquet(path)` emits one independently usable mapping relation.
-Identity and source provenance are embedded in its footer.
-
-The writer does not materialize the full table in Python memory before parquet
-write. The implemented path is:
-
-1. open local eggNOG SQLite, decompressing `.gz` to `dir_tmp` when needed
-2. stream expanded rows into a temporary TSV
-3. scan the TSV lazily with Polars
-4. `sink_parquet()` into a staging file and atomically publish it
-
-`build_tidy()` is intentionally not offered as a stable full-resource lazy
-dataset handle for the SQLite source, because its lazy plan depends on a
-materialized intermediate TSV with temporary lifetime.
 
 ## Selection Contract
 

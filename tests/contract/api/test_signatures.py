@@ -45,6 +45,7 @@ def test_removed_legacy_writer_apis_are_not_exported() -> None:
     assert not hasattr(TidyDataset, "write")
     assert not hasattr(StringSelection, "with_score_min")
     assert not hasattr(eggnog.EggNOGDatabase, "from_files")
+    assert not hasattr(eggnog.EggNOGDatabase, "write_parquet")
     assert not hasattr(kegg.KEGGDatabase, "write_parquet")
     assert not hasattr(interpro.InterProDatabase, "write_parquet")
 

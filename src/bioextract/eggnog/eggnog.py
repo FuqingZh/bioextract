@@ -1,38 +1,28 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import polars as pl
 
-from bioextract._publication import ParquetWriteResult
 from bioextract._shared import (
     create_group_input_frames,
     create_input_id_frame,
 )
-from bioextract._tidy import TidyAsset, TidyDataset, TidySource
 
 from .constant import (
-    ASSET_SPECS,
-    MEDIA_TYPE_SQLITE,
-    MEDIA_TYPE_SQLITE_GZIP,
-    MEDIA_TYPE_TSV,
     SCHEMA_GROUP_INPUT_IDS,
     SCHEMA_GROUPS,
     SCHEMA_UNMAPPED,
-    SCHEMA_VERSION,
     EggnogNamespace,
 )
 from .util import (
     build_mapping_frame,
     extract_unmatched_ids_frame,
     read_cog_fun_frame,
-    scan_mapping_tsv,
     select_mapping_frame,
-    write_mapping_tsv,
 )
 
 __all__ = [
@@ -234,49 +224,6 @@ class EggNOGDatabase:
             _df_group_membership=grp_in_frames.df_group_membership,
         )
 
-    def write_parquet(
-        self,
-        path: os.PathLike[str] | str,
-        *,
-        if_exists: str = "fail",
-    ) -> ParquetWriteResult:
-        """Stream the complete eggNOG mapping into one atomic Parquet file.
-
-        Examples:
-            >>> from tempfile import TemporaryDirectory
-            >>> db = EggNOGDatabase.from_sqlite(
-            ...     "fixtures/eggnog/eggnog.db"
-            ... )
-            >>> with TemporaryDirectory() as dir_out:
-            ...     result = db.write_parquet(Path(dir_out) / "eggnog.parquet")
-            ...     result.resource_name.startswith("eggnog-")
-            True
-        """
-        with tempfile.TemporaryDirectory(
-            prefix="bioextract-eggnog-",
-            dir=None if self.snapshot.dir_tmp is None else self.snapshot.dir_tmp,
-        ) as dir_tmp:
-            file_mapping_tsv = Path(dir_tmp) / "mapping.tsv"
-            write_mapping_tsv(
-                file_eggnog_db=self.snapshot.file_eggnog_db,
-                dir_tmp=self.snapshot.dir_tmp,
-                df_cog_fun=self.read_cog_fun(),
-                path=file_mapping_tsv,
-            )
-            dataset = TidyDataset(
-                frames={"mapping": scan_mapping_tsv(file_mapping_tsv)},
-                source=self._tidy_sources(),
-                resource_schema_version=SCHEMA_VERSION,
-                source_schema_profile="eggnog-sqlite-v1",
-                build_id_prefix=f"eggnog-mapping-{self.snapshot.file_eggnog_db.stem}",
-                assets=tuple(
-                    TidyAsset(path=path, kind=kind, frame_name=frame_name)
-                    for path, kind, frame_name in ASSET_SPECS
-                ),
-                resource_name="eggnog",
-            )
-            return dataset.write_parquet(path, if_exists=if_exists)
-
     def read_cog_fun(self) -> pl.DataFrame:
         """Read and cache the optional COG function lookup.
 
@@ -299,29 +246,6 @@ class EggNOGDatabase:
         if self._df_cog_fun is None:
             self._df_cog_fun = read_cog_fun_frame(self.snapshot.file_cog_fun)
         return self._df_cog_fun
-
-    def _tidy_sources(self) -> tuple[TidySource, ...]:
-        media_type_db = (
-            MEDIA_TYPE_SQLITE_GZIP
-            if self.snapshot.file_eggnog_db.suffix == ".gz"
-            else MEDIA_TYPE_SQLITE
-        )
-        sources = [
-            TidySource(
-                logical_name="eggnog_database",
-                path=self.snapshot.file_eggnog_db,
-                media_type=media_type_db,
-            )
-        ]
-        if self.snapshot.file_cog_fun is not None:
-            sources.append(
-                TidySource(
-                    logical_name="cog_functions",
-                    path=self.snapshot.file_cog_fun,
-                    media_type=MEDIA_TYPE_TSV,
-                )
-            )
-        return tuple(sources)
 
 
 @dataclass(slots=True)
