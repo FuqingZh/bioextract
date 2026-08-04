@@ -130,24 +130,28 @@ def test_select_ids_queries_subset_and_reports_unmapped(tmp_path: Path) -> None:
     )
 
     df_mapping = selection.extract_mapping()
-    assert df_mapping.select("InputId", "InputNamespace", "CogCategory").to_dicts() == [
+    assert df_mapping.select(
+        "input_id", "input_namespace", "CogCategory"
+    ).to_dicts() == [
         {
-            "InputId": "9606.ENSP1",
-            "InputNamespace": "eggnog_protein",
+            "input_id": "9606.ENSP1",
+            "input_namespace": "eggnog_protein",
             "CogCategory": "E",
         },
         {
-            "InputId": "9606.ENSP1",
-            "InputNamespace": "eggnog_protein",
+            "input_id": "9606.ENSP1",
+            "input_namespace": "eggnog_protein",
             "CogCategory": "G",
         },
         {
-            "InputId": "9606.ENSP1",
-            "InputNamespace": "eggnog_protein",
+            "input_id": "9606.ENSP1",
+            "input_namespace": "eggnog_protein",
             "CogCategory": "S",
         },
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [{"InputId": "9606.MISSING"}]
+    assert selection.extract_unmatched_ids().to_dicts() == [
+        {"input_id": "9606.MISSING"}
+    ]
 
 
 def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
@@ -167,20 +171,20 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     df_mapping = selection.extract_mapping()
     assert selection.extract_mapping() is df_mapping
     assert df_mapping.columns[:3] == [
-        "GroupId",
-        "InputId",
-        "InputNamespace",
+        "group_id",
+        "input_id",
+        "input_namespace",
     ]
-    assert df_mapping.select("GroupId", "CogCategory").to_dicts() == [
-        {"GroupId": "down", "CogCategory": "E"},
-        {"GroupId": "down", "CogCategory": "G"},
-        {"GroupId": "down", "CogCategory": "S"},
-        {"GroupId": "up", "CogCategory": "E"},
-        {"GroupId": "up", "CogCategory": "G"},
-        {"GroupId": "up", "CogCategory": "S"},
+    assert df_mapping.select("group_id", "CogCategory").to_dicts() == [
+        {"group_id": "down", "CogCategory": "E"},
+        {"group_id": "down", "CogCategory": "G"},
+        {"group_id": "down", "CogCategory": "S"},
+        {"group_id": "up", "CogCategory": "E"},
+        {"group_id": "up", "CogCategory": "G"},
+        {"group_id": "up", "CogCategory": "S"},
     ]
     assert selection.extract_unmatched_ids().to_dicts() == [
-        {"GroupId": "down", "InputId": "9606.MISSING"}
+        {"group_id": "down", "input_id": "9606.MISSING"}
     ]
 
 

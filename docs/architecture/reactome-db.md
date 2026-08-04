@@ -159,7 +159,7 @@ object, following the existing STRINGdb and OmniPath pattern.
 `extract_mapping()` returns:
 
 ```text
-InputId
+input_id
 UniProtId
 ReactomePathwayId
 PathwayName
@@ -171,8 +171,8 @@ ReactomeUrl
 For grouped selections it prepends:
 
 ```text
-GroupId
-InputId
+group_id
+input_id
 UniProtId
 ReactomePathwayId
 PathwayName
@@ -184,14 +184,14 @@ ReactomeUrl
 `extract_unmatched_ids()` returns:
 
 ```text
-InputId
+input_id
 ```
 
 For grouped selections it returns:
 
 ```text
-GroupId
-InputId
+group_id
+input_id
 ```
 
 `extract_term2gene()` returns:

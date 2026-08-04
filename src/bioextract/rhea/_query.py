@@ -50,15 +50,15 @@ _CHEBI_PATTERN = re.compile(r"^(?:CHEBI:)?([0-9]+)$", re.IGNORECASE)
 _GO_PATTERN = re.compile(r"^GO:([0-9]{7})$", re.IGNORECASE)
 
 _SCHEMA_MATCH: SchemaDict = {
-    "GroupId": pl.String,
-    "InputId": pl.String,
-    "InputNamespace": pl.String,
+    "group_id": pl.String,
+    "input_id": pl.String,
+    "input_namespace": pl.String,
     "RheaId": pl.Int64,
     "MasterId": pl.Int64,
     "Direction": pl.String,
 }
 _SCHEMA_UNIQUE_MATCH: SchemaDict = {
-    name: dtype for name, dtype in _SCHEMA_MATCH.items() if name != "GroupId"
+    name: dtype for name, dtype in _SCHEMA_MATCH.items() if name != "group_id"
 }
 _SCHEMA_REACTION: SchemaDict = {
     **_SCHEMA_MATCH,
@@ -109,12 +109,12 @@ _SCHEMA_RELATIONSHIP: SchemaDict = {
     "RelationType": pl.String,
 }
 _SCHEMA_UNMATCHED: SchemaDict = {
-    "GroupId": pl.String,
-    "InputId": pl.String,
-    "InputNamespace": pl.String,
+    "group_id": pl.String,
+    "input_id": pl.String,
+    "input_namespace": pl.String,
 }
 _SCHEMA_UNIQUE_UNMATCHED: SchemaDict = {
-    name: dtype for name, dtype in _SCHEMA_UNMATCHED.items() if name != "GroupId"
+    name: dtype for name, dtype in _SCHEMA_UNMATCHED.items() if name != "group_id"
 }
 
 
@@ -199,9 +199,9 @@ class RheaReactionSelection:
         )
         query = f"""
             SELECT
-                selected.group_id AS "GroupId",
-                selected.input_id AS "InputId",
-                selected.input_namespace AS "InputNamespace",
+                selected.group_id AS "group_id",
+                selected.input_id AS "input_id",
+                selected.input_namespace AS "input_namespace",
                 reaction.rhea_id AS "RheaId",
                 reaction.master_id AS "MasterId",
                 reaction.direction AS "Direction",
@@ -217,7 +217,7 @@ class RheaReactionSelection:
             FROM _selected_reaction AS selected
             JOIN reaction USING (rhea_id)
             {smiles_join}
-            ORDER BY "GroupId", "InputId", "RheaId"
+            ORDER BY "group_id", "input_id", "RheaId"
         """
         return self._query_selected(query, schema=_SCHEMA_REACTION)
 
@@ -245,9 +245,9 @@ class RheaReactionSelection:
             )
         query = """
             SELECT
-                selected.group_id AS "GroupId",
-                selected.input_id AS "InputId",
-                selected.input_namespace AS "InputNamespace",
+                selected.group_id AS "group_id",
+                selected.input_id AS "input_id",
+                selected.input_namespace AS "input_namespace",
                 participant.rhea_id AS "RheaId",
                 participant.master_id AS "MasterId",
                 participant.direction AS "Direction",
@@ -272,7 +272,7 @@ class RheaReactionSelection:
             JOIN reaction_participant_direction AS participant USING (rhea_id)
             LEFT JOIN compound USING (compound_id)
             ORDER BY
-                "GroupId", "InputId", "RheaId", "Side", "ParticipantId"
+                "group_id", "input_id", "RheaId", "Side", "ParticipantId"
         """
         return self._query_selected(query, schema=_SCHEMA_PARTICIPANT)
 
@@ -332,9 +332,9 @@ class RheaReactionSelection:
             )
         query = f"""
             SELECT
-                group_id AS "GroupId",
-                input_id AS "InputId",
-                input_namespace AS "InputNamespace",
+                group_id AS "group_id",
+                input_id AS "input_id",
+                input_namespace AS "input_namespace",
                 rhea_id AS "RheaId",
                 master_id AS "MasterId",
                 direction AS "Direction",
@@ -343,7 +343,7 @@ class RheaReactionSelection:
                 uniprot_section AS "UniProtSection"
             FROM ({" UNION ALL ".join(branches)})
             ORDER BY
-                "GroupId", "InputId", "RheaId",
+                "group_id", "input_id", "RheaId",
                 "ReferenceDatabase", "ReferenceId"
         """
         return self._query_selected(query, schema=_SCHEMA_CROSS_REFERENCE)
@@ -367,16 +367,16 @@ class RheaReactionSelection:
         )
         query = """
             SELECT
-                selected.group_id AS "GroupId",
-                selected.input_id AS "InputId",
-                selected.input_namespace AS "InputNamespace",
+                selected.group_id AS "group_id",
+                selected.input_id AS "input_id",
+                selected.input_namespace AS "input_namespace",
                 selected.rhea_id AS "RheaId",
                 selected.master_id AS "MasterId",
                 selected.direction AS "Direction",
                 publication.pubmed_id AS "PubMedId"
             FROM _selected_reaction AS selected
             JOIN reaction_publication AS publication USING (rhea_id)
-            ORDER BY "GroupId", "InputId", "RheaId", "PubMedId"
+            ORDER BY "group_id", "input_id", "RheaId", "PubMedId"
         """
         return self._query_selected(query, schema=_SCHEMA_PUBLICATION)
 
@@ -399,9 +399,9 @@ class RheaReactionSelection:
         )
         query = """
             SELECT DISTINCT
-                selected.group_id AS "GroupId",
-                selected.input_id AS "InputId",
-                selected.input_namespace AS "InputNamespace",
+                selected.group_id AS "group_id",
+                selected.input_id AS "input_id",
+                selected.input_namespace AS "input_namespace",
                 selected.rhea_id AS "RheaId",
                 selected.master_id AS "MasterId",
                 selected.direction AS "Direction",
@@ -413,7 +413,7 @@ class RheaReactionSelection:
               ON relation.from_reaction_id = selected.master_id
               OR relation.to_reaction_id = selected.master_id
             ORDER BY
-                "GroupId", "InputId", "RheaId",
+                "group_id", "input_id", "RheaId",
                 "FromReactionId", "ToReactionId", "RelationType"
         """
         return self._query_selected(query, schema=_SCHEMA_RELATIONSHIP)
@@ -425,9 +425,9 @@ class RheaReactionSelection:
             Audit identifiers that did not resolve:
 
             >>> selection.extract_unmatched_ids().columns  # doctest: +SKIP
-            ['InputId', 'InputNamespace']
+            ['input_id', 'input_namespace']
         """
-        matched_input_ids = set(self.extract_matches()["InputId"].to_list())
+        matched_input_ids = set(self.extract_matches()["input_id"].to_list())
         rows = [
             (row.input_id, self.namespace)
             for row in self._input_rows
@@ -486,15 +486,15 @@ class RheaReactionSelection:
             """
         query = f"""
             SELECT DISTINCT
-                input.input_id AS "InputId",
-                '{self.namespace}' AS "InputNamespace",
+                input.input_id AS "input_id",
+                '{self.namespace}' AS "input_namespace",
                 reaction.rhea_id AS "RheaId",
                 reaction.master_id AS "MasterId",
                 reaction.direction AS "Direction"
             FROM _input_id AS input
             {join}
             WHERE true {obsolete_filter}
-            ORDER BY "InputId", "RheaId"
+            ORDER BY "input_id", "RheaId"
         """
         with _connect(publication) as connection:
             _create_input_table(connection, self._input_rows)
@@ -510,11 +510,11 @@ class RheaReactionSelection:
             return frame
         membership = pl.DataFrame(
             self._group_membership,
-            schema={"GroupId": pl.String, "InputId": pl.String},
+            schema={"group_id": pl.String, "input_id": pl.String},
             orient="row",
         )
-        return membership.join(frame, on="InputId", how="inner").select(
-            "GroupId",
+        return membership.join(frame, on="input_id", how="inner").select(
+            "group_id",
             *frame.columns,
         )
 
@@ -539,8 +539,8 @@ class RheaReactionSelection:
     ) -> pl.DataFrame:
         expected = list(schema)
         if not self._is_grouped:
-            expected.remove("GroupId")
-            frame = frame.drop("GroupId")
+            expected.remove("group_id")
+            frame = frame.drop("group_id")
         return frame.select(expected)
 
 
@@ -864,9 +864,9 @@ def _create_selected_table(
     )
     rows = [
         (
-            row["GroupId"] if grouped else None,
-            row["InputId"],
-            row["InputNamespace"],
+            row["group_id"] if grouped else None,
+            row["input_id"],
+            row["input_namespace"],
             row["RheaId"],
             row["MasterId"],
             row["Direction"],

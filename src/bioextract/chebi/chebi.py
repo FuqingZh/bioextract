@@ -301,7 +301,7 @@ class ChEBIDatabase:
             ...     {"solvent": ["CHEBI:15377"]},
             ...     namespace="chebi",
             ... )
-            >>> selection.extract_matches()["GroupId"].to_list()  # doctest: +SKIP
+            >>> selection.extract_matches()["group_id"].to_list()  # doctest: +SKIP
             ['solvent']
         """
         return create_group_selection(

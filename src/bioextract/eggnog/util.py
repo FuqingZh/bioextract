@@ -62,11 +62,11 @@ def select_mapping_frame(
 ) -> pl.DataFrame:
     validate_namespace(namespace)
     if df_input_ids.height == 0:
-        cols_group = ["GroupId"] if df_group_membership is not None else []
-        cols_out = cols_group + ["InputId", "InputNamespace"] + COLS_MAPPING
+        cols_group = ["group_id"] if df_group_membership is not None else []
+        cols_out = cols_group + ["input_id", "input_namespace"] + COLS_MAPPING
         return pl.DataFrame(schema=dict.fromkeys(cols_out, pl.String))
 
-    input_ids = df_input_ids.get_column("InputId").unique().sort().to_list()
+    input_ids = df_input_ids.get_column("input_id").unique().sort().to_list()
     with open_sqlite_path(file_eggnog_db, dir_tmp=dir_tmp) as file_sqlite:
         df_mapping = read_mapping_frame_from_sqlite(
             file_sqlite,
@@ -272,17 +272,17 @@ def extract_mapping_frame(
     namespace: EggnogNamespace,
 ) -> pl.DataFrame:
     validate_namespace(namespace)
-    cols_out = ["InputId", "InputNamespace"] + COLS_MAPPING
+    cols_out = ["input_id", "input_namespace"] + COLS_MAPPING
     return (
         df_input_ids.join(
             df_mapping,
-            left_on="InputId",
+            left_on="input_id",
             right_on="EggnogProteinId",
             how="inner",
         )
         .with_columns(
-            pl.col("InputId").alias("EggnogProteinId"),
-            pl.lit(namespace).alias("InputNamespace"),
+            pl.col("input_id").alias("EggnogProteinId"),
+            pl.lit(namespace).alias("input_namespace"),
         )
         .select(cols_out)
         .unique()
@@ -296,18 +296,18 @@ def extract_unmatched_ids_frame(
     *,
     df_group_membership: pl.DataFrame | None,
 ) -> pl.DataFrame:
-    df_mapped_input_ids = df_mapping.select("InputId").unique().sort("InputId")
+    df_mapped_input_ids = df_mapping.select("input_id").unique().sort("input_id")
     df_unmatched = (
-        df_input_ids.join(df_mapped_input_ids, on="InputId", how="anti")
-        .select("InputId")
-        .sort("InputId")
+        df_input_ids.join(df_mapped_input_ids, on="input_id", how="anti")
+        .select("input_id")
+        .sort("input_id")
     )
     if df_group_membership is None:
         return df_unmatched
     return (
-        df_group_membership.join(df_unmatched, on="InputId", how="inner")
-        .select("GroupId", "InputId")
-        .sort("GroupId", "InputId")
+        df_group_membership.join(df_unmatched, on="input_id", how="inner")
+        .select("group_id", "input_id")
+        .sort("group_id", "input_id")
     )
 
 
@@ -317,9 +317,9 @@ def _expand_group_membership(
 ) -> pl.DataFrame:
     if df_group_membership is None:
         return df_mapping
-    cols_out = ["GroupId", *df_mapping.columns]
+    cols_out = ["group_id", *df_mapping.columns]
     return (
-        df_group_membership.join(df_mapping, on="InputId", how="inner")
+        df_group_membership.join(df_mapping, on="input_id", how="inner")
         .select(cols_out)
         .unique()
         .sort(cols_out)

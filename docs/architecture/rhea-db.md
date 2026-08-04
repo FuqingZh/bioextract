@@ -152,8 +152,8 @@ eager Polars `DataFrame` objects:
 - `extract_publications()`;
 - `extract_relationships()`.
 
-All matched outputs retain `InputId`, `InputNamespace`, `RheaId`, `MasterId`,
-and `Direction`; grouped selections additionally retain `GroupId`. There is no
+All matched outputs retain `input_id`, `input_namespace`, `RheaId`, `MasterId`,
+and `Direction`; grouped selections additionally retain `group_id`. There is no
 `scan_*()` facade because Polars does not provide a true database scan whose
 plan can safely outlive the short-lived DuckDB connection. A future
 bounded-memory contract should use a real iterator or direct writer terminal.

@@ -73,8 +73,8 @@ R-MMU-000001	R-MMU-1257604
 ### Grouped Selection
 
 - `select_groups()` preserves group labels.
-- Grouped mapping prepends `GroupId`.
-- Grouped unmapped output includes `GroupId` and `InputId`.
+- Grouped mapping prepends `group_id`.
+- Grouped unmapped output includes `group_id` and `input_id`.
 - The same UniProt ID can appear in multiple groups without being collapsed
   across groups.
 

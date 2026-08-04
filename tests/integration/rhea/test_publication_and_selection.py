@@ -313,29 +313,29 @@ def test_from_duckdb_selects_exact_reactions_and_domain_relations(
     selection = database.select_reactions(["CHEBI:1"], namespace="chebi")
 
     assert selection.extract_matches().select(
-        "InputId", "InputNamespace", "RheaId", "Direction"
+        "input_id", "input_namespace", "RheaId", "Direction"
     ).to_dicts() == [
         {
-            "InputId": "CHEBI:1",
-            "InputNamespace": "chebi",
+            "input_id": "CHEBI:1",
+            "input_namespace": "chebi",
             "RheaId": 10000,
             "Direction": "UN",
         },
         {
-            "InputId": "CHEBI:1",
-            "InputNamespace": "chebi",
+            "input_id": "CHEBI:1",
+            "input_namespace": "chebi",
             "RheaId": 10001,
             "Direction": "LR",
         },
         {
-            "InputId": "CHEBI:1",
-            "InputNamespace": "chebi",
+            "input_id": "CHEBI:1",
+            "input_namespace": "chebi",
             "RheaId": 10002,
             "Direction": "RL",
         },
         {
-            "InputId": "CHEBI:1",
-            "InputNamespace": "chebi",
+            "input_id": "CHEBI:1",
+            "input_namespace": "chebi",
             "RheaId": 10003,
             "Direction": "BI",
         },
@@ -397,16 +397,16 @@ def test_grouped_selection_preserves_lineage_and_unmatched_ids(
     )
 
     assert selection.extract_matches().select(
-        "GroupId", "InputId", "RheaId"
+        "group_id", "input_id", "RheaId"
     ).to_dicts() == [
-        {"GroupId": "known", "InputId": "1.1.1.1", "RheaId": 10000},
-        {"GroupId": "mixed", "InputId": "1.1.1.1", "RheaId": 10000},
+        {"group_id": "known", "input_id": "1.1.1.1", "RheaId": 10000},
+        {"group_id": "mixed", "input_id": "1.1.1.1", "RheaId": 10000},
     ]
     assert selection.extract_unmatched_ids().to_dicts() == [
         {
-            "GroupId": "mixed",
-            "InputId": "9.9.9.9",
-            "InputNamespace": "ec",
+            "group_id": "mixed",
+            "input_id": "9.9.9.9",
+            "input_namespace": "ec",
         }
     ]
 
@@ -450,18 +450,18 @@ def test_grouped_selection_resolves_unique_ids_once_and_reuses_mapping(
         "empty",
     )
     assert selection.extract_matches().select(
-        "GroupId", "InputId", "RheaId"
+        "group_id", "input_id", "RheaId"
     ).to_dicts() == [
-        {"GroupId": "case", "InputId": "RHEA:10000", "RheaId": 10000},
-        {"GroupId": "control", "InputId": "RHEA:10000", "RheaId": 10000},
+        {"group_id": "case", "input_id": "RHEA:10000", "RheaId": 10000},
+        {"group_id": "control", "input_id": "RHEA:10000", "RheaId": 10000},
     ]
     selection.extract_reactions()
     selection.extract_matches()
     assert selection.extract_unmatched_ids().select(
-        "GroupId", "InputId"
+        "group_id", "input_id"
     ).to_dicts() == [
-        {"GroupId": "case", "InputId": "RHEA:99999"},
-        {"GroupId": "control", "InputId": "RHEA:99999"},
+        {"group_id": "case", "input_id": "RHEA:99999"},
+        {"group_id": "control", "input_id": "RHEA:99999"},
     ]
     assert input_table_calls == [
         (
@@ -521,5 +521,5 @@ def test_obsolete_policy_is_explicit(tmp_path: Path) -> None:
     )
 
     assert excluded.extract_matches().is_empty()
-    assert excluded.extract_unmatched_ids()["InputId"].to_list() == ["RHEA:10004"]
+    assert excluded.extract_unmatched_ids()["input_id"].to_list() == ["RHEA:10004"]
     assert included.extract_matches()["RheaId"].to_list() == [10004]

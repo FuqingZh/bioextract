@@ -111,24 +111,26 @@ def test_select_ids_supports_input_id_kinds_and_unmapped(tmp_path: Path) -> None
         ["sp|P12345|GENE1_HUMAN", "MISSING"],
         namespace="uniprot",
     ).extract_mapping()
-    assert df_uniprot.select("InputId", "InputNamespace", "KeggGeneId").to_dicts() == [
-        {"InputId": "P12345", "InputNamespace": "uniprot", "KeggGeneId": "hsa:1"},
-        {"InputId": "P12345", "InputNamespace": "uniprot", "KeggGeneId": "hsa:1"},
+    assert df_uniprot.select(
+        "input_id", "input_namespace", "KeggGeneId"
+    ).to_dicts() == [
+        {"input_id": "P12345", "input_namespace": "uniprot", "KeggGeneId": "hsa:1"},
+        {"input_id": "P12345", "input_namespace": "uniprot", "KeggGeneId": "hsa:1"},
     ]
     assert db.select_ids(
         ["P12345", "MISSING"],
         namespace="uniprot",
-    ).extract_unmatched_ids().to_dicts() == [{"InputId": "MISSING"}]
+    ).extract_unmatched_ids().to_dicts() == [{"input_id": "MISSING"}]
 
     df_ncbi = db.select_ids(["102"], namespace="ncbi_gene").extract_mapping()
-    assert df_ncbi.select("InputId", "KeggGeneId").to_dicts() == [
-        {"InputId": "102", "KeggGeneId": "hsa:2"}
+    assert df_ncbi.select("input_id", "KeggGeneId").to_dicts() == [
+        {"input_id": "102", "KeggGeneId": "hsa:2"}
     ]
 
     df_kegg = db.select_ids(["hsa:1"], namespace="kegg_gene").extract_mapping()
-    assert df_kegg.select("InputId", "UniProtId", "KeggPathwayId").to_dicts() == [
-        {"InputId": "hsa:1", "UniProtId": "P12345", "KeggPathwayId": "hsa00010"},
-        {"InputId": "hsa:1", "UniProtId": "P12345", "KeggPathwayId": "hsa01100"},
+    assert df_kegg.select("input_id", "UniProtId", "KeggPathwayId").to_dicts() == [
+        {"input_id": "hsa:1", "UniProtId": "P12345", "KeggPathwayId": "hsa00010"},
+        {"input_id": "hsa:1", "UniProtId": "P12345", "KeggPathwayId": "hsa01100"},
     ]
 
 
@@ -141,14 +143,14 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     )
 
     df_mapping = selection.extract_mapping()
-    assert df_mapping.columns[:3] == ["GroupId", "InputId", "InputNamespace"]
-    assert df_mapping.select("GroupId", "InputId", "KeggGeneId").to_dicts() == [
-        {"GroupId": "down", "InputId": "Q9Y243", "KeggGeneId": "hsa:2"},
-        {"GroupId": "up", "InputId": "P12345", "KeggGeneId": "hsa:1"},
-        {"GroupId": "up", "InputId": "P12345", "KeggGeneId": "hsa:1"},
+    assert df_mapping.columns[:3] == ["group_id", "input_id", "input_namespace"]
+    assert df_mapping.select("group_id", "input_id", "KeggGeneId").to_dicts() == [
+        {"group_id": "down", "input_id": "Q9Y243", "KeggGeneId": "hsa:2"},
+        {"group_id": "up", "input_id": "P12345", "KeggGeneId": "hsa:1"},
+        {"group_id": "up", "input_id": "P12345", "KeggGeneId": "hsa:1"},
     ]
     assert selection.extract_unmatched_ids().to_dicts() == [
-        {"GroupId": "up", "InputId": "MISSING"}
+        {"group_id": "up", "input_id": "MISSING"}
     ]
 
 
@@ -181,43 +183,43 @@ def test_select_groups_resolves_unique_ids_once_then_expands_membership(
 
     groups = selection._df_groups  # pyright: ignore[reportPrivateUsage]
     assert groups is not None
-    assert groups["GroupId"].to_list() == [
+    assert groups["group_id"].to_list() == [
         "case",
         "control",
         "empty",
     ]
-    assert selection._df_input_ids["InputId"].to_list() == [  # pyright: ignore[reportPrivateUsage]
+    assert selection._df_input_ids["input_id"].to_list() == [  # pyright: ignore[reportPrivateUsage]
         "MISSING",
         "P12345",
     ]
     assert selection.extract_mapping().select(
-        "GroupId", "InputId", "KeggPathwayId"
+        "group_id", "input_id", "KeggPathwayId"
     ).to_dicts() == [
         {
-            "GroupId": "case",
-            "InputId": "P12345",
+            "group_id": "case",
+            "input_id": "P12345",
             "KeggPathwayId": "hsa00010",
         },
         {
-            "GroupId": "case",
-            "InputId": "P12345",
+            "group_id": "case",
+            "input_id": "P12345",
             "KeggPathwayId": "hsa01100",
         },
         {
-            "GroupId": "control",
-            "InputId": "P12345",
+            "group_id": "control",
+            "input_id": "P12345",
             "KeggPathwayId": "hsa00010",
         },
         {
-            "GroupId": "control",
-            "InputId": "P12345",
+            "group_id": "control",
+            "input_id": "P12345",
             "KeggPathwayId": "hsa01100",
         },
     ]
     selection.extract_mapping()
     assert selection.extract_unmatched_ids().to_dicts() == [
-        {"GroupId": "case", "InputId": "MISSING"},
-        {"GroupId": "control", "InputId": "MISSING"},
+        {"group_id": "case", "input_id": "MISSING"},
+        {"group_id": "control", "input_id": "MISSING"},
     ]
     assert mapping_calls == 1
 

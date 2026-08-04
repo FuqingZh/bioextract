@@ -7,25 +7,25 @@ from pathlib import Path
 
 import polars as pl
 
-from .._shared import create_group_input_frames, create_input_id_frame
+from .._shared import (
+    create_group_input_frames,
+    create_input_id_frame,
+    validate_required_cols,
+)
 from .constant import (
+    SCHEMA_ENZSUB_RAW,
     SCHEMA_GROUP_INPUT_IDS,
     SCHEMA_GROUPS,
+    SCHEMA_INTERACTIONS_RAW,
     SCHEMA_UNMAPPED,
+    OmniPathNamespace,
     OmniPathResourceName,
 )
 from .util import (
     extract_enzsub_frame,
     extract_interactions_frame,
-)
-from .util import (
-    has_any_enzsub_modification as has_any_enzsub_modification_in_file,
-)
-from .util import (
-    has_any_enzsub_relation as has_any_enzsub_relation_in_file,
-)
-from .util import (
-    has_any_interaction_relation as has_any_interaction_relation_in_file,
+    scan_enzsub,
+    scan_interactions,
 )
 
 __all__ = [
@@ -56,10 +56,10 @@ class OmniPathDatabase:
         >>> (
         ...     db.select_ids(["P31749"])
         ...     .extract_enzsub()
-        ...     .select("TargetId", "TargetSite")
+        ...     .select("substrate", "target_site")
         ...     .to_dicts()
         ... )
-        [{'TargetId': 'BAD', 'TargetSite': 'S136'}, {'TargetId': 'FOXO3', 'TargetSite': 'T32'}]
+        [{'substrate': 'BAD', 'target_site': 'S136'}, {'substrate': 'FOXO3', 'target_site': 'T32'}]
     """
 
     snapshot: _OmniPathSnapshot
@@ -114,6 +114,21 @@ class OmniPathDatabase:
                     f"OmniPath interactions file not found: {file_interactions}"
                 )
 
+        if file_enzsub is not None:
+            frame = scan_enzsub(file_enzsub)
+            validate_required_cols(
+                frame.collect_schema().names(),
+                SCHEMA_ENZSUB_RAW.keys(),
+                "OmniPath enzsub file",
+            )
+        if file_interactions is not None:
+            frame = scan_interactions(file_interactions)
+            validate_required_cols(
+                frame.collect_schema().names(),
+                SCHEMA_INTERACTIONS_RAW.keys(),
+                "OmniPath interactions file",
+            )
+
         return cls(
             snapshot=_OmniPathSnapshot(
                 file_enzsub=file_enzsub,
@@ -139,73 +154,46 @@ class OmniPathDatabase:
             resources.add("interactions")
         return frozenset(resources)
 
-    def has_any_enzsub_relation(self) -> bool:
-        """Report whether the enzsub file contains a valid relation.
-
-        Raises:
-            ValueError: If this snapshot has no enzsub file.
+    def scan_enzsub(self) -> pl.LazyFrame:
+        """Scan the official enzyme-substrate relation lazily.
 
         Examples:
-            >>> db = OmniPathDatabase.from_files(
-            ...     enzsub="fixtures/omnipath/enzsub.tsv"
-            ... )
-            >>> db.has_any_enzsub_relation()
-            True
+            >>> database.scan_enzsub()  # doctest: +SKIP
+            <LazyFrame ...>
         """
         if self.snapshot.file_enzsub is None:
-            raise ValueError("Cannot inspect OmniPath enzsub without enzsub file")
-        return has_any_enzsub_relation_in_file(file_enzsub=self.snapshot.file_enzsub)
+            raise ValueError("OmniPath publication has no enzsub resource")
+        frame = scan_enzsub(self.snapshot.file_enzsub)
+        validate_required_cols(
+            frame.collect_schema().names(),
+            SCHEMA_ENZSUB_RAW.keys(),
+            "OmniPath enzsub file",
+        )
+        return frame
 
-    def has_any_interaction_relation(self) -> bool:
-        """Report whether the interactions file contains a valid relation.
-
-        Raises:
-            ValueError: If this snapshot has no interactions file.
+    def scan_interactions(self) -> pl.LazyFrame:
+        """Scan the official interaction relation lazily.
 
         Examples:
-            >>> db = OmniPathDatabase.from_files(
-            ...     interactions="fixtures/omnipath/interactions.tsv"
-            ... )
-            >>> db.has_any_interaction_relation()
-            True
+            >>> database.scan_interactions()  # doctest: +SKIP
+            <LazyFrame ...>
         """
         if self.snapshot.file_interactions is None:
-            raise ValueError(
-                "Cannot inspect OmniPath interactions without interactions file"
-            )
-        return has_any_interaction_relation_in_file(
-            file_interactions=self.snapshot.file_interactions
+            raise ValueError("OmniPath publication has no interactions resource")
+        frame = scan_interactions(self.snapshot.file_interactions)
+        validate_required_cols(
+            frame.collect_schema().names(),
+            SCHEMA_INTERACTIONS_RAW.keys(),
+            "OmniPath interactions file",
         )
+        return frame
 
-    def has_any_enzsub_modification(self, modification: str) -> bool:
-        """Report whether enzsub contains a relation for one modification.
-
-        Args:
-            modification: Exact OmniPath modification label to match after the
-                file's standard string normalization.
-
-        Raises:
-            ValueError: If this snapshot has no enzsub file.
-
-        Examples:
-            Test present and absent modification labels:
-
-            >>> db = OmniPathDatabase.from_files(
-            ...     enzsub="fixtures/omnipath/enzsub.tsv"
-            ... )
-            >>> db.has_any_enzsub_modification("phosphorylation")
-            True
-            >>> db.has_any_enzsub_modification("ubiquitination")
-            False
-        """
-        if self.snapshot.file_enzsub is None:
-            raise ValueError("Cannot inspect OmniPath enzsub without enzsub file")
-        return has_any_enzsub_modification_in_file(
-            file_enzsub=self.snapshot.file_enzsub,
-            modification=modification,
-        )
-
-    def select_ids(self, ids: Iterable[str]) -> OmniPathSelection:
+    def select_ids(
+        self,
+        ids: Iterable[str],
+        *,
+        namespace: OmniPathNamespace = "protein",
+    ) -> OmniPathSelection:
         """Create a single-query selection from normalized protein IDs.
 
         The selection initially enables every resource backed by this snapshot.
@@ -220,9 +208,11 @@ class OmniPathDatabase:
             >>> db = OmniPathDatabase.from_files(
             ...     enzsub="fixtures/omnipath/enzsub.tsv"
             ... )
-            >>> db.select_ids(["P31749"]).extract_enzsub()["TargetId"].to_list()
+            >>> db.select_ids(["P31749"]).extract_enzsub()["substrate"].to_list()
             ['BAD', 'FOXO3']
         """
+        if namespace != "protein":
+            raise ValueError(f"Unknown OmniPath namespace: {namespace!r}")
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
         return OmniPathSelection(
             dataset=self,
@@ -230,13 +220,16 @@ class OmniPathDatabase:
             _df_group_membership=None,
             _df_groups=None,
             resources_selected=self.available_resources,
+            namespace=namespace,
         )
 
     def select_groups(
         self,
         ids_by_group: Mapping[str, Iterable[str]],
+        *,
+        namespace: OmniPathNamespace = "protein",
     ) -> OmniPathSelection:
-        """Create a grouped selection that preserves ``GroupId`` in outputs.
+        """Create a grouped selection that preserves ``group_id`` in outputs.
 
         The selection initially enables every resource backed by this snapshot.
         Relation endpoints are matched once against globally unique normalized
@@ -255,13 +248,15 @@ class OmniPathDatabase:
             >>> (
             ...     db.select_groups({"up": ["P31749"], "down": ["MAPK1"]})
             ...     .extract_enzsub()
-            ...     .select("GroupId", "SourceId")
+            ...     .select("group_id", "enzyme")
             ...     .unique()
-            ...     .sort("GroupId")
+            ...     .sort("group_id")
             ...     .to_dicts()
             ... )
-            [{'GroupId': 'down', 'SourceId': 'MAPK1'}, {'GroupId': 'up', 'SourceId': 'P31749'}]
+            [{'group_id': 'down', 'enzyme': 'MAPK1'}, {'group_id': 'up', 'enzyme': 'P31749'}]
         """
+        if namespace != "protein":
+            raise ValueError(f"Unknown OmniPath namespace: {namespace!r}")
         grp_in_frames = create_group_input_frames(
             ids_by_group,
             schema_groups=SCHEMA_GROUPS,
@@ -273,6 +268,7 @@ class OmniPathDatabase:
             _df_input_ids=grp_in_frames.df_input_ids,
             _df_group_membership=grp_in_frames.df_group_membership,
             resources_selected=self.available_resources,
+            namespace=namespace,
         )
 
 
@@ -287,7 +283,7 @@ class OmniPathSelection:
         ...     enzsub="fixtures/omnipath/enzsub.tsv"
         ... )
         >>> selection = db.select_ids(["P31749"])
-        >>> selection.extract_enzsub()["TargetId"].to_list()
+        >>> selection.extract_enzsub()["substrate"].to_list()
         ['BAD', 'FOXO3']
     """
 
@@ -296,13 +292,14 @@ class OmniPathSelection:
     _df_group_membership: pl.DataFrame | None = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
     resources_selected: frozenset[OmniPathResourceName]
+    namespace: OmniPathNamespace = "protein"
     _df_enzsub: pl.DataFrame | None = field(default=None, repr=False)
     _df_interactions: pl.DataFrame | None = field(default=None, repr=False)
     _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
 
     @property
     def is_grouped(self) -> bool:
-        """Report whether this selection carries `GroupId` through outputs.
+        """Report whether this selection carries `group_id` through outputs.
 
         Examples:
             >>> db = OmniPathDatabase.from_files(
@@ -316,7 +313,7 @@ class OmniPathSelection:
     @property
     def _col_group_id(self) -> tuple[str, ...]:
         """Return the group ID column when this selection is grouped."""
-        return ("GroupId",) if self.is_grouped else ()
+        return ("group_id",) if self.is_grouped else ()
 
     def with_resources(
         self,
@@ -350,7 +347,7 @@ class OmniPathSelection:
             ...     .extract_unmatched_ids()
             ...     .to_dicts()
             ... )
-            [{'InputId': 'ERBB2'}]
+            [{'input_id': 'ERBB2'}]
         """
         resources_selected = frozenset(resources)
         resources_invalid = resources_selected.difference({"enzsub", "interactions"})
@@ -367,6 +364,7 @@ class OmniPathSelection:
             _df_group_membership=self._df_group_membership,
             _df_groups=self._df_groups,
             resources_selected=resources_selected,
+            namespace=self.namespace,
             _df_enzsub=self._df_enzsub if "enzsub" in resources_selected else None,
             _df_interactions=(
                 self._df_interactions if "interactions" in resources_selected else None
@@ -384,7 +382,7 @@ class OmniPathSelection:
             >>> (
             ...     db.select_ids(["P31749"])
             ...     .with_enzsub()
-            ...     .extract_enzsub()["TargetId"]
+            ...     .extract_enzsub()["substrate"]
             ...     .to_list()
             ... )
             ['BAD', 'FOXO3']
@@ -403,10 +401,10 @@ class OmniPathSelection:
             ...     db.select_ids(["ERBB2"])
             ...     .with_interactions()
             ...     .extract_interactions()
-            ...     .select("SourceId", "TargetId")
+            ...     .select("source", "target")
             ...     .to_dicts()
             ... )
-            [{'SourceId': 'EGFR', 'TargetId': 'ERBB2'}]
+            [{'source': 'EGFR', 'target': 'ERBB2'}]
         """
         return self.with_resources(["interactions"])
 
@@ -416,9 +414,10 @@ class OmniPathSelection:
         Returns:
             A materialized table with one of these schemas:
 
-            - single selection: `SourceId`, `TargetId`, `TargetSite`, `Modification`
-            - grouped selection: `GroupId`, `SourceId`, `TargetId`, `TargetSite`,
-              `Modification`
+            - single selection: official `enzyme`, `substrate`, `residue_type`,
+              `residue_offset`, `modification`, plus derived `target_site`
+            - grouped selection: `group_id`, followed by the single-selection
+              columns
 
         Raises:
             ValueError: If the selection does not enable `enzsub`, if the
@@ -432,7 +431,7 @@ class OmniPathSelection:
             ...     enzsub="fixtures/omnipath/enzsub.tsv"
             ... )
             >>> db.select_ids(["P31749"]).extract_enzsub().head(1).to_dicts()
-            [{'SourceId': 'P31749', 'TargetId': 'BAD', 'TargetSite': 'S136', 'Modification': 'phosphorylation'}]
+            [{'enzyme': 'P31749', 'substrate': 'BAD', 'residue_type': 'S', 'residue_offset': '136', 'modification': 'phosphorylation', 'target_site': 'S136'}]
         """
         if "enzsub" not in self.resources_selected:
             raise ValueError(
@@ -454,10 +453,10 @@ class OmniPathSelection:
         Returns:
             A materialized table with one of these schemas:
 
-            - single selection: `SourceId`, `TargetId`, `IsDirected`,
-              `IsStimulation`, `IsInhibition`
-            - grouped selection: `GroupId`, `SourceId`, `TargetId`,
-              `IsDirected`, `IsStimulation`, `IsInhibition`
+            - single selection: official `source`, `target`, `is_directed`,
+              `is_stimulation`, `is_inhibition`
+            - grouped selection: `group_id`, followed by the single-selection
+              columns
 
         Raises:
             ValueError: If the selection does not enable `interactions`, if the
@@ -471,7 +470,7 @@ class OmniPathSelection:
             ...     interactions="fixtures/omnipath/interactions.tsv"
             ... )
             >>> db.select_ids(["ERBB2"]).extract_interactions().to_dicts()
-            [{'SourceId': 'EGFR', 'TargetId': 'ERBB2', 'IsDirected': False, 'IsStimulation': True, 'IsInhibition': False}]
+            [{'source': 'EGFR', 'target': 'ERBB2', 'is_directed': False, 'is_stimulation': True, 'is_inhibition': False}]
         """
         if "interactions" not in self.resources_selected:
             raise ValueError(
@@ -495,8 +494,8 @@ class OmniPathSelection:
         Returns:
             A materialized table with one of these schemas:
 
-            - single selection: `InputId`
-            - grouped selection: `GroupId`, `InputId`
+            - single selection: `input_id`
+            - grouped selection: `group_id`, `input_id`
 
         Examples:
             Report an identifier absent from the selected resource:
@@ -506,11 +505,11 @@ class OmniPathSelection:
             ... )
             >>> selection = db.select_ids(["MISSING"]).with_interactions()
             >>> selection.extract_unmatched_ids().to_dicts()
-            [{'InputId': 'MISSING'}]
+            [{'input_id': 'MISSING'}]
         """
         if self._df_unmapped is None:
             col_group_id = list(self._col_group_id)
-            cols_index = col_group_id + ["InputId"]
+            cols_index = col_group_id + ["input_id"]
             df_input_rows = self._df_input_ids
             if self.is_grouped:
                 if self._df_group_membership is None:
@@ -525,10 +524,10 @@ class OmniPathSelection:
                 df_matched_parts.extend(
                     [
                         df_enzsub.select(
-                            col_group_id + [pl.col("SourceId").alias("InputId")]
+                            col_group_id + [pl.col("enzyme").alias("input_id")]
                         ),
                         df_enzsub.select(
-                            col_group_id + [pl.col("TargetId").alias("InputId")]
+                            col_group_id + [pl.col("substrate").alias("input_id")]
                         ),
                     ]
                 )
@@ -538,10 +537,10 @@ class OmniPathSelection:
                 df_matched_parts.extend(
                     [
                         df_interactions.select(
-                            col_group_id + [pl.col("SourceId").alias("InputId")]
+                            col_group_id + [pl.col("source").alias("input_id")]
                         ),
                         df_interactions.select(
-                            col_group_id + [pl.col("TargetId").alias("InputId")]
+                            col_group_id + [pl.col("target").alias("input_id")]
                         ),
                     ]
                 )

@@ -134,20 +134,20 @@ pathway or KO `term2gene` tables with projections.
 Single selections prepend:
 
 ```text
-InputId
-InputNamespace
+input_id
+input_namespace
 ```
 
 Grouped selections prepend:
 
 ```text
-GroupId
-InputId
-InputNamespace
+group_id
+input_id
+input_namespace
 ```
 
-`extract_unmatched_ids()` returns `InputId` for single selections and
-`GroupId, InputId` for grouped selections.
+`extract_unmatched_ids()` returns `input_id` for single selections and
+`group_id, input_id` for grouped selections.
 
 ## Tidy Dataset
 

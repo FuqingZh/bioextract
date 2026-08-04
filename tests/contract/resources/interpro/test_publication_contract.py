@@ -118,12 +118,12 @@ def test_reopened_grouped_selection_preserves_unique_fan_out_and_unmatched(
         {"case": ["sp|P12345|TEST", "missing"], "repeat": ["P12345"]}
     )
 
-    assert selection.extract_mapping().select("GroupId", "InputId").to_dicts() == [
-        {"GroupId": "case", "InputId": "P12345"},
-        {"GroupId": "repeat", "InputId": "P12345"},
+    assert selection.extract_mapping().select("group_id", "input_id").to_dicts() == [
+        {"group_id": "case", "input_id": "P12345"},
+        {"group_id": "repeat", "input_id": "P12345"},
     ]
     assert selection.extract_unmatched_ids().to_dicts() == [
-        {"GroupId": "case", "InputId": "missing"}
+        {"group_id": "case", "input_id": "missing"}
     ]
 
 

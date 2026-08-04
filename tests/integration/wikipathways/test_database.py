@@ -267,7 +267,7 @@ def test_single_and_grouped_selection(tmp_path: Path) -> None:
     selection = db.select_ids(["2687", " 435 ", "MISSING", ""])
     assert selection.extract_mapping().to_dicts() == [
         {
-            "InputId": "2687",
+            "input_id": "2687",
             "GeneId": "2687",
             "WikiPathwaysId": "WP100",
             "PathwayName": "Glutathione metabolism",
@@ -275,7 +275,7 @@ def test_single_and_grouped_selection(tmp_path: Path) -> None:
             "Url": "https://www.wikipathways.org/instance/WP100",
         },
         {
-            "InputId": "435",
+            "input_id": "435",
             "GeneId": "435",
             "WikiPathwaysId": "WP106",
             "PathwayName": "Alanine and aspartate metabolism",
@@ -283,16 +283,16 @@ def test_single_and_grouped_selection(tmp_path: Path) -> None:
             "Url": "https://www.wikipathways.org/instance/WP106",
         },
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [{"InputId": "MISSING"}]
+    assert selection.extract_unmatched_ids().to_dicts() == [{"input_id": "MISSING"}]
 
     grouped = db.select_groups({"A": ["2687"], "B": ["2687", "MISSING"]})
     df_grouped_mapping = grouped.extract_mapping()
     assert grouped.extract_mapping() is df_grouped_mapping
-    assert df_grouped_mapping.columns[0] == "GroupId"
+    assert df_grouped_mapping.columns[0] == "group_id"
     assert df_grouped_mapping.height == 2
     df_unmatched = grouped.extract_unmatched_ids()
     assert grouped.extract_unmatched_ids() is df_unmatched
-    assert df_unmatched.to_dicts() == [{"GroupId": "B", "InputId": "MISSING"}]
+    assert df_unmatched.to_dicts() == [{"group_id": "B", "input_id": "MISSING"}]
 
 
 def test_build_tidy_writes_duckdb_without_sidecar(tmp_path: Path) -> None:

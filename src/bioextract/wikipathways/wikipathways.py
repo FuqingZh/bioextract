@@ -85,12 +85,12 @@ class WikiPathwaysDatabase:
         >>> selection = db.select_ids(["2687", "MISSING"])
         >>> (
         ...     selection.extract_mapping()
-        ...     .select("InputId", "WikiPathwaysId")
+        ...     .select("input_id", "WikiPathwaysId")
         ...     .to_dicts()
         ... )
-        [{'InputId': '2687', 'WikiPathwaysId': 'WP100'}]
+        [{'input_id': '2687', 'WikiPathwaysId': 'WP100'}]
         >>> selection.extract_unmatched_ids().to_dicts()
-        [{'InputId': 'MISSING'}]
+        [{'input_id': 'MISSING'}]
     """
 
     snapshot: _WikiPathwaysSnapshot
@@ -267,10 +267,10 @@ class WikiPathwaysDatabase:
             >>> (
             ...     db.select_ids(["2687"])
             ...     .extract_mapping()
-            ...     .select("InputId", "WikiPathwaysId")
+            ...     .select("input_id", "WikiPathwaysId")
             ...     .to_dicts()
             ... )
-            [{'InputId': '2687', 'WikiPathwaysId': 'WP100'}]
+            [{'input_id': '2687', 'WikiPathwaysId': 'WP100'}]
         """
         self._assert_publication_current()
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
@@ -291,7 +291,7 @@ class WikiPathwaysDatabase:
             ids_by_group: Mapping from group label to input Entrez Gene IDs.
 
         Returns:
-            A grouped selection that carries `GroupId` through outputs.
+            A grouped selection that carries `group_id` through outputs.
 
         Raises:
             ValueError: If group IDs are invalid after normalization.
@@ -305,10 +305,10 @@ class WikiPathwaysDatabase:
             >>> (
             ...     db.select_groups({"case": ["2687"], "control": ["435"]})
             ...     .extract_mapping()
-            ...     .select("GroupId", "InputId", "WikiPathwaysId")
+            ...     .select("group_id", "input_id", "WikiPathwaysId")
             ...     .to_dicts()
             ... )
-            [{'GroupId': 'case', 'InputId': '2687', 'WikiPathwaysId': 'WP100'}, {'GroupId': 'control', 'InputId': '435', 'WikiPathwaysId': 'WP106'}]
+            [{'group_id': 'case', 'input_id': '2687', 'WikiPathwaysId': 'WP100'}, {'group_id': 'control', 'input_id': '435', 'WikiPathwaysId': 'WP106'}]
         """
         self._assert_publication_current()
         grp_in_frames = create_group_input_frames(
@@ -575,7 +575,7 @@ class WikiPathwaysSelection:
 
     Selections are created by :meth:`WikiPathwaysDatabase.select_ids` or
     :meth:`WikiPathwaysDatabase.select_groups`. Single selections return tables keyed
-    by `InputId`; grouped selections prepend `GroupId`.
+    by `input_id`; grouped selections prepend `group_id`.
 
     Examples:
         Use a returned selection to materialize matched pathways:
@@ -586,10 +586,10 @@ class WikiPathwaysSelection:
         >>> selection = db.select_ids(["2687"])
         >>> (
         ...     selection.extract_mapping()
-        ...     .select("InputId", "WikiPathwaysId")
+        ...     .select("input_id", "WikiPathwaysId")
         ...     .to_dicts()
         ... )
-        [{'InputId': '2687', 'WikiPathwaysId': 'WP100'}]
+        [{'input_id': '2687', 'WikiPathwaysId': 'WP100'}]
     """
 
     dataset: WikiPathwaysDatabase
@@ -601,7 +601,7 @@ class WikiPathwaysSelection:
 
     @property
     def is_grouped(self) -> bool:
-        """Report whether this selection carries `GroupId` through outputs.
+        """Report whether this selection carries `group_id` through outputs.
 
         Examples:
             Inspect a grouped selection:
@@ -643,7 +643,7 @@ class WikiPathwaysSelection:
         """Extract normalized input IDs with no WikiPathways mapping.
 
         Grouped selections report an ID as unmapped independently within each
-        group and include ``GroupId`` in the result.
+        group and include ``group_id`` in the result.
 
         Examples:
             Retain an Entrez ID absent from the snapshot:
@@ -653,7 +653,7 @@ class WikiPathwaysSelection:
             ... )
             >>> selection = db.select_ids(["2687", "MISSING"])
             >>> selection.extract_unmatched_ids().to_dicts()
-            [{'InputId': 'MISSING'}]
+            [{'input_id': 'MISSING'}]
         """
         self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
         if self._df_unmapped is None:

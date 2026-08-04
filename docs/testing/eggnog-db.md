@@ -28,7 +28,7 @@ It does not cover:
   the caller location.
 - `EggnogSelection.extract_mapping()` expands OGs and COG categories correctly.
 - `select_ids()` returns filtered rows in the fixed `eggnog_protein` namespace.
-- `select_groups()` resolves one globally unique ID set and preserves `GroupId`.
+- `select_groups()` resolves one globally unique ID set and preserves `group_id`.
 - unmapped IDs are reported correctly.
 - mapping and unmatched extractors reuse one Selection cache.
 - gzip SQLite snapshots use `temp_dir` only as scratch storage, clean up after

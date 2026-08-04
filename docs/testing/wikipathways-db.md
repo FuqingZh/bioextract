@@ -55,7 +55,7 @@ Mouse pathway%WikiPathways_20260510%WP1%Mus musculus	https://www.wikipathways.or
 - `select_ids()` trims input IDs and drops blanks.
 - `extract_mapping()` returns selected Entrez IDs joined to pathway metadata.
 - `extract_unmatched_ids()` reports IDs not present in the GMT gene sets.
-- `select_groups()` preserves `GroupId`.
+- `select_groups()` preserves `group_id`.
 - `write_duckdb()` writes pathway and pathway-gene relations in one file.
 - `_bioextract` contains every resolved actual source under deterministic
   unique logical names, including files with no retained rows, plus row-count

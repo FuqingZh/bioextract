@@ -319,10 +319,10 @@ class ReactomeDatabase:
             >>> selection = db.select_ids(
             ...     ["sp|P04637|P53_HUMAN", "MISSING"]
             ... )
-            >>> selection.extract_mapping()["InputId"].unique().to_list()
+            >>> selection.extract_mapping()["input_id"].unique().to_list()
             ['P04637']
             >>> selection.extract_unmatched_ids().to_dicts()
-            [{'InputId': 'MISSING'}]
+            [{'input_id': 'MISSING'}]
         """
         self._assert_publication_current()
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
@@ -343,7 +343,7 @@ class ReactomeDatabase:
             ids_by_group: Mapping from group label to input UniProt accessions.
 
         Returns:
-            A grouped selection that carries `GroupId` through outputs.
+            A grouped selection that carries `group_id` through outputs.
 
         Raises:
             ValueError: If group IDs are invalid after normalization.
@@ -359,13 +359,13 @@ class ReactomeDatabase:
             ... )
             >>> (
             ...     selection.extract_mapping()
-            ...     .select("GroupId", "InputId")
+            ...     .select("group_id", "input_id")
             ...     .unique()
             ...     .to_dicts()
             ... )
-            [{'GroupId': 'tumor', 'InputId': 'P04637'}]
+            [{'group_id': 'tumor', 'input_id': 'P04637'}]
             >>> selection.extract_unmatched_ids().to_dicts()
-            [{'GroupId': 'control', 'InputId': 'MISSING'}]
+            [{'group_id': 'control', 'input_id': 'MISSING'}]
         """
         self._assert_publication_current()
         grp_in_frames = create_group_input_frames(
@@ -789,7 +789,7 @@ class ReactomeSelection:
 
     Selections are created by :meth:`ReactomeDatabase.select_ids` or
     :meth:`ReactomeDatabase.select_groups`. Single selections return tables keyed by
-    `InputId`; grouped selections prepend `GroupId`.
+    `input_id`; grouped selections prepend `group_id`.
 
     Examples:
         Use a returned selection to materialize matched pathways:
@@ -800,11 +800,11 @@ class ReactomeSelection:
         >>> selection = db.select_ids(["P04637"])
         >>> (
         ...     selection.extract_mapping()
-        ...     .select("InputId", "ReactomePathwayId")
+        ...     .select("input_id", "ReactomePathwayId")
         ...     .head(1)
         ...     .to_dicts()
         ... )
-        [{'InputId': 'P04637', 'ReactomePathwayId': 'R-HSA-6798695'}]
+        [{'input_id': 'P04637', 'ReactomePathwayId': 'R-HSA-6798695'}]
     """
 
     dataset: ReactomeDatabase
@@ -816,7 +816,7 @@ class ReactomeSelection:
 
     @property
     def is_grouped(self) -> bool:
-        """Report whether this selection carries `GroupId` through outputs.
+        """Report whether this selection carries `group_id` through outputs.
 
         Examples:
             Inspect a grouped selection:
@@ -856,7 +856,7 @@ class ReactomeSelection:
         """Extract normalized input IDs with no Reactome pathway mapping.
 
         Grouped selections report an ID as unmapped independently within each
-        group and include ``GroupId`` in the result.
+        group and include ``group_id`` in the result.
 
         Examples:
             Retain a normalized accession with no Reactome mapping:
@@ -866,7 +866,7 @@ class ReactomeSelection:
             ... )
             >>> selection = db.select_ids(["P04637", "MISSING"])
             >>> selection.extract_unmatched_ids().to_dicts()
-            [{'InputId': 'MISSING'}]
+            [{'input_id': 'MISSING'}]
         """
         self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
         if self._df_unmapped is None:

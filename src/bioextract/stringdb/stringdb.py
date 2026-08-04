@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -13,6 +14,7 @@ from bioextract._shared import (
     create_input_id_frame,
     validate_required_cols,
 )
+from bioextract.errors import CapabilityError, IntegrityError
 
 from .constant import (
     DEFAULT_SOURCE_RANK_MAP,
@@ -25,6 +27,7 @@ from .constant import (
     SCHEMA_PROTEIN_MAP,
     SCHEMA_UNMAPPED,
     StringDatabaseVersion,
+    StringNamespace,
 )
 from .util import (
     create_edges_lazy_frame,
@@ -34,6 +37,8 @@ from .util import (
     scan_links,
     validate_alias_required_cols,
 )
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "STRINGDatabase",
@@ -86,7 +91,7 @@ class STRINGDatabase:
         ...     .extract_edges()
         ...     .to_dicts()
         ... )
-        [{'StringIdA': '9606.ENSP0001', 'StringIdB': '9606.ENSP0002', 'Score': 700}]
+        [{'string_id_a': '9606.ENSP0001', 'string_id_b': '9606.ENSP0002', 'combined_score': 700}]
     """
 
     snapshot: _StringSnapshot
@@ -94,8 +99,52 @@ class STRINGDatabase:
     _alias_schema_cached: _StringAliasInfo | None = field(
         default=None, init=False, repr=False
     )
+    _taxa_validated: bool = field(default=False, init=False, repr=False)
 
     DEFAULT_SOURCE_RANK_MAP = DEFAULT_SOURCE_RANK_MAP
+
+    @property
+    def available_resources(self) -> tuple[str, ...]:
+        """Return source roles available on this local snapshot.
+
+        Examples:
+            >>> database.available_resources  # doctest: +SKIP
+            ('aliases', 'links')
+        """
+        resources: list[str] = []
+        if self.snapshot.file_aliases is not None:
+            resources.append("aliases")
+        if self.snapshot.file_links is not None:
+            resources.append("links")
+        return tuple(resources)
+
+    def scan_aliases(self) -> pl.LazyFrame:
+        """Scan the official aliases relation in source column order.
+
+        Examples:
+            >>> database.scan_aliases()  # doctest: +SKIP
+            <LazyFrame ...>
+        """
+        if self.snapshot.file_aliases is None:
+            raise CapabilityError("STRING publication has no aliases resource")
+        return scan_aliases(
+            self.snapshot.file_aliases,
+            version=self.snapshot.parser_version,
+        )
+
+    def scan_links(self) -> pl.LazyFrame:
+        """Scan the official links relation in source column order.
+
+        Examples:
+            >>> database.scan_links()  # doctest: +SKIP
+            <LazyFrame ...>
+        """
+        if self.snapshot.file_links is None:
+            raise CapabilityError("STRING publication has no links resource")
+        return scan_links(
+            self.snapshot.file_links,
+            version=self.snapshot.parser_version,
+        )
 
     @classmethod
     def from_files(
@@ -138,10 +187,10 @@ class STRINGDatabase:
             >>> (
             ...     db.select_ids(["TP53"])
             ...     .extract_string_mapping()
-            ...     .select("InputId", "StringId")
+            ...     .select("input_id", "string_protein_id")
             ...     .to_dicts()
             ... )
-            [{'InputId': 'TP53', 'StringId': '9606.ENSP0001'}]
+            [{'input_id': 'TP53', 'string_protein_id': '9606.ENSP0001', 'alias': 'TP53', 'source': 'UniProt_GN_Name'}]
         """
         if release_version is not None and not str(release_version).strip():
             raise ValueError("STRING release_version must be non-empty")
@@ -154,11 +203,25 @@ class STRINGDatabase:
                 raise FileNotFoundError(
                     f"STRING aliases file not found: {file_aliases}"
                 )
+            if file_aliases.suffix == ".gz":
+                logger.warning(
+                    "STRING aliases input %s is gzip-compressed; repeated scans "
+                    "will re-decompress it. Uncompress long-lived snapshots for "
+                    "better interactive performance.",
+                    file_aliases,
+                )
 
         if file_links is not None:
             file_links = Path(file_links)
             if not file_links.exists():
                 raise FileNotFoundError(f"STRING links file not found: {file_links}")
+            if file_links.suffix == ".gz":
+                logger.warning(
+                    "STRING links input %s is gzip-compressed; repeated scans "
+                    "will re-decompress it. Uncompress long-lived snapshots for "
+                    "better interactive performance.",
+                    file_links,
+                )
 
         return cls(
             snapshot=_StringSnapshot(
@@ -170,7 +233,12 @@ class STRINGDatabase:
             source_rank_map=dict(rank_by_source),
         )
 
-    def select_ids(self, ids: Iterable[str]) -> StringSelection:
+    def select_ids(
+        self,
+        ids: Iterable[str],
+        *,
+        namespace: StringNamespace = "alias",
+    ) -> StringSelection:
         """Create a single-query selection from input IDs.
 
         Input IDs are normalized before selection:
@@ -182,8 +250,8 @@ class STRINGDatabase:
         - duplicates are removed
 
         Args:
-            ids: Input protein, gene, or alias identifiers to resolve
-                against the STRING aliases table.
+            ids: Input protein, gene, or alias identifiers to resolve. With
+                ``namespace='string'``, values are direct STRING protein IDs.
 
         Returns:
             A `StringSelection` in single-query mode. The returned selection
@@ -196,11 +264,13 @@ class STRINGDatabase:
             ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
             ... )
             >>> selection = db.select_ids([" TP53 ", "MISSING"])
-            >>> selection.extract_string_mapping()["InputId"].to_list()
+            >>> selection.extract_string_mapping()["input_id"].to_list()
             ['TP53']
             >>> selection.extract_unmatched_ids().to_dicts()
-            [{'InputId': 'MISSING'}]
+            [{'input_id': 'MISSING'}]
         """
+        if namespace not in ("alias", "string"):
+            raise ValueError(f"Unknown STRING namespace: {namespace!r}")
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
         return StringSelection(
             dataset=self,
@@ -208,11 +278,14 @@ class STRINGDatabase:
             _df_group_membership=None,
             _df_groups=None,
             min_combined_score=0,
+            namespace=namespace,
         )
 
     def select_groups(
         self,
         ids_by_group: Mapping[str, Iterable[str]],
+        *,
+        namespace: StringNamespace = "alias",
     ) -> StringSelection:
         """Create a grouped selection from multiple input-ID sets.
 
@@ -221,7 +294,7 @@ class STRINGDatabase:
         Alias resolution and source ranking run once per globally unique
         normalized ID, then the result is expanded through group membership.
         Edge extraction remains isolated by group. Returned mapping, unmatched,
-        edge, and metric tables carry `GroupId`.
+        edge, and metric tables carry `group_id`.
 
         Args:
             ids_by_group: Mapping from group label to iterable of input
@@ -229,11 +302,11 @@ class STRINGDatabase:
 
         Returns:
             A `StringSelection` in grouped mode. The returned selection emits
-            flat grouped tables with `GroupId` as the leading column.
+            flat grouped tables with `group_id` as the leading column.
 
         Raises:
-            ValueError: If any normalized `GroupId` is empty, if normalized
-                `GroupId` values are duplicated.
+            ValueError: If any normalized `group_id` is empty, if normalized
+                `group_id` values are duplicated.
 
         Examples:
             Keep each mapping in its original comparison:
@@ -244,11 +317,13 @@ class STRINGDatabase:
             >>> (
             ...     db.select_groups({"up": ["TP53"], "down": ["EGFR"]})
             ...     .extract_string_mapping()
-            ...     .select("GroupId", "InputId")
+            ...     .select("group_id", "input_id")
             ...     .to_dicts()
             ... )
-            [{'GroupId': 'down', 'InputId': 'EGFR'}, {'GroupId': 'up', 'InputId': 'TP53'}]
+            [{'group_id': 'down', 'input_id': 'EGFR'}, {'group_id': 'up', 'input_id': 'TP53'}]
         """
+        if namespace not in ("alias", "string"):
+            raise ValueError(f"Unknown STRING namespace: {namespace!r}")
         grp_in_frames = create_group_input_frames(
             ids_by_group,
             schema_groups=SCHEMA_GROUPS,
@@ -260,6 +335,7 @@ class STRINGDatabase:
             _df_input_ids=grp_in_frames.df_input_ids,
             _df_group_membership=grp_in_frames.df_group_membership,
             min_combined_score=0,
+            namespace=namespace,
         )
 
     @property
@@ -305,6 +381,47 @@ class STRINGDatabase:
 
         return self._alias_schema_cached
 
+    def _validate_taxon_compatibility(self) -> None:
+        if (
+            self._taxa_validated
+            or self.snapshot.file_aliases is None
+            or self.snapshot.file_links is None
+        ):
+            return
+        alias_info = self._alias_schema
+        if alias_info is None:
+            return
+        alias_taxa = set(
+            self.scan_aliases()
+            .select(
+                pl.col(alias_info.col_string_id)
+                .str.split(".")
+                .list.first()
+                .alias("taxon")
+            )
+            .drop_nulls()
+            .collect()["taxon"]
+            .to_list()
+        )
+        link_taxa = set(
+            pl.concat(
+                [
+                    self.scan_links().select(pl.col("protein1").alias("protein")),
+                    self.scan_links().select(pl.col("protein2").alias("protein")),
+                ]
+            )
+            .select(pl.col("protein").str.split(".").list.first().alias("taxon"))
+            .drop_nulls()
+            .collect()["taxon"]
+            .to_list()
+        )
+        if alias_taxa and link_taxa and alias_taxa.isdisjoint(link_taxa):
+            raise IntegrityError(
+                "STRING aliases and links resources have incompatible taxon "
+                f"prefixes: aliases={sorted(alias_taxa)}, links={sorted(link_taxa)}"
+            )
+        self._taxa_validated = True
+
 
 @dataclass(slots=True)
 class StringSelection:
@@ -314,9 +431,9 @@ class StringSelection:
     :meth:`STRINGDatabase.select_groups`. Its output schemas depend on mode:
 
     - selections created by :meth:`STRINGDatabase.select_ids` return single-query
-      tables without `GroupId`
+      tables without `group_id`
     - selections created by :meth:`STRINGDatabase.select_groups` return grouped flat
-      tables with leading `GroupId`
+      tables with leading `group_id`
 
     Examples:
         Use a returned selection to resolve an input alias:
@@ -327,16 +444,17 @@ class StringSelection:
         >>> selection = db.select_ids(["TP53"])
         >>> (
         ...     selection.extract_string_mapping()
-        ...     .select("InputId", "StringId")
+        ...     .select("input_id", "string_protein_id")
         ...     .to_dicts()
         ... )
-        [{'InputId': 'TP53', 'StringId': '9606.ENSP0001'}]
+        [{'input_id': 'TP53', 'string_protein_id': '9606.ENSP0001', 'alias': 'TP53', 'source': 'UniProt_GN_Name'}]
     """
 
     dataset: STRINGDatabase
     _df_input_ids: pl.DataFrame = field(repr=False)
     _df_group_membership: pl.DataFrame | None = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
+    namespace: StringNamespace = "alias"
     min_combined_score: int = 0
     _df_protein_map: pl.DataFrame | None = field(default=None, repr=False)
     _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
@@ -345,7 +463,7 @@ class StringSelection:
 
     @property
     def is_grouped(self) -> bool:
-        """Report whether this selection carries `GroupId` through outputs.
+        """Report whether this selection carries `group_id` through outputs.
 
         Returns:
             `True` when the selection was created by :meth:`STRINGDatabase.select_groups`;
@@ -368,12 +486,24 @@ class StringSelection:
             A singleton tuple containing the name of the group ID column when
             `is_grouped` is `True`; otherwise an empty tuple.
         """
-        return ("GroupId",) if self.is_grouped else ()
+        return ("group_id",) if self.is_grouped else ()
 
     @property
     def _schema_string_map_result(self) -> SchemaDict:
         """Return the expected schema for the mapping table output."""
-        return SCHEMA_GROUP_STRING_MAPPING if self.is_grouped else SCHEMA_PROTEIN_MAP
+        if self.dataset._alias_schema is None:  # pyright: ignore[reportPrivateUsage]
+            return (
+                SCHEMA_GROUP_STRING_MAPPING if self.is_grouped else SCHEMA_PROTEIN_MAP
+            )
+        columns = [
+            "input_id",
+            self.dataset._alias_schema.col_string_id,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+            "alias",
+            "source",
+        ]  # pyright: ignore[reportPrivateUsage]
+        if self.is_grouped:
+            columns = ["group_id", *columns]
+        return dict.fromkeys(columns, pl.String)
 
     @property
     def _schema_edges_result(self) -> SchemaDict:
@@ -404,12 +534,12 @@ class StringSelection:
             >>> selection = db.select_ids(["TP53", "EGFR", "CDK2"])
             >>> (
             ...     selection.with_min_combined_score(400)
-            ...     .extract_edges()["Score"]
+            ...     .extract_edges()["combined_score"]
             ...     .sort()
             ...     .to_list()
             ... )
             [450, 700]
-            >>> selection.with_min_combined_score(700).extract_edges()["Score"].to_list()
+            >>> selection.with_min_combined_score(700).extract_edges()["combined_score"].to_list()
             [700]
         """
         return StringSelection(
@@ -417,6 +547,7 @@ class StringSelection:
             _df_input_ids=self._df_input_ids,
             _df_group_membership=self._df_group_membership,
             _df_groups=self._df_groups,
+            namespace=self.namespace,
             min_combined_score=int(min_combined_score),
             _df_protein_map=self._df_protein_map,
             _df_unmapped=self._df_unmapped,
@@ -429,12 +560,14 @@ class StringSelection:
         Returns:
             A materialized table with one of these schemas:
 
-            - single selection: `InputId`, `StringId`, `MapSource`
-            - grouped selection: `GroupId`, `InputId`, `StringId`, `MapSource`
+            - single selection: `input_id`, the official STRING protein ID
+              header, `alias`, `source`
+            - grouped selection: `group_id`, followed by the single-selection
+              columns
 
         Raises:
-            ValueError: If the aliases file is missing required columns for the
-                configured STRING version.
+            CapabilityError: If this is a direct STRING-ID selection or the
+                aliases resource is unavailable.
 
         Examples:
             Resolve a gene name and report the chosen alias source:
@@ -443,10 +576,16 @@ class StringSelection:
             ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
             ... )
             >>> db.select_ids(["TP53"]).extract_string_mapping().to_dicts()
-            [{'InputId': 'TP53', 'StringId': '9606.ENSP0001', 'MapSource': 'UniProt_GN_Name'}]
+            [{'input_id': 'TP53', 'string_protein_id': '9606.ENSP0001', 'alias': 'TP53', 'source': 'UniProt_GN_Name'}]
         """
+        if self.namespace != "alias":
+            raise CapabilityError(
+                "STRING alias mapping requires namespace='alias'; "
+                "direct namespace='string' selections have no aliases relation"
+            )
         if self.dataset._alias_schema is None:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-            raise ValueError("Cannot extract STRING mapping without aliases file")
+            raise CapabilityError("Cannot extract STRING mapping without aliases file")
+        self.dataset._validate_taxon_compatibility()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
 
         if self._df_protein_map is not None:
             return self._df_protein_map
@@ -467,11 +606,23 @@ class StringSelection:
                 source_rank_map=self.dataset.source_rank_map,
                 col_string_id_aliases=self.dataset._alias_schema.col_string_id,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
                 has_source_aliases=self.dataset._alias_schema.has_source,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-                cols_partition=["InputId", "StringId"],
-                cols_sort_prefix=["InputId", "StringId"],
-                cols_select_out=["InputId", "StringId", "MapSource"],
+                cols_partition=["input_id", self.dataset._alias_schema.col_string_id],  # pyright: ignore[reportPrivateUsage]
+                cols_sort_prefix=["input_id", self.dataset._alias_schema.col_string_id],  # pyright: ignore[reportPrivateUsage]
+                cols_select_out=[
+                    "input_id",
+                    self.dataset._alias_schema.col_string_id,  # pyright: ignore[reportPrivateUsage]
+                    "alias",
+                    "source",
+                ],
             )
-            .sort(["InputId", "StringId", "MapSource"])
+            .sort(
+                [
+                    "input_id",
+                    self.dataset._alias_schema.col_string_id,  # pyright: ignore[reportPrivateUsage]
+                    "alias",
+                    "source",
+                ]
+            )
             .collect()
         )
         if self.is_grouped:
@@ -480,11 +631,27 @@ class StringSelection:
             df_protein_map = (
                 self._df_group_membership.join(
                     df_protein_map,
-                    on="InputId",
+                    on="input_id",
                     how="inner",
                 )
-                .select(["GroupId", "InputId", "StringId", "MapSource"])
-                .sort(["GroupId", "InputId", "StringId", "MapSource"])
+                .select(
+                    [
+                        "group_id",
+                        "input_id",
+                        self.dataset._alias_schema.col_string_id,  # pyright: ignore[reportPrivateUsage]
+                        "alias",
+                        "source",
+                    ]
+                )
+                .sort(
+                    [
+                        "group_id",
+                        "input_id",
+                        self.dataset._alias_schema.col_string_id,  # pyright: ignore[reportPrivateUsage]
+                        "alias",
+                        "source",
+                    ]
+                )
             )
         self._df_protein_map = df_protein_map
 
@@ -496,8 +663,8 @@ class StringSelection:
         Returns:
             A materialized table with one of these schemas:
 
-            - single selection: `InputId`
-            - grouped selection: `GroupId`, `InputId`
+            - single selection: `input_id`
+            - grouped selection: `group_id`, `input_id`
 
             Each row represents a normalized input ID that did not resolve
             through the aliases table.
@@ -509,13 +676,30 @@ class StringSelection:
             ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
             ... )
             >>> db.select_ids(["MISSING"]).extract_unmatched_ids().to_dicts()
-            [{'InputId': 'MISSING'}]
+            [{'input_id': 'MISSING'}]
         """
         if self._df_unmapped is None:
-            cols_index = list(self._col_group_id) + ["InputId"]
-            df_mapped_input_ids = (
-                self.extract_string_mapping().select("InputId").unique()
-            )
+            cols_index = list(self._col_group_id) + ["input_id"]
+            if self.namespace == "alias":
+                df_mapped_input_ids = (
+                    self.extract_string_mapping().select("input_id").unique()
+                )
+            else:
+                if self.dataset.snapshot.file_links is None:
+                    raise CapabilityError(
+                        "STRING namespace='string' requires the links resource"
+                    )
+                lf_links = self.dataset.scan_links()
+                df_mapped_input_ids = (
+                    pl.concat(
+                        [
+                            lf_links.select(pl.col("protein1").alias("input_id")),
+                            lf_links.select(pl.col("protein2").alias("input_id")),
+                        ]
+                    )
+                    .collect()
+                    .unique()
+                )
             df_input_rows = self._df_input_ids
             if self.is_grouped:
                 if self._df_group_membership is None:
@@ -526,7 +710,7 @@ class StringSelection:
             self._df_unmapped = (
                 df_input_rows.join(
                     df_mapped_input_ids,
-                    on="InputId",
+                    on="input_id",
                     how="anti",
                 )
                 .select(cols_index)
@@ -541,12 +725,14 @@ class StringSelection:
         Returns:
             A materialized table with one of these schemas:
 
-            - single selection: `StringIdA`, `StringIdB`, `Score`
-            - grouped selection: `GroupId`, `StringIdA`, `StringIdB`, `Score`
+            - single selection: `string_id_a`, `string_id_b`, `combined_score`
+            - grouped selection: `group_id`, followed by the single-selection
+              columns
 
         Raises:
-            ValueError: If the links file is missing required columns for the
-                configured STRING version.
+            CapabilityError: If the links resource is unavailable.
+            IntegrityError: If reverse or duplicate canonical edges disagree on
+                combined score.
 
         Examples:
             Extract the induced edge and its combined score:
@@ -556,10 +742,11 @@ class StringSelection:
             ...     links="fixtures/string/9606.protein.links.v12.0.txt.gz",
             ... )
             >>> db.select_ids(["TP53", "EGFR"]).extract_edges().to_dicts()
-            [{'StringIdA': '9606.ENSP0001', 'StringIdB': '9606.ENSP0002', 'Score': 700}]
+            [{'string_id_a': '9606.ENSP0001', 'string_id_b': '9606.ENSP0002', 'combined_score': 700}]
         """
         if self.dataset.snapshot.file_links is None:
-            raise ValueError("Cannot extract STRING edges without links file")
+            raise CapabilityError("Cannot extract STRING edges without links file")
+        self.dataset._validate_taxon_compatibility()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
         if self._df_edges is not None:
             return self._df_edges
 
@@ -577,32 +764,74 @@ class StringSelection:
             cols_required=SCHEMA_LINKS[version_link].keys(),
             context=f"STRING links file for version {version_link}",
         )
-        self._df_edges = (
-            create_edges_lazy_frame(
-                lf_links=lf_links,
-                lf_string_ids_a=lf_string_ids.rename({"StringId": "StringIdA"}),
-                lf_string_ids_b=lf_string_ids.rename({"StringId": "StringIdB"}),
-                min_combined_score=self.min_combined_score,
-                cols_join_left_a="StringIdA",
-                cols_join_right_a="StringIdA",
-                cols_join_left_b=col_group_id + ["StringIdB"],
-                cols_join_right_b=col_group_id + ["StringIdB"],
-                cols_partition=col_group_id + ["_Lo", "_Hi"],
-                cols_select_out=col_group_id + ["StringIdA", "StringIdB", "Score"],
+        self._df_edges = create_edges_lazy_frame(
+            lf_links=lf_links,
+            lf_string_ids_a=lf_string_ids.rename({"string_id": "_string_id_a"}),
+            lf_string_ids_b=lf_string_ids.rename({"string_id": "_string_id_b"}),
+            min_combined_score=self.min_combined_score,
+            cols_join_left_a="_link_a",
+            cols_join_right_a="_string_id_a",
+            cols_join_left_b=["_link_b", *col_group_id] if col_group_id else "_link_b",
+            cols_join_right_b=["_string_id_b", *col_group_id]
+            if col_group_id
+            else "_string_id_b",
+            cols_partition=col_group_id,
+            cols_select_out=col_group_id
+            + ["string_id_a", "string_id_b", "combined_score"],
+        ).collect()
+
+        conflict_keys = [*col_group_id, "_lo", "_hi"]
+        conflicts = (
+            self._df_edges.group_by(conflict_keys)
+            .agg(pl.col("combined_score").n_unique().alias("score_count"))
+            .filter(pl.col("score_count") > 1)
+        )
+        if conflicts.height:
+            raise IntegrityError(
+                "STRING links contain conflicting combined_score values for "
+                f"canonical edges: {conflicts.select(conflict_keys).to_dicts()}"
             )
-            .sort(col_group_id + ["StringIdA", "StringIdB"])
-            .collect()
+
+        self._df_edges = (
+            self._df_edges.filter(
+                pl.col("combined_score").ge(int(self.min_combined_score))
+            )
+            .group_by(conflict_keys)
+            .agg(pl.col("combined_score").first().cast(pl.Int64))
+            .rename({"_lo": "string_id_a", "_hi": "string_id_b"})
+            .select(self._schema_edges_result.keys())
+            .sort(col_group_id + ["string_id_a", "string_id_b"])
         )
 
         return self._df_edges
 
     def _extract_string_ids(self) -> pl.DataFrame:
-        cols_select = list(self._col_group_id) + ["StringId"]
         if self._df_string_ids is None:
-            self._df_string_ids = (
-                self.extract_string_mapping()
-                .select(cols_select)
-                .unique()
-                .sort(cols_select)
-            )
+            if self.namespace == "string":
+                if self.is_grouped:
+                    if self._df_group_membership is None:
+                        raise RuntimeError(
+                            "Grouped STRING selection lacks group membership"
+                        )
+                    self._df_string_ids = self._df_group_membership.rename(
+                        {"input_id": "string_id"}
+                    )
+                else:
+                    self._df_string_ids = self._df_input_ids.rename(
+                        {"input_id": "string_id"}
+                    )
+            else:
+                if self.dataset._alias_schema is None:  # pyright: ignore[reportPrivateUsage]
+                    raise CapabilityError(
+                        "STRING alias namespace requires the aliases resource"
+                    )
+                id_column = self.dataset._alias_schema.col_string_id  # pyright: ignore[reportPrivateUsage]
+                cols_select = [*self._col_group_id, id_column]
+                self._df_string_ids = (
+                    self.extract_string_mapping()
+                    .select(cols_select)
+                    .rename({id_column: "string_id"})
+                    .unique()
+                    .sort([*self._col_group_id, "string_id"])
+                )
         return self._df_string_ids

@@ -163,17 +163,17 @@ def extract_mapping_frame(
     validate_namespace(namespace)
     col_join = column_by_namespace(namespace)
     cols_group = list(cols_group_id)
-    cols_out = cols_group + ["InputId", "InputNamespace"] + COLS_MAPPING
+    cols_out = cols_group + ["input_id", "input_namespace"] + COLS_MAPPING
     return (
         df_input_ids.join(
             df_mapping,
-            left_on="InputId",
+            left_on="input_id",
             right_on=col_join,
             how="inner",
         )
         .with_columns(
-            pl.col("InputId").alias(col_join),
-            pl.lit(namespace).alias("InputNamespace"),
+            pl.col("input_id").alias(col_join),
+            pl.lit(namespace).alias("input_namespace"),
         )
         .select(cols_out)
         .unique()
@@ -187,7 +187,7 @@ def extract_unmatched_ids_frame(
     *,
     cols_group_id: tuple[str, ...],
 ) -> pl.DataFrame:
-    cols_index = list(cols_group_id) + ["InputId"]
+    cols_index = list(cols_group_id) + ["input_id"]
     df_mapped_input_ids = df_mapping.select(cols_index).unique().sort(cols_index)
     return (
         df_input_ids.join(df_mapped_input_ids, on=cols_index, how="anti")

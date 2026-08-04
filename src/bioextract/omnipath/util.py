@@ -6,8 +6,6 @@ import polars.selectors as pl_sel
 from bioextract._shared import validate_required_cols
 
 from .constant import (
-    COLS_RENAMED_ENZSUB,
-    COLS_RENAMED_INTERACTIONS,
     SCHEMA_ENZSUB,
     SCHEMA_ENZSUB_RAW,
     SCHEMA_GROUP_ENZSUB,
@@ -52,22 +50,22 @@ def scan_interactions(file_interactions: Path) -> pl.LazyFrame:
 
 def _create_enzsub_base_lazy_frame(lf_enzsub: pl.LazyFrame) -> pl.LazyFrame:
     return (
-        lf_enzsub.select(
-            pl_sel.by_name(COLS_RENAMED_ENZSUB)
-            .cast(pl.String)
-            .str.strip_chars()
+        lf_enzsub.select(pl_sel.by_name(SCHEMA_ENZSUB_RAW).cast(pl.String).name.keep())
+        .with_columns(
+            pl.col("enzyme").str.strip_chars().replace("", None).alias("_enzyme"),
+            pl.col("substrate").str.strip_chars().replace("", None).alias("_substrate"),
+            pl.concat_str(
+                [
+                    pl.col("residue_type").str.strip_chars(),
+                    pl.col("residue_offset").str.strip_chars(),
+                ],
+                separator="",
+                ignore_nulls=True,
+            )
             .replace("", None)
+            .alias("target_site"),
         )
-        .with_columns(
-            pl.col("residue_type").str.to_uppercase(),
-            pl.col("modification").str.to_lowercase(),
-        )
-        .rename(COLS_RENAMED_ENZSUB)
-        .drop_nulls(["SourceId", "TargetId", "_ResidueType", "_ResidueOffset"])
-        .with_columns(
-            pl.concat_str(["_ResidueType", "_ResidueOffset"]).alias("TargetSite")
-        )
-        .drop(["_ResidueType", "_ResidueOffset"])
+        .drop_nulls(["_enzyme", "_substrate"])
     )
 
 
@@ -75,11 +73,7 @@ def _create_interactions_base_lazy_frame(lf_interactions: pl.LazyFrame) -> pl.La
     return (
         lf_interactions.select(
             [
-                pl_sel.by_name("source", "target")
-                .cast(pl.String)
-                .str.strip_chars()
-                .replace("", None)
-                .name.keep(),
+                pl_sel.by_name("source", "target").cast(pl.String).name.keep(),
                 _normalize_bool_expr(
                     "is_directed",
                     "is_stimulation",
@@ -87,8 +81,11 @@ def _create_interactions_base_lazy_frame(lf_interactions: pl.LazyFrame) -> pl.La
                 ),
             ]
         )
-        .rename(COLS_RENAMED_INTERACTIONS)
-        .drop_nulls(["SourceId", "TargetId"])
+        .with_columns(
+            pl.col("source").str.strip_chars().replace("", None).alias("_source"),
+            pl.col("target").str.strip_chars().replace("", None).alias("_target"),
+        )
+        .drop_nulls(["_source", "_target"])
     )
 
 
@@ -114,32 +111,6 @@ def _create_validated_interactions_base_lazy_frame(
     return _create_interactions_base_lazy_frame(lf_interactions)
 
 
-def _has_any_rows(lf: pl.LazyFrame) -> bool:
-    return lf.limit(1).collect().height > 0
-
-
-def has_any_enzsub_relation(*, file_enzsub: Path) -> bool:
-    return _has_any_rows(_create_validated_enzsub_base_lazy_frame(file_enzsub))
-
-
-def has_any_interaction_relation(*, file_interactions: Path) -> bool:
-    return _has_any_rows(
-        _create_validated_interactions_base_lazy_frame(file_interactions)
-    )
-
-
-def has_any_enzsub_modification(*, file_enzsub: Path, modification: str) -> bool:
-    modification_normalized = str(modification).strip().lower()
-    if not modification_normalized:
-        raise ValueError("Modification must be a non-empty string after normalization")
-
-    return _has_any_rows(
-        _create_validated_enzsub_base_lazy_frame(file_enzsub).filter(
-            pl.col("Modification").eq(modification_normalized)
-        )
-    )
-
-
 def _concat_matched_frames(
     *,
     lf_left: pl.LazyFrame,
@@ -149,14 +120,14 @@ def _concat_matched_frames(
 ) -> pl.DataFrame:
     lf_matched = (
         pl.concat([lf_left, lf_right], how="vertical_relaxed")
-        .unique(subset=["InputId", *relation_columns])
-        .select(["InputId", *relation_columns])
+        .unique(subset=["input_id", *relation_columns])
+        .select(["input_id", *relation_columns])
     )
     if df_group_membership is not None:
-        columns_out = ["GroupId", *relation_columns]
+        columns_out = ["group_id", *relation_columns]
         return (
             df_group_membership.lazy()
-            .join(lf_matched, on="InputId", how="inner")
+            .join(lf_matched, on="input_id", how="inner")
             .select(columns_out)
             .unique(subset=columns_out)
             .sort(columns_out)
@@ -187,16 +158,16 @@ def extract_enzsub_frame(
     lf_input_ids = df_input_ids.lazy()
 
     lf_source = lf_base.join(
-        lf_input_ids.rename({"InputId": "SourceId"}),
-        on="SourceId",
+        lf_input_ids.rename({"input_id": "_enzyme"}),
+        on="_enzyme",
         how="inner",
-    ).with_columns(pl.col("SourceId").alias("InputId"))
+    ).with_columns(pl.col("_enzyme").alias("input_id"))
     lf_target = lf_base.join(
-        lf_input_ids.rename({"InputId": "TargetId"}),
-        on="TargetId",
+        lf_input_ids.rename({"input_id": "_substrate"}),
+        on="_substrate",
         how="inner",
-    ).with_columns(pl.col("TargetId").alias("InputId"))
-    relation_columns = ["SourceId", "TargetId", "TargetSite", "Modification"]
+    ).with_columns(pl.col("_substrate").alias("input_id"))
+    relation_columns = list(SCHEMA_ENZSUB)
     return _concat_matched_frames(
         lf_left=lf_source,
         lf_right=lf_target,
@@ -222,22 +193,16 @@ def extract_interactions_frame(
     lf_input_ids = df_input_ids.lazy()
 
     lf_source = lf_base.join(
-        lf_input_ids.rename({"InputId": "SourceId"}),
-        on="SourceId",
+        lf_input_ids.rename({"input_id": "_source"}),
+        on="_source",
         how="inner",
-    ).with_columns(pl.col("SourceId").alias("InputId"))
+    ).with_columns(pl.col("_source").alias("input_id"))
     lf_target = lf_base.join(
-        lf_input_ids.rename({"InputId": "TargetId"}),
-        on="TargetId",
+        lf_input_ids.rename({"input_id": "_target"}),
+        on="_target",
         how="inner",
-    ).with_columns(pl.col("TargetId").alias("InputId"))
-    relation_columns = [
-        "SourceId",
-        "TargetId",
-        "IsDirected",
-        "IsStimulation",
-        "IsInhibition",
-    ]
+    ).with_columns(pl.col("_target").alias("input_id"))
+    relation_columns = list(SCHEMA_INTERACTIONS)
     return _concat_matched_frames(
         lf_left=lf_source,
         lf_right=lf_target,

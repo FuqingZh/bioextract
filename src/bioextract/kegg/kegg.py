@@ -521,9 +521,9 @@ class KEGGDatabase:
             ...     ["sp|P12345|GENE1_HUMAN"], namespace="uniprot"
             ... )
             >>> selection.extract_mapping().select(
-            ...     "InputId", "KeggGeneId"
+            ...     "input_id", "KeggGeneId"
             ... ).unique().to_dicts()
-            [{'InputId': 'P12345', 'KeggGeneId': 'hsa:1'}]
+            [{'input_id': 'P12345', 'KeggGeneId': 'hsa:1'}]
         """
         if self.snapshot.kind == _KeggSnapshotKind.METABOLIC_PUBLICATION:
             publication = self._require_metabolic_publication()
@@ -584,7 +584,7 @@ class KEGGDatabase:
                 independently within every group.
 
         Returns:
-            A selection whose matched and unmapped outputs retain ``GroupId``.
+            A selection whose matched and unmapped outputs retain ``group_id``.
 
         Raises:
             ValueError: If this is a BRITE snapshot, the namespace or a group
@@ -603,9 +603,9 @@ class KEGGDatabase:
             ...     {"up": ["P12345"]}, namespace="uniprot"
             ... )
             >>> selection.extract_mapping().select(
-            ...     "GroupId", "InputId"
+            ...     "group_id", "input_id"
             ... ).unique().to_dicts()
-            [{'GroupId': 'up', 'InputId': 'P12345'}]
+            [{'group_id': 'up', 'input_id': 'P12345'}]
         """
         if self.snapshot.kind == _KeggSnapshotKind.METABOLIC_PUBLICATION:
             publication = self._require_metabolic_publication()
@@ -831,8 +831,8 @@ class KeggSelection:
 
     Selections are created by :meth:`KEGGDatabase.select_ids` or
     :meth:`KEGGDatabase.select_groups`. Matched output retains the normalized
-    ``InputId`` and its ``InputNamespace``; grouped selections additionally prepend
-    ``GroupId``.
+    ``input_id`` and its ``input_namespace``; grouped selections additionally prepend
+    ``group_id``.
 
     Examples:
         Materialize matched rows and report IDs that did not map:
@@ -849,7 +849,7 @@ class KeggSelection:
         >>> selection.extract_mapping()["KeggGeneId"].unique().to_list()
         ['hsa:1']
         >>> selection.extract_unmatched_ids().to_dicts()
-        [{'InputId': 'MISSING'}]
+        [{'input_id': 'MISSING'}]
     """
 
     dataset: KEGGDatabase
@@ -862,7 +862,7 @@ class KeggSelection:
 
     @property
     def is_grouped(self) -> bool:
-        """Report whether this selection carries `GroupId` through outputs.
+        """Report whether this selection carries `group_id` through outputs.
 
         Examples:
             Inspect a grouped selection:
@@ -905,11 +905,11 @@ class KeggSelection:
                 cols_group_id=(),
             )
             if self._df_group_membership is not None:
-                columns = ["GroupId", *mapping.columns]
+                columns = ["group_id", *mapping.columns]
                 mapping = (
                     self._df_group_membership.join(
                         mapping,
-                        on="InputId",
+                        on="input_id",
                         how="inner",
                     )
                     .select(columns)
@@ -923,7 +923,7 @@ class KeggSelection:
         """Extract normalized input IDs with no KEGG mapping row.
 
         Grouped selections report an ID as unmapped independently within each
-        group and include ``GroupId`` in the result.
+        group and include ``group_id`` in the result.
 
         Examples:
             Retain a normalized input accession that did not map:
@@ -938,7 +938,7 @@ class KeggSelection:
             ...     ["P12345", "MISSING"], namespace="uniprot"
             ... )
             >>> selection.extract_unmatched_ids().to_dicts()
-            [{'InputId': 'MISSING'}]
+            [{'input_id': 'MISSING'}]
         """
         if self._df_unmapped is None:
             mapping = self.extract_mapping()
@@ -949,15 +949,15 @@ class KeggSelection:
                     cols_group_id=(),
                 )
             else:
-                mapped_input_ids = mapping.select("InputId").unique()
+                mapped_input_ids = mapping.select("input_id").unique()
                 self._df_unmapped = (
                     self._df_group_membership.join(
                         mapped_input_ids,
-                        on="InputId",
+                        on="input_id",
                         how="anti",
                     )
-                    .select("GroupId", "InputId")
-                    .sort("GroupId", "InputId")
+                    .select("group_id", "input_id")
+                    .sort("group_id", "input_id")
                 )
         return self._df_unmapped
 

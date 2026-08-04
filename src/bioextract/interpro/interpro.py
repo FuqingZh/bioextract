@@ -210,8 +210,8 @@ class InterProDatabase:
             ids: UniProt accessions. Empty values are discarded and duplicate
                 normalized IDs collapse to one input row.
         Returns:
-            A selection handle whose mapping output includes `InputId` and
-            `InputNamespace` provenance columns.
+            A selection handle whose mapping output includes `input_id` and
+            `input_namespace` provenance columns.
 
         Examples:
             Normalize a UniProt entry label before selecting its mapping rows:
@@ -221,7 +221,7 @@ class InterProDatabase:
             ... )
             >>> selection = db.select_ids(["sp|P12345|TEST_HUMAN"])
             >>> selection.extract_mapping().select(
-            ...     "InputId", "InterProId", "MemberDbId"
+            ...     "input_id", "InterProId", "MemberDbId"
             ... ).rows()
             [('P12345', 'IPR000001', 'PF00051'), ('P12345', 'IPR000001', 'SM00130')]
         """
@@ -244,7 +244,7 @@ class InterProDatabase:
                 accessions.
         Returns:
             A selection handle whose mapping and unmapped outputs retain
-            `GroupId`.
+            `group_id`.
 
         Raises:
             ValueError: If group IDs are invalid.
@@ -259,8 +259,8 @@ class InterProDatabase:
             ...     {"up": ["P12345"], "down": ["Q9Y243"]},
             ... )
             >>> selection.extract_mapping().select(
-            ...     "GroupId", "UniProtId"
-            ... ).unique().sort("GroupId").rows()
+            ...     "group_id", "UniProtId"
+            ... ).unique().sort("group_id").rows()
             [('down', 'Q9Y243'), ('up', 'P12345')]
         """
         grp_in_frames = create_group_input_frames(
@@ -559,7 +559,7 @@ class InterProSelection:
 
     @property
     def is_grouped(self) -> bool:
-        """Report whether this selection carries `GroupId` through outputs.
+        """Report whether this selection carries `group_id` through outputs.
 
         Examples:
             >>> db = InterProDatabase.from_mapping_files(
@@ -576,8 +576,8 @@ class InterProSelection:
         """Extract mapping rows for the normalized selection.
 
         Returns:
-            A frame prefixed by `InputId` and `InputNamespace`; grouped selections
-            additionally begin with `GroupId`. Member and positional rows stay
+            A frame prefixed by `input_id` and `input_namespace`; grouped selections
+            additionally begin with `group_id`. Member and positional rows stay
             expanded.
 
         Examples:
@@ -588,7 +588,7 @@ class InterProSelection:
             ... )
             >>> selection = db.select_ids(["P12345"])
             >>> selection.extract_mapping().select(
-            ...     "InputId", "MemberDbId"
+            ...     "input_id", "MemberDbId"
             ... ).rows()
             [('P12345', 'PF00051'), ('P12345', 'SM00130')]
         """
@@ -599,7 +599,7 @@ class InterProSelection:
                     with self.dataset.connect() as connection:
                         connection.execute(
                             "CREATE TEMP TABLE _interpro_input_id("
-                            "InputId VARCHAR PRIMARY KEY)"
+                            "input_id VARCHAR PRIMARY KEY)"
                         )
                         connection.executemany(
                             "INSERT INTO _interpro_input_id VALUES (?)",
@@ -608,7 +608,7 @@ class InterProSelection:
                         rows = connection.execute(
                             "SELECT mapping.* FROM mapping INNER JOIN "
                             "_interpro_input_id AS input "
-                            'ON mapping.uniprot_id=input."InputId"'
+                            'ON mapping.uniprot_id=input."input_id"'
                         ).fetchall()
                     selected_mapping = (
                         (
@@ -625,10 +625,10 @@ class InterProSelection:
                 if self._df_group_membership is None:
                     self._df_mapping = selected
                 else:
-                    columns = ["GroupId", *selected.columns]
+                    columns = ["group_id", *selected.columns]
                     self._df_mapping = (
                         self._df_group_membership.join(
-                            selected, on="InputId", how="inner"
+                            selected, on="input_id", how="inner"
                         )
                         .select(columns)
                         .unique()
@@ -651,7 +651,7 @@ class InterProSelection:
         """Extract normalized input IDs with no InterPro mapping row.
 
         Returns:
-            `InputId` for a single selection, or `GroupId, InputId` for a
+            `input_id` for a single selection, or `group_id, input_id` for a
             grouped selection.
 
         Examples:
@@ -662,7 +662,7 @@ class InterProSelection:
             ... )
             >>> selection = db.select_ids(["MISSING"])
             >>> selection.extract_unmatched_ids().to_dicts()
-            [{'InputId': 'MISSING'}]
+            [{'input_id': 'MISSING'}]
         """
         if self._df_unmapped is None:
             self._df_unmapped = extract_unmatched_ids_frame(

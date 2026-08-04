@@ -172,7 +172,7 @@ Url
 `extract_mapping()` returns:
 
 ```text
-InputId
+input_id
 GeneId
 WikiPathwaysId
 PathwayName
@@ -180,7 +180,7 @@ Species
 Url
 ```
 
-Grouped mapping prepends `GroupId`.
+Grouped mapping prepends `group_id`.
 
 ## Publication
 

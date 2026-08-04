@@ -60,7 +60,7 @@ df_selected = selection.extract_mapping()
 df_unmapped = selection.extract_unmatched_ids()
 ```
 
-Grouped selections prepend `GroupId` in the same style as other resource DBs.
+Grouped selections prepend `group_id` in the same style as other resource DBs.
 The namespace is fixed to `eggnog_protein`.
 
 Plain SQLite is queried directly and emits no warning. A gzip-wrapped source
@@ -108,20 +108,20 @@ eggnog_protein
 Single selection output prepends:
 
 ```text
-InputId
-InputNamespace
+input_id
+input_namespace
 ```
 
 Grouped selection output prepends:
 
 ```text
-GroupId
-InputId
-InputNamespace
+group_id
+input_id
+input_namespace
 ```
 
-`extract_unmatched_ids()` returns `InputId` for single selection and
-`GroupId, InputId` for grouped selection.
+`extract_unmatched_ids()` returns `input_id` for single selection and
+`group_id, input_id` for grouped selection.
 
 ## Real Snapshot Status
 

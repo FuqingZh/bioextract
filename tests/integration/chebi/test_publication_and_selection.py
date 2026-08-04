@@ -215,10 +215,10 @@ def test_domain_selection_supports_shared_ids_namespaces_and_relations(
         namespace="chebi",
     )
     assert selection.extract_ancestors().select(
-        "GroupId", "ChEBIId", "AncestorChEBIId"
+        "group_id", "ChEBIId", "AncestorChEBIId"
     ).to_dicts() == [
         {
-            "GroupId": "first",
+            "group_id": "first",
             "ChEBIId": "CHEBI:1",
             "AncestorChEBIId": "CHEBI:2",
         }
@@ -275,18 +275,18 @@ def test_grouped_selection_resolves_unique_ids_once_and_reuses_candidates(
         "second",
     )
     assert selection.extract_matches().select(
-        "GroupId", "InputId", "ChEBIId"
+        "group_id", "input_id", "ChEBIId"
     ).to_dicts() == [
-        {"GroupId": "first", "InputId": "CHEBI:1", "ChEBIId": "CHEBI:1"},
-        {"GroupId": "second", "InputId": "CHEBI:1", "ChEBIId": "CHEBI:1"},
+        {"group_id": "first", "input_id": "CHEBI:1", "ChEBIId": "CHEBI:1"},
+        {"group_id": "second", "input_id": "CHEBI:1", "ChEBIId": "CHEBI:1"},
     ]
     selection.extract_compounds()
     selection.extract_matches()
     assert selection.extract_unmatched_ids().select(
-        "GroupId", "InputId", "Reason"
+        "group_id", "input_id", "reason"
     ).to_dicts() == [
-        {"GroupId": "first", "InputId": "CHEBI:404", "Reason": "not_found"},
-        {"GroupId": "second", "InputId": "CHEBI:404", "Reason": "not_found"},
+        {"group_id": "first", "input_id": "CHEBI:404", "reason": "not_found"},
+        {"group_id": "second", "input_id": "CHEBI:404", "reason": "not_found"},
     ]
     selection.extract_unmatched_ids()
     assert input_table_calls == [
@@ -312,29 +312,29 @@ def test_unmatched_reason_precedence_and_dynamic_namespace_error(
             min_star_rating=2,
         )
         .extract_unmatched_ids()
-        .sort("InputId")
+        .sort("input_id")
         .to_dicts()
     )
     assert reasons == [
         {
-            "InputId": "CHEBI:3",
-            "InputNamespace": "chebi",
-            "Reason": "obsolete_excluded",
+            "input_id": "CHEBI:3",
+            "input_namespace": "chebi",
+            "reason": "obsolete_excluded",
         },
         {
-            "InputId": "CHEBI:4",
-            "InputNamespace": "chebi",
-            "Reason": "below_min_star_rating",
+            "input_id": "CHEBI:4",
+            "input_namespace": "chebi",
+            "reason": "below_min_star_rating",
         },
         {
-            "InputId": "CHEBI:404",
-            "InputNamespace": "chebi",
-            "Reason": "not_found",
+            "input_id": "CHEBI:404",
+            "input_namespace": "chebi",
+            "reason": "not_found",
         },
         {
-            "InputId": "CHEBI:999",
-            "InputNamespace": "chebi",
-            "Reason": "invalid_canonical_target",
+            "input_id": "CHEBI:999",
+            "input_namespace": "chebi",
+            "reason": "invalid_canonical_target",
         },
     ]
     with pytest.raises(ValueError, match=r"available:.*kegg\.compound"):

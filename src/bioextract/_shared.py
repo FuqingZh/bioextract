@@ -53,10 +53,10 @@ def validate_group_ids(group_ids: list[str]) -> None:
     group_ids_seen: set[str] = set()
     for group_id in group_ids:
         if not group_id:
-            raise ValueError("GroupId must be a non-empty string after normalization")
+            raise ValueError("group_id must be a non-empty string after normalization")
         if group_id in group_ids_seen:
             raise ValueError(
-                f"GroupId values must be unique after normalization: {group_id!r}"
+                f"group_id values must be unique after normalization: {group_id!r}"
             )
         group_ids_seen.add(group_id)
 
@@ -81,10 +81,10 @@ def create_input_id_frame(
 
     Args:
         input_ids: Raw identifiers to normalize.
-        schema_unmapped: Output schema containing the `InputId` column.
+        schema_unmapped: Output schema containing the `input_id` column.
 
     Returns:
-        A table of non-empty, unique normalized IDs sorted by `InputId`.
+        A table of non-empty, unique normalized IDs sorted by `input_id`.
     """
     ids_normalized: list[str] = []
     for input_id in input_ids:
@@ -95,9 +95,9 @@ def create_input_id_frame(
         return pl.DataFrame(schema=schema_unmapped)
 
     return (
-        pl.DataFrame({"InputId": ids_normalized}, schema=schema_unmapped)
-        .unique(subset=["InputId"])
-        .sort("InputId")
+        pl.DataFrame({"input_id": ids_normalized}, schema=schema_unmapped)
+        .unique(subset=["input_id"])
+        .sort("input_id")
     )
 
 
@@ -116,9 +116,9 @@ def create_group_input_frames(
 
     Args:
         ids_by_group: Mapping of raw group labels to raw identifiers.
-        schema_groups: Output schema containing `GroupId`.
-        schema_group_input_ids: Output schema containing `GroupId` and
-            `InputId`.
+        schema_groups: Output schema containing `group_id`.
+        schema_group_input_ids: Output schema containing `group_id` and
+            `input_id`.
 
     Returns:
         Sorted group-registry, group-membership, and unique-input tables.
@@ -142,9 +142,9 @@ def create_group_input_frames(
 
     if group_ids_normalized:
         df_groups = pl.DataFrame(
-            {"GroupId": group_ids_normalized},
+            {"group_id": group_ids_normalized},
             schema=schema_groups,
-        ).sort("GroupId")
+        ).sort("group_id")
     else:
         df_groups = pl.DataFrame(schema=schema_groups)
 
@@ -153,18 +153,18 @@ def create_group_input_frames(
         return GroupInputFrames(
             df_groups=df_groups,
             df_group_membership=df_group_membership,
-            df_input_ids=df_group_membership.select("InputId"),
+            df_input_ids=df_group_membership.select("input_id"),
         )
 
     df_group_membership = (
         pl.DataFrame(
-            {"GroupId": group_ids_col, "InputId": input_ids_col},
+            {"group_id": group_ids_col, "input_id": input_ids_col},
             schema=schema_group_input_ids,
         )
         .unique()
-        .sort("GroupId", "InputId")
+        .sort("group_id", "input_id")
     )
-    df_input_ids = df_group_membership.select("InputId").unique().sort("InputId")
+    df_input_ids = df_group_membership.select("input_id").unique().sort("input_id")
     return GroupInputFrames(
         df_groups=df_groups,
         df_group_membership=df_group_membership,

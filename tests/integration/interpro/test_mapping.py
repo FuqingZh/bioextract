@@ -118,28 +118,28 @@ def test_select_ids_streams_subset_and_reports_unmapped(tmp_path: Path) -> None:
     )
 
     assert selection.extract_mapping().select(
-        "InputId",
-        "InputNamespace",
+        "input_id",
+        "input_namespace",
         "UniProtId",
         "InterProId",
         "MemberDb",
     ).to_dicts() == [
         {
-            "InputId": "P12345",
-            "InputNamespace": "uniprot",
+            "input_id": "P12345",
+            "input_namespace": "uniprot",
             "UniProtId": "P12345",
             "InterProId": "IPR000001",
             "MemberDb": "PFAM",
         },
         {
-            "InputId": "P12345",
-            "InputNamespace": "uniprot",
+            "input_id": "P12345",
+            "input_namespace": "uniprot",
             "UniProtId": "P12345",
             "InterProId": "IPR000001",
             "MemberDb": "SMART",
         },
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [{"InputId": "MISSING"}]
+    assert selection.extract_unmatched_ids().to_dicts() == [{"input_id": "MISSING"}]
 
 
 def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
@@ -156,18 +156,18 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     df_mapping = grouped.extract_mapping()
     assert grouped.extract_mapping() is df_mapping
     assert df_mapping.columns[:3] == [
-        "GroupId",
-        "InputId",
-        "InputNamespace",
+        "group_id",
+        "input_id",
+        "input_namespace",
     ]
-    assert df_mapping.select("GroupId", "MemberDb").to_dicts() == [
-        {"GroupId": "down", "MemberDb": "PFAM"},
-        {"GroupId": "down", "MemberDb": "SMART"},
-        {"GroupId": "up", "MemberDb": "PFAM"},
-        {"GroupId": "up", "MemberDb": "SMART"},
+    assert df_mapping.select("group_id", "MemberDb").to_dicts() == [
+        {"group_id": "down", "MemberDb": "PFAM"},
+        {"group_id": "down", "MemberDb": "SMART"},
+        {"group_id": "up", "MemberDb": "PFAM"},
+        {"group_id": "up", "MemberDb": "SMART"},
     ]
     assert grouped.extract_unmatched_ids().to_dicts() == [
-        {"GroupId": "down", "InputId": "MISSING"}
+        {"group_id": "down", "input_id": "MISSING"}
     ]
 
 
@@ -187,7 +187,7 @@ def test_mapping_only_duckdb_round_trip_preserves_domain_selection(
     assert result.tables == ("mapping",)
     selection = reopened.select_ids(["P12345", "MISSING"])
     assert selection.extract_mapping().height == 2
-    assert selection.extract_unmatched_ids().to_dicts() == [{"InputId": "MISSING"}]
+    assert selection.extract_unmatched_ids().to_dicts() == [{"input_id": "MISSING"}]
 
 
 @pytest.mark.parametrize(

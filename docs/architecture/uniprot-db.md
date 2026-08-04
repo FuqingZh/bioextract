@@ -85,7 +85,7 @@ unique `Alternative` owner product.
 ## Selection And Extractor Schemas
 
 Every matched extractor begins with the stable selection prefix
-`GroupId, InputId, InputNamespace, UniProtId`, then adds:
+`group_id, input_id, input_namespace, UniProtId`, then adds:
 
 | Extractor | Stable additional columns |
 | --- | --- |
@@ -106,7 +106,7 @@ Every matched extractor begins with the stable selection prefix
 | `extract_isoform_variations` | `IsoformId, VariationId, VariationOrder` |
 
 `extract_unmatched_ids()` instead returns
-`GroupId, InputId, InputNamespace, Reason`. Empty selections preserve the
+`group_id, input_id, input_namespace, reason`. Empty selections preserve the
 corresponding schema, and every extractor has an explicit domain order after
 the stable selection prefix.
 

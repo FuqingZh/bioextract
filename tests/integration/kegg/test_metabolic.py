@@ -142,7 +142,7 @@ def test_read_only_open_selection_and_extractors(tmp_path: Path) -> None:
         "map00010"
     ]
     assert selection.extract_unmatched_ids().to_dicts() == [
-        {"InputId": "CHEBI:999", "Reason": "not_found"}
+        {"input_id": "CHEBI:999", "reason": "not_found"}
     ]
     with db.connect() as con, pytest.raises(duckdb.InvalidInputException):
         con.execute("CREATE TABLE forbidden(i INTEGER)")
@@ -155,7 +155,7 @@ def test_grouped_selection_and_exact_module_evaluation(tmp_path: Path) -> None:
         {"compound": ["C00002"], "reaction": ["C00001"]},
         namespace="kegg_compound",
     )
-    assert set(grouped.extract_reactions()["GroupId"]) == {"compound", "reaction"}
+    assert set(grouped.extract_reactions()["group_id"]) == {"compound", "reaction"}
     complete = db.evaluate_modules(["K00001", "K00003"])
     assert complete.to_dicts() == [
         {
@@ -206,14 +206,14 @@ def test_grouped_selection_resolves_unique_ids_once_then_expands(
         ("second", "C00001"),
         ("second", "C99999"),
     )
-    assert selection.extract_matches().select("GroupId", "InputId").to_dicts() == [
-        {"GroupId": "first", "InputId": "C00001"},
-        {"GroupId": "second", "InputId": "C00001"},
+    assert selection.extract_matches().select("group_id", "input_id").to_dicts() == [
+        {"group_id": "first", "input_id": "C00001"},
+        {"group_id": "second", "input_id": "C00001"},
     ]
     assert selection.extract_unmatched_ids().to_dicts() == [
-        {"GroupId": "second", "InputId": "C99999", "Reason": "not_found"}
+        {"group_id": "second", "input_id": "C99999", "reason": "not_found"}
     ]
-    assert set(selection.extract_reactions()["GroupId"]) == {"first", "second"}
+    assert set(selection.extract_reactions()["group_id"]) == {"first", "second"}
 
     empty_selection = db.select_groups(
         {"empty": [" "]},
@@ -221,8 +221,8 @@ def test_grouped_selection_resolves_unique_ids_once_then_expands(
     )
     assert empty_selection.is_grouped
     assert empty_selection.group_ids == ("empty",)
-    assert empty_selection.extract_matches().columns[0] == "GroupId"
-    assert empty_selection.extract_unmatched_ids().columns[0] == "GroupId"
+    assert empty_selection.extract_matches().columns[0] == "group_id"
+    assert empty_selection.extract_unmatched_ids().columns[0] == "group_id"
     assert calls == [("C00001", "C99999")]
 
 
@@ -303,12 +303,12 @@ def test_all_metabolic_namespaces_and_curie_cross_references(
 def test_ec_replacement_and_obsolete_reason_precedence(tmp_path: Path) -> None:
     db, _ = publish(tmp_path)
     replacement = db.select_ids(["9.9.9.9"], namespace="ec")
-    assert replacement.extract_matches().select("EntityId", "MatchType").to_dicts() == [
-        {"EntityId": "3.6.1.3", "MatchType": "replacement"}
-    ]
+    assert replacement.extract_matches().select(
+        "EntityId", "match_type"
+    ).to_dicts() == [{"EntityId": "3.6.1.3", "match_type": "replacement"}]
     missing = db.select_ids(["8.8.8.8"], namespace="ec")
     assert missing.extract_unmatched_ids().to_dicts() == [
-        {"InputId": "8.8.8.8", "Reason": "not_found"}
+        {"input_id": "8.8.8.8", "reason": "not_found"}
     ]
 
 
@@ -341,22 +341,22 @@ NAME        Transferred to 1.1.1.999
     db = KEGGDatabase.from_duckdb(path)
 
     assert db.select_ids(["1.1.1.1"], namespace="ec").extract_matches().select(
-        "EntityId", "MatchType"
-    ).to_dicts() == [{"EntityId": "1.1.1.3", "MatchType": "replacement"}]
+        "EntityId", "match_type"
+    ).to_dicts() == [{"EntityId": "1.1.1.3", "match_type": "replacement"}]
     assert db.select_ids(
         ["1.1.1.4"], namespace="ec"
     ).extract_unmatched_ids().to_dicts() == [
-        {"InputId": "1.1.1.4", "Reason": "obsolete_excluded"}
+        {"input_id": "1.1.1.4", "reason": "obsolete_excluded"}
     ]
     assert db.select_ids(
         ["1.1.1.5"], namespace="ec"
     ).extract_unmatched_ids().to_dicts() == [
-        {"InputId": "1.1.1.5", "Reason": "invalid_canonical_target"}
+        {"input_id": "1.1.1.5", "reason": "invalid_canonical_target"}
     ]
     assert db.select_ids(
         ["1.1.1.4"], namespace="ec", include_obsolete=True
-    ).extract_matches().select("EntityId", "MatchType").to_dicts() == [
-        {"EntityId": "1.1.1.4", "MatchType": "exact"}
+    ).extract_matches().select("EntityId", "match_type").to_dicts() == [
+        {"EntityId": "1.1.1.4", "match_type": "exact"}
     ]
     with db.connect() as connection:
         assert connection.execute(
@@ -506,11 +506,11 @@ def test_relation_only_inputs_preserve_rows_and_enable_namespace(
     selection = db.select_ids(["3.6.1.3"], namespace="ec")
     assert selection.extract_matches().to_dicts() == [
         {
-            "InputId": "3.6.1.3",
-            "InputNamespace": "ec",
+            "input_id": "3.6.1.3",
+            "input_namespace": "ec",
             "EntityType": "reaction",
             "EntityId": "R00001",
-            "MatchType": "exact",
+            "match_type": "exact",
         }
     ]
 

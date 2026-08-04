@@ -189,8 +189,8 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
     assert matches.extract_proteins()["ProteinExistence"].to_list() == [
         "1: Evidence at protein level"
     ]
-    assert "GroupId" not in matches.extract_proteins().schema
-    assert matches.extract_unmatched_ids()["InputId"].to_list() == [
+    assert "group_id" not in matches.extract_proteins().schema
+    assert matches.extract_unmatched_ids()["input_id"].to_list() == [
         "TEST",
         "missing",
     ]
@@ -253,10 +253,10 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
         {"case": ["P12345"], "control": ["missing"]},
         namespace="uniprot",
     )
-    assert grouped.extract_proteins()["GroupId"].to_list() == ["case"]
-    assert grouped.extract_unmatched_ids().select("GroupId", "InputId").to_dicts() == [
-        {"GroupId": "control", "InputId": "missing"}
-    ]
+    assert grouped.extract_proteins()["group_id"].to_list() == ["case"]
+    assert grouped.extract_unmatched_ids().select(
+        "group_id", "input_id"
+    ).to_dicts() == [{"group_id": "control", "input_id": "missing"}]
     isoforms_frame = database.select_ids(
         ["P12345"], namespace="uniprot"
     ).extract_isoforms()
@@ -312,8 +312,8 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
     assert database.select_ids(
         ["P12345"], namespace="uniprot", taxon_ids=["10090"]
     ).extract_proteins().columns == [
-        "InputId",
-        "InputNamespace",
+        "input_id",
+        "input_namespace",
         "UniProtId",
         "EntryName",
         "IsReviewed",
@@ -327,8 +327,8 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
     assert database.select_ids(
         [], namespace="uniprot"
     ).extract_accessions().columns == [
-        "InputId",
-        "InputNamespace",
+        "input_id",
+        "input_namespace",
         "UniProtId",
         "Accession",
         "AccessionOrder",
@@ -378,18 +378,18 @@ SQ   SEQUENCE   3 AA;  365 MW;  69CB1DB000000000 CRC64;
 
     assert database.select_ids(
         ["Q99999"], namespace="uniprot"
-    ).extract_proteins().select("InputId", "UniProtId", "TaxonId").to_dicts() == [
-        {"InputId": "Q99999", "UniProtId": "P11111", "TaxonId": "9606"},
-        {"InputId": "Q99999", "UniProtId": "P22222", "TaxonId": "10090"},
+    ).extract_proteins().select("input_id", "UniProtId", "TaxonId").to_dicts() == [
+        {"input_id": "Q99999", "UniProtId": "P11111", "TaxonId": "9606"},
+        {"input_id": "Q99999", "UniProtId": "P22222", "TaxonId": "10090"},
     ]
     assert database.select_ids(
         ["Q99999"], namespace="uniprot", taxon_ids=["10090"]
     ).extract_proteins()["UniProtId"].to_list() == ["P22222"]
     assert database.select_groups(
         {"demerged": ["Q99999"]}, namespace="uniprot"
-    ).extract_proteins().select("GroupId", "UniProtId").to_dicts() == [
-        {"GroupId": "demerged", "UniProtId": "P11111"},
-        {"GroupId": "demerged", "UniProtId": "P22222"},
+    ).extract_proteins().select("group_id", "UniProtId").to_dicts() == [
+        {"group_id": "demerged", "UniProtId": "P11111"},
+        {"group_id": "demerged", "UniProtId": "P22222"},
     ]
 
 
@@ -429,16 +429,16 @@ def test_group_selection_resolves_each_identifier_once(
 
     assert selection.input_ids == ("P12345", "missing")
     assert selection.group_ids == ("case", "control", "empty")
-    assert selection.extract_proteins().select("GroupId", "InputId").to_dicts() == [
-        {"GroupId": "case", "InputId": "P12345"},
-        {"GroupId": "control", "InputId": "P12345"},
+    assert selection.extract_proteins().select("group_id", "input_id").to_dicts() == [
+        {"group_id": "case", "input_id": "P12345"},
+        {"group_id": "control", "input_id": "P12345"},
     ]
     selection.extract_accessions()
     assert selection.extract_unmatched_ids().select(
-        "GroupId", "InputId"
+        "group_id", "input_id"
     ).to_dicts() == [
-        {"GroupId": "case", "InputId": "missing"},
-        {"GroupId": "control", "InputId": "missing"},
+        {"group_id": "case", "input_id": "missing"},
+        {"group_id": "control", "input_id": "missing"},
     ]
     assert query_calls == [("P12345", "missing")]
 

@@ -237,7 +237,7 @@ def extract_mapping_frame(
     df_group_membership: pl.DataFrame | None,
 ) -> pl.LazyFrame:
     cols_out = [
-        "InputId",
+        "input_id",
         "GeneId",
         "WikiPathwaysId",
         "PathwayName",
@@ -248,11 +248,11 @@ def extract_mapping_frame(
         df_input_ids.lazy()
         .join(
             lf_term2gene,
-            left_on="InputId",
+            left_on="input_id",
             right_on="GeneId",
             how="inner",
         )
-        .with_columns(pl.col("InputId").alias("GeneId"))
+        .with_columns(pl.col("input_id").alias("GeneId"))
         .join(
             lf_pathway.select("WikiPathwaysId", "PathwayName", "Species", "Url"),
             on="WikiPathwaysId",
@@ -264,10 +264,10 @@ def extract_mapping_frame(
     )
     if df_group_membership is None:
         return lf_hits
-    grouped_cols = ["GroupId", *cols_out]
+    grouped_cols = ["group_id", *cols_out]
     return (
         df_group_membership.lazy()
-        .join(lf_hits, on="InputId", how="inner")
+        .join(lf_hits, on="input_id", how="inner")
         .select(grouped_cols)
         .unique()
         .sort(grouped_cols)
@@ -280,16 +280,16 @@ def extract_unmatched_ids_frame(
     *,
     df_group_membership: pl.DataFrame | None,
 ) -> pl.DataFrame:
-    df_mapped_input_ids = df_mapping.select("InputId").unique().sort("InputId")
+    df_mapped_input_ids = df_mapping.select("input_id").unique().sort("input_id")
     df_unmatched = (
-        df_input_ids.join(df_mapped_input_ids, on="InputId", how="anti")
-        .select("InputId")
-        .sort("InputId")
+        df_input_ids.join(df_mapped_input_ids, on="input_id", how="anti")
+        .select("input_id")
+        .sort("input_id")
     )
     if df_group_membership is None:
         return df_unmatched
     return (
-        df_group_membership.join(df_unmatched, on="InputId", how="inner")
-        .select("GroupId", "InputId")
-        .sort("GroupId", "InputId")
+        df_group_membership.join(df_unmatched, on="input_id", how="inner")
+        .select("group_id", "input_id")
+        .sort("group_id", "input_id")
     )

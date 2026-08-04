@@ -28,7 +28,7 @@ SCHEMA_TERM2NAME: SchemaDict = {
     "Url": pl.String,
 }
 SCHEMA_MAPPING: SchemaDict = {
-    "InputId": pl.String,
+    "input_id": pl.String,
     "GeneId": pl.String,
     "WikiPathwaysId": pl.String,
     "PathwayName": pl.String,
@@ -36,14 +36,14 @@ SCHEMA_MAPPING: SchemaDict = {
     "Url": pl.String,
 }
 SCHEMA_GROUP_MAPPING: SchemaDict = {
-    "GroupId": pl.String,
+    "group_id": pl.String,
     **SCHEMA_MAPPING,
 }
-SCHEMA_UNMAPPED: SchemaDict = {"InputId": pl.String}
-SCHEMA_GROUPS: SchemaDict = {"GroupId": pl.String}
+SCHEMA_UNMAPPED: SchemaDict = {"input_id": pl.String}
+SCHEMA_GROUPS: SchemaDict = {"group_id": pl.String}
 SCHEMA_GROUP_INPUT_IDS: SchemaDict = {
-    "GroupId": pl.String,
-    "InputId": pl.String,
+    "group_id": pl.String,
+    "input_id": pl.String,
 }
 
 ASSET_SPECS = (

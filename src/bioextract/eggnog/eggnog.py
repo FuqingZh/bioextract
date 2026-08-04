@@ -140,8 +140,8 @@ class EggNOGDatabase:
             ids: eggNOG protein IDs. Empty values are discarded and duplicate
                 normalized IDs collapse to one input row.
         Returns:
-            A selection handle whose outputs include `InputId` and
-            `InputNamespace` provenance columns.
+            A selection handle whose outputs include `input_id` and
+            `input_namespace` provenance columns.
 
         Examples:
             Return annotations only for the selected protein ID:
@@ -151,7 +151,7 @@ class EggNOGDatabase:
             ... )
             >>> selection = db.select_ids(["9606.ENSP1"])
             >>> selection.extract_mapping().select(
-            ...     "InputId", "EggnogOgId", "CogCategory"
+            ...     "input_id", "EggnogOgId", "CogCategory"
             ... ).rows()
             [('9606.ENSP1', 'OG0001', 'E'), ('9606.ENSP1', 'OG0001', 'G'), ('9606.ENSP1', 'OG0002', 'S')]
         """
@@ -174,7 +174,7 @@ class EggNOGDatabase:
                 protein IDs.
         Returns:
             A selection handle whose mapping and unmapped outputs retain
-            `GroupId`.
+            `group_id`.
 
         Raises:
             ValueError: If group IDs are invalid.
@@ -189,7 +189,7 @@ class EggNOGDatabase:
             ...     {"up": ["9606.ENSP1"], "down": ["9606.MISSING"]},
             ... )
             >>> selection.extract_mapping().select(
-            ...     "GroupId", "CogCategory"
+            ...     "group_id", "CogCategory"
             ... ).rows()
             [('up', 'E'), ('up', 'G'), ('up', 'S')]
         """
@@ -261,7 +261,7 @@ class EggnogSelection:
 
     @property
     def is_grouped(self) -> bool:
-        """Report whether this selection carries `GroupId` through outputs.
+        """Report whether this selection carries `group_id` through outputs.
 
         Examples:
             >>> db = EggNOGDatabase.from_sqlite(
@@ -276,8 +276,8 @@ class EggnogSelection:
         """Extract mapping rows for the normalized selection.
 
         Returns:
-            A frame prefixed by `InputId` and `InputNamespace`; grouped selections
-            additionally begin with `GroupId`. Many-to-many annotations remain
+            A frame prefixed by `input_id` and `input_namespace`; grouped selections
+            additionally begin with `group_id`. Many-to-many annotations remain
             expanded.
 
         Examples:
@@ -288,7 +288,7 @@ class EggnogSelection:
             ... )
             >>> selection = db.select_ids(["9606.ENSP1"])
             >>> selection.extract_mapping().select(
-            ...     "InputId", "CogCategory"
+            ...     "input_id", "CogCategory"
             ... ).rows()
             [('9606.ENSP1', 'E'), ('9606.ENSP1', 'G'), ('9606.ENSP1', 'S')]
         """
@@ -307,7 +307,7 @@ class EggnogSelection:
         """Extract normalized input IDs with no eggNOG mapping row.
 
         Returns:
-            `InputId` for a single selection, or `GroupId, InputId` for a
+            `input_id` for a single selection, or `group_id, input_id` for a
             grouped selection.
 
         Examples:
@@ -318,7 +318,7 @@ class EggnogSelection:
             ... )
             >>> selection = db.select_ids(["9606.MISSING"])
             >>> selection.extract_unmatched_ids().to_dicts()
-            [{'InputId': '9606.MISSING'}]
+            [{'input_id': '9606.MISSING'}]
         """
         if self._df_unmapped is None:
             self._df_unmapped = extract_unmatched_ids_frame(

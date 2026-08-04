@@ -21,6 +21,8 @@ when a domain does not yet have a dedicated architecture document.
 4. Read the repository-wide [Test Standard](testing/README.md), then the
    corresponding resource test standard and, where present, the real-snapshot
    benchmark before changing validation or publication behavior.
+5. Read the repository [AO and delivery norms](development/ao-delivery.md)
+   before starting PR-bound work or changing repository gates.
 
 ## Authority Map
 
@@ -38,9 +40,16 @@ when a domain does not yet have a dedicated architecture document.
 | InterPro and Pfam | [InterProDatabase](architecture/interpro-db.md) | [InterProDatabase](testing/interpro-db.md) | [108.0 baseline](benchmarks/20260714-v1.0-interpro-108-benchmark.md) |
 | UniProt | [UniProtDatabase](architecture/uniprot-db.md) | [UniProtDatabase](testing/uniprot-db.md) | [2026_01 baseline](benchmarks/20260731-uniprot-kb-2026_01-benchmark.md) |
 | Rhea | [RheaDatabase](architecture/rhea-db.md) | [RheaDatabase](testing/rhea-db.md) | — |
-| STRINGdb and OmniPath | Root [README](../README.md), source code, and tests | [`STRINGdb integration`](../tests/integration/stringdb/test_database.py), [`OmniPath integration`](../tests/integration/omnipath/test_database.py) | — |
+| STRINGdb | Root [README](../README.md), source code, and tests | [`STRINGdb integration`](../tests/integration/stringdb/test_database.py) | — |
+| OmniPath | [OmniPath architecture](architecture/omnipath-db.md) | [OmniPath test standard](testing/omnipath-db.md) | — |
 
 ## Plans And History
+
+The active
+[Column Lineage And Public Schema Convergence Plan](implementation-plan/20260804-v1.0-column-lineage-public-schema-convergence.md)
+defines the official-header versus derived-column ownership rule, shared
+`snake_case` selection protocol, `from_*` lifecycle naming, resource-specific
+migration slices, and the publication rebuild and verification boundary.
 
 The completed
 [Publication Inspection Plan](implementation-plan/20260804-v1.0-publication-inspection-implementation-plan.md)

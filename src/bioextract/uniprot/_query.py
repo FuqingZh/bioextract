@@ -347,20 +347,20 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_unmatched_ids().select(  # doctest: +SKIP
-            ...     "InputId", "InputNamespace", "Reason"
+            ...     "input_id", "input_namespace", "reason"
             ... ).columns
-            ['InputId', 'InputNamespace', 'Reason']
+            ['input_id', 'input_namespace', 'reason']
         """
         frame = self._identifier_matches()
         matched: set[str] = (
-            set(frame["InputId"].cast(pl.String).to_list()) if frame.height else set()
+            set(frame["input_id"].cast(pl.String).to_list()) if frame.height else set()
         )
         rows = [
             {
-                "GroupId": group,
-                "InputId": input_id,
-                "InputNamespace": self.namespace,
-                "Reason": "not_found",
+                "group_id": group,
+                "input_id": input_id,
+                "input_namespace": self.namespace,
+                "reason": "not_found",
             }
             for group, input_id in self.group_membership
             if input_id not in matched
@@ -368,13 +368,13 @@ class UniProtSelection:
         frame = pl.DataFrame(
             rows,
             schema={
-                "GroupId": pl.String,
-                "InputId": pl.String,
-                "InputNamespace": pl.String,
-                "Reason": pl.String,
+                "group_id": pl.String,
+                "input_id": pl.String,
+                "input_namespace": pl.String,
+                "reason": pl.String,
             },
         )
-        return frame if self._is_grouped else frame.drop("GroupId")
+        return frame if self._is_grouped else frame.drop("group_id")
 
     def _extract(
         self,
@@ -391,7 +391,7 @@ class UniProtSelection:
         with self.database.connect() as connection:
             connection.execute(
                 "CREATE TEMP TABLE _selection("
-                "GroupId VARCHAR, InputId VARCHAR, InputNamespace VARCHAR, "
+                "group_id VARCHAR, input_id VARCHAR, input_namespace VARCHAR, "
                 "primary_accession VARCHAR)"
             )
             if matches.height:
@@ -399,36 +399,36 @@ class UniProtSelection:
                     "INSERT INTO _selection VALUES (?, ?, ?, ?)", matches.rows()
                 )
             cursor = connection.execute(
-                "SELECT DISTINCT s.GroupId, s.InputId, s.InputNamespace, "
+                "SELECT DISTINCT s.group_id, s.input_id, s.input_namespace, "
                 "s.primary_accession AS UniProtId, "
                 f"{columns} FROM _selection s {join}{condition} "
-                "ORDER BY s.GroupId, s.InputId, s.primary_accession, "
+                "ORDER BY s.group_id, s.input_id, s.primary_accession, "
                 f"{order_by}",
                 parameters or [],
             )
             frame = _cursor_frame(cursor)
-        return frame if self._is_grouped else frame.drop("GroupId")
+        return frame if self._is_grouped else frame.drop("group_id")
 
     def _matches(self) -> pl.DataFrame:
         matches = self._identifier_matches()
         membership = pl.DataFrame(
             self.group_membership,
-            schema={"GroupId": pl.String, "InputId": pl.String},
+            schema={"group_id": pl.String, "input_id": pl.String},
             orient="row",
         )
         if membership.is_empty() or matches.is_empty():
             return pl.DataFrame(
                 schema={
-                    "GroupId": pl.String,
-                    "InputId": pl.String,
-                    "InputNamespace": pl.String,
+                    "group_id": pl.String,
+                    "input_id": pl.String,
+                    "input_namespace": pl.String,
                     "primary_accession": pl.String,
                 }
             )
         return (
-            membership.join(matches, on="InputId", how="inner")
-            .select("GroupId", "InputId", "InputNamespace", "primary_accession")
-            .sort("GroupId", "InputId", "primary_accession")
+            membership.join(matches, on="input_id", how="inner")
+            .select("group_id", "input_id", "input_namespace", "primary_accession")
+            .sort("group_id", "input_id", "primary_accession")
         )
 
     def _identifier_matches(self) -> pl.DataFrame:
@@ -441,11 +441,11 @@ class UniProtSelection:
 
     def _query_identifier_matches(self) -> pl.DataFrame:
         inputs = pl.DataFrame(
-            {"InputId": self.input_ids},
-            schema={"InputId": pl.String},
+            {"input_id": self.input_ids},
+            schema={"input_id": pl.String},
         )
         with self.database.connect() as connection:
-            connection.execute("CREATE TEMP TABLE _inputs(InputId VARCHAR)")
+            connection.execute("CREATE TEMP TABLE _inputs(input_id VARCHAR)")
             if inputs.height:
                 connection.executemany("INSERT INTO _inputs VALUES (?)", inputs.rows())
             taxon_filter = ""
@@ -457,14 +457,14 @@ class UniProtSelection:
                 parameters.extend(self.taxon_ids)
             cursor = connection.execute(
                 f"""
-                SELECT DISTINCT i.InputId, ? AS InputNamespace,
+                SELECT DISTINCT i.input_id, ? AS input_namespace,
                        p.primary_accession
                 FROM _inputs i
                 JOIN protein_identifier p
-                  ON p.identifier = i.InputId AND p.namespace = ?
+                  ON p.identifier = i.input_id AND p.namespace = ?
                 JOIN protein pr USING (primary_accession)
                 {taxon_filter}
-                ORDER BY i.InputId, p.primary_accession
+                ORDER BY i.input_id, p.primary_accession
                 """,
                 parameters,
             )

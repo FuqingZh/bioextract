@@ -68,7 +68,7 @@ def test_extract_mapping_and_unmapped_single_selection(tmp_path: Path) -> None:
 
     assert selection.extract_mapping().to_dicts() == [
         {
-            "InputId": "P04637",
+            "input_id": "P04637",
             "UniProtId": "P04637",
             "ReactomePathwayId": "R-HSA-6798695",
             "PathwayName": "Neutrophil degranulation",
@@ -77,7 +77,7 @@ def test_extract_mapping_and_unmapped_single_selection(tmp_path: Path) -> None:
             "ReactomeUrl": "https://reactome.org/PathwayBrowser/#/R-HSA-6798695",
         },
         {
-            "InputId": "P04637",
+            "input_id": "P04637",
             "UniProtId": "P04637",
             "ReactomePathwayId": "R-HSA-69563",
             "PathwayName": "p53-Dependent G1 DNA Damage Response",
@@ -86,7 +86,7 @@ def test_extract_mapping_and_unmapped_single_selection(tmp_path: Path) -> None:
             "ReactomeUrl": "https://reactome.org/PathwayBrowser/#/R-HSA-69563",
         },
         {
-            "InputId": "Q9Y243",
+            "input_id": "Q9Y243",
             "UniProtId": "Q9Y243",
             "ReactomePathwayId": "R-HSA-6798695",
             "PathwayName": "Neutrophil degranulation",
@@ -95,7 +95,7 @@ def test_extract_mapping_and_unmapped_single_selection(tmp_path: Path) -> None:
             "ReactomeUrl": "https://reactome.org/PathwayBrowser/#/R-HSA-6798695",
         },
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [{"InputId": "MISSING"}]
+    assert selection.extract_unmatched_ids().to_dicts() == [{"input_id": "MISSING"}]
 
 
 def test_grouped_selection_preserves_groups(tmp_path: Path) -> None:
@@ -115,8 +115,8 @@ def test_grouped_selection_preserves_groups(tmp_path: Path) -> None:
 
     df_mapping = selection.extract_mapping()
     assert df_mapping.columns == [
-        "GroupId",
-        "InputId",
+        "group_id",
+        "input_id",
         "UniProtId",
         "ReactomePathwayId",
         "PathwayName",
@@ -124,10 +124,10 @@ def test_grouped_selection_preserves_groups(tmp_path: Path) -> None:
         "Species",
         "ReactomeUrl",
     ]
-    assert df_mapping.filter(df_mapping["InputId"] == "P04637").height == 4
+    assert df_mapping.filter(df_mapping["input_id"] == "P04637").height == 4
     assert selection.extract_mapping() is df_mapping
     assert selection.extract_unmatched_ids().to_dicts() == [
-        {"GroupId": "TumorA", "InputId": "MISSING"}
+        {"group_id": "TumorA", "input_id": "MISSING"}
     ]
 
 

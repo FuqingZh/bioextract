@@ -61,7 +61,7 @@ df_selected = selection.extract_mapping()
 df_unmapped = selection.extract_unmatched_ids()
 ```
 
-Grouped selections mirror the other DB contracts by prepending `GroupId`.
+Grouped selections mirror the other DB contracts by prepending `group_id`.
 
 Publication writes every relation available from the constructed handle:
 
@@ -201,16 +201,16 @@ uniprot
 Single selection output prepends:
 
 ```text
-InputId
-InputNamespace
+input_id
+input_namespace
 ```
 
 Grouped selection output prepends:
 
 ```text
-GroupId
-InputId
-InputNamespace
+group_id
+input_id
+input_namespace
 ```
 
 `extract_unmatched_ids()` follows the same single/grouped shape as the

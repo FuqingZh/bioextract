@@ -461,10 +461,17 @@ def _query_frame(connection: duckdb.DuckDBPyConnection, query: str) -> pl.DataFr
 
 
 def _public_frame(frame: pl.DataFrame) -> pl.DataFrame:
+    shared_columns = {
+        "input_id",
+        "input_namespace",
+        "group_id",
+        "reason",
+        "match_type",
+    }
     renamed = {
         column: "".join(part.capitalize() for part in column.split("_"))
         for column in frame.columns
-        if "_" in column
+        if "_" in column and column not in shared_columns
     }
     renamed.update({"ec_number": "EcNumber", "ko_id": "KoId"})
     return frame.rename({key: value for key, value in renamed.items() if key in frame})
@@ -715,9 +722,9 @@ class KEGGMetabolicSelection:
 
         Examples:
             >>> selection.extract_matches().select(  # doctest: +SKIP
-            ...     "InputId", "EntityId"
+            ...     "input_id", "EntityId"
             ... ).columns
-            ['InputId', 'EntityId']
+            ['input_id', 'EntityId']
         """
         if self._matches is not None:
             return self._matches
@@ -737,9 +744,9 @@ class KEGGMetabolicSelection:
             )
         columns = pl.Schema(
             {
-                "InputId": pl.String,
-                "InputNamespace": pl.String,
-                "MatchType": pl.String,
+                "input_id": pl.String,
+                "input_namespace": pl.String,
+                "match_type": pl.String,
                 "EntityType": pl.String,
                 "EntityId": pl.String,
             }
@@ -852,16 +859,16 @@ class KEGGMetabolicSelection:
             connection,
             f"""
             SELECT DISTINCT
-                input.input_id AS "InputId",
-                '{ns}' AS "InputNamespace",
-                'exact' AS "MatchType",
+                input.input_id AS "input_id",
+                '{ns}' AS "input_namespace",
+                'exact' AS "match_type",
                 '{entity}' AS "EntityType",
                 target_row.{target} AS "EntityId"
             FROM _input_id AS input
             JOIN {table} AS target_row
               ON target_row.{column} = input.input_id
             WHERE true{namespace_filter}
-            ORDER BY "InputId", "EntityId"
+            ORDER BY "input_id", "EntityId"
             """,
         )
 
@@ -873,14 +880,14 @@ class KEGGMetabolicSelection:
                 connection,
                 """
                 SELECT DISTINCT
-                    input.input_id AS "InputId",
-                    'ec' AS "InputNamespace",
-                    'exact' AS "MatchType",
+                    input.input_id AS "input_id",
+                    'ec' AS "input_namespace",
+                    'exact' AS "match_type",
                     'enzyme' AS "EntityType",
                     enzyme.ec_number AS "EntityId"
                 FROM _input_id AS input
                 JOIN enzyme ON enzyme.ec_number = input.input_id
-                ORDER BY "InputId", "EntityId"
+                ORDER BY "input_id", "EntityId"
                 """,
             )
 
@@ -888,9 +895,9 @@ class KEGGMetabolicSelection:
             """
             UNION ALL
             SELECT DISTINCT
-                path.input_id AS "InputId",
-                'ec' AS "InputNamespace",
-                'replacement' AS "MatchType",
+                path.input_id AS "input_id",
+                'ec' AS "input_namespace",
+                'replacement' AS "match_type",
                 'enzyme' AS "EntityType",
                 enzyme.ec_number AS "EntityId"
             FROM replacement_path AS path
@@ -922,16 +929,16 @@ class KEGGMetabolicSelection:
             f"""
             {recursive_cte}
             SELECT DISTINCT
-                input.input_id AS "InputId",
-                'ec' AS "InputNamespace",
-                'exact' AS "MatchType",
+                input.input_id AS "input_id",
+                'ec' AS "input_namespace",
+                'exact' AS "match_type",
                 'enzyme' AS "EntityType",
                 enzyme.ec_number AS "EntityId"
             FROM _input_id AS input
             JOIN enzyme ON enzyme.ec_number = input.input_id
             WHERE enzyme.status = 'active'
             {replacement}
-            ORDER BY "InputId", "MatchType", "EntityId"
+            ORDER BY "input_id", "match_type", "EntityId"
             """,
         )
 
@@ -940,26 +947,26 @@ class KEGGMetabolicSelection:
             return frame
         membership = pl.DataFrame(
             self.group_membership,
-            schema={"GroupId": pl.String, "InputId": pl.String},
+            schema={"group_id": pl.String, "input_id": pl.String},
             orient="row",
         )
         return (
-            membership.join(frame, on="InputId", how="inner")
-            .select("GroupId", *frame.columns)
-            .sort("GroupId", *frame.columns)
+            membership.join(frame, on="input_id", how="inner")
+            .select("group_id", *frame.columns)
+            .sort("group_id", *frame.columns)
         )
 
     def _reaction_lineage(self) -> pl.DataFrame:
         if self._lineage is not None:
             return self._lineage
         matches = self.extract_matches()
-        prefix = ["GroupId"] if self.is_grouped else []
+        prefix = ["group_id"] if self.is_grouped else []
         schema = pl.Schema(
             dict.fromkeys(
                 (
                     *prefix,
-                    "InputId",
-                    "InputNamespace",
+                    "input_id",
+                    "input_namespace",
                     "AnchorType",
                     "AnchorId",
                     "ReactionId",
@@ -1061,20 +1068,20 @@ class KEGGMetabolicSelection:
                 connection,
                 f"""
                 SELECT DISTINCT
-                    group_id AS "GroupId",
-                    input_id AS "InputId",
-                    input_namespace AS "InputNamespace",
+                    group_id AS "group_id",
+                    input_id AS "input_id",
+                    input_namespace AS "input_namespace",
                     anchor_type AS "AnchorType",
                     anchor_id AS "AnchorId",
                     reaction_id AS "ReactionId"
                 FROM ({" UNION ALL ".join(clauses)})
-                ORDER BY "GroupId", "InputId", "AnchorType", "AnchorId", "ReactionId"
+                ORDER BY "group_id", "input_id", "AnchorType", "AnchorId", "ReactionId"
                 """,
             )
         self._lineage = (
             lineage.select(*schema).cast(schema)
             if self.is_grouped
-            else lineage.drop("GroupId").select(*schema).cast(schema)
+            else lineage.drop("group_id").select(*schema).cast(schema)
         )
         return self._lineage
 
@@ -1224,20 +1231,20 @@ class KEGGMetabolicSelection:
 
         Examples:
             >>> selection.extract_unmatched_ids().select(  # doctest: +SKIP
-            ...     "InputId", "Reason"
+            ...     "input_id", "reason"
             ... ).columns
-            ['InputId', 'Reason']
+            ['input_id', 'reason']
         """
         return self._expand_groups(self._resolve_unique_unmatched())
 
     def _resolve_unique_unmatched(self) -> pl.DataFrame:
         if self._unmatched_unique is not None:
             return self._unmatched_unique
-        matched = set(self._resolve_unique_matches()["InputId"].to_list())
+        matched = set(self._resolve_unique_matches()["input_id"].to_list())
         missing = tuple(
             input_id for input_id in self.input_ids if input_id not in matched
         )
-        schema = {"InputId": pl.String, "Reason": pl.String}
+        schema = {"input_id": pl.String, "reason": pl.String}
         if not missing:
             self._unmatched_unique = _empty(schema)
             return self._unmatched_unique
@@ -1263,8 +1270,8 @@ class KEGGMetabolicSelection:
 
         self._unmatched_unique = pl.DataFrame(
             {
-                "InputId": missing,
-                "Reason": tuple(reasons[input_id] for input_id in missing),
+                "input_id": missing,
+                "reason": tuple(reasons[input_id] for input_id in missing),
             },
             schema=schema,
         )
@@ -1299,9 +1306,9 @@ def _create_selected_anchor_table(
         "INSERT INTO _selected_anchor VALUES (?, ?, ?, ?, ?)",
         [
             (
-                row.get("GroupId"),
-                row["InputId"],
-                row["InputNamespace"],
+                row.get("group_id"),
+                row["input_id"],
+                row["input_namespace"],
                 row["EntityType"],
                 row["EntityId"],
             )

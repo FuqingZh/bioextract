@@ -30,7 +30,7 @@ It does not cover:
 - `extract_mapping()` returns the normalized mapping columns.
 - XML enrichment fills `InterProType` and `MemberDb` when present.
 - `select_ids(..., namespace="uniprot")` returns filtered rows.
-- `select_groups(..., namespace="uniprot")` preserves `GroupId`.
+- `select_groups(..., namespace="uniprot")` preserves `group_id`.
 - unmapped IDs are reported correctly.
 - mapping-only construction writes only the `mapping` DuckDB relation.
 - XML-capable construction writes `mapping`, `protein_term`, `term`, and
