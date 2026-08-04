@@ -8,6 +8,7 @@ import pytest
 
 import bioextract
 import bioextract.publication as publication
+from bioextract.errors import IntegrityError
 
 
 def test_publication_module_has_exact_stable_exports() -> None:
@@ -49,3 +50,9 @@ def test_inspection_signature_and_strict_bool_validation() -> None:
                 "unused.duckdb",
                 verify_table_counts=invalid,  # type: ignore[arg-type]
             )
+
+
+def test_path_resolution_failures_use_public_error_taxonomy() -> None:
+    with pytest.raises(IntegrityError, match="invalid.*publication") as caught:
+        publication.inspect_publication("invalid\0publication.duckdb")
+    assert isinstance(caught.value.__cause__, ValueError)

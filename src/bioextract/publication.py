@@ -177,9 +177,10 @@ def inspect_publication(
     ):
         raise TypeError("verify_table_counts must be a bool")
 
-    publication_path = Path(path).resolve()
+    publication_path: Path | None = None
     connection: duckdb.DuckDBPyConnection | None = None
     try:
+        publication_path = Path(path).resolve()
         connection = duckdb.connect(str(publication_path), read_only=True)
         metadata_rows = tuple(
             PublicationMetadata(str(key), str(value))
@@ -288,8 +289,9 @@ def inspect_publication(
             validation_issues=validation_issues,
         )
     except Exception as error:
+        path_context = publication_path if publication_path is not None else repr(path)
         raise IntegrityError(
-            f"Cannot inspect bioextract publication at {publication_path}: {error}"
+            f"Cannot inspect bioextract publication at {path_context}: {error}"
         ) from error
     finally:
         if connection is not None:
