@@ -1,7 +1,7 @@
 # bioextract Documentation
 
 Version: v1.0
-Date: 2026-08-03
+Date: 2026-08-04
 Status: current
 
 This directory contains durable architecture, data contracts, test standards,
@@ -42,13 +42,12 @@ when a domain does not yet have a dedicated architecture document.
 
 ## Plans And History
 
-The current
+The completed
 [Storage And Publication Convergence Plan](implementation-plan/20260803-v1.0-storage-publication-convergence-implementation-plan.md)
 records the accepted direct-access versus materialization boundary, DuckDB-only
 bioextract publication contract, metadata v1 reset, former-Parquet resource
-migrations, eggNOG SQLite behavior, and GO subcell cleanup. Slices 1–4 and the
-Slice 5 current-documentation work are code/docs complete; formal rebuild
-acceptance remains pending.
+migrations, eggNOG SQLite behavior, GO subcell cleanup, and acceptance of the
+nine maintained formal publications. All five slices are complete.
 
 The current
 [Test Suite Layering Plan](implementation-plan/20260731-v1.0-test-suite-layering.md)
