@@ -116,6 +116,49 @@ are implementation details and never publication artifacts.
 `if_exists="fail"` is the default. `"replace"` preserves the previous target
 until a complete new staging file is ready.
 
+## Publication inspection
+
+External publication tooling may validate and summarize one bioextract-owned
+DuckDB through:
+
+```python
+from bioextract.publication import inspect_duckdb_publication
+
+descriptor = inspect_duckdb_publication("tidy/data.duckdb")
+```
+
+Inspection opens the file read-only and validates the current metadata schema,
+the five `_bioextract` tables, embedded/source inventory parity, validation
+state, biological table inventory, and persisted row counts. It returns a
+typed immutable descriptor for discovery tooling. The descriptor is a compact
+indexing view; complete provenance and validation issue details remain
+authoritative inside the DuckDB file.
+
+This interface owns one publication only. It does not read biofetch manifests,
+scan an organization-specific resource root, choose versions, or serialize an
+aggregate catalog. Those operations belong to the external resource
+publication workflow.
+
+The repository-owned `scripts/build_publication_catalog.py` is one such
+publication workflow. It reads a canonical biofetch aggregate manifest,
+validates each referenced snapshot lock, inspects every existing
+`tidy/data.duckdb`, and atomically writes one deterministic TOML catalog. A
+missing `tidy/data.duckdb` is not an error: direct-only and not-yet-materialized
+snapshots are outside this publication-only catalog.
+
+Run it from the bioextract checkout; the external scheduler supplies both
+paths explicitly:
+
+```console
+pdm run python scripts/build_publication_catalog.py \
+  --manifest /path/to/bioinfo/meta/manifest.toml \
+  --output /path/to/bioinfo/meta/publication-catalog.toml
+```
+
+Consumers read `publication-catalog.toml`; they do not invoke bioextract once
+per database. The publishing workflow is the sole writer and rebuilds the
+catalog after the relevant tidy publications are complete.
+
 ## Publication boundary
 
 `TidyDataset` has no directory writer and resources expose no `write_tidy()`

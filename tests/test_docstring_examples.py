@@ -23,6 +23,12 @@ from bioextract.kegg.brite import (
 from bioextract.kegg.kegg import KeggSelection
 from bioextract.omnipath import OmniPathDatabase
 from bioextract.omnipath.omnipath import OmniPathSelection
+from bioextract.publication import (
+    PublicationDescriptor,
+    PublicationSource,
+    PublicationTable,
+    inspect_duckdb_publication,
+)
 from bioextract.reactome import ReactomeDatabase
 from bioextract.reactome.reactome import ReactomeSelection
 from bioextract.rhea import RheaDatabase, RheaReactionSelection, RheaWriteResult
@@ -55,11 +61,17 @@ PUBLIC_CLASSES = (
     RheaReactionSelection,
     RheaWriteResult,
     TidyDataset,
+    PublicationSource,
+    PublicationTable,
+    PublicationDescriptor,
 )
 
-PUBLIC_FUNCTIONS = (("kegg.brite.build_tidy_frames", build_kegg_tidy_frames),)
+PUBLIC_FUNCTIONS = (
+    ("kegg.brite.build_tidy_frames", build_kegg_tidy_frames),
+    ("publication.inspect_duckdb_publication", inspect_duckdb_publication),
+)
 
-EXPECTED_PUBLIC_TARGET_COUNT = 146
+EXPECTED_PUBLIC_TARGET_COUNT = 150
 
 
 class _FunctionDescriptor(Protocol):
@@ -97,8 +109,8 @@ PUBLIC_DOCSTRING_TARGETS = tuple(iter_public_docstring_targets())
 
 
 def test_public_docstring_target_matrix_is_complete() -> None:
-    assert len(PUBLIC_CLASSES) == 22
-    assert len(PUBLIC_FUNCTIONS) == 1
+    assert len(PUBLIC_CLASSES) == 25
+    assert len(PUBLIC_FUNCTIONS) == 2
     assert len(PUBLIC_DOCSTRING_TARGETS) == EXPECTED_PUBLIC_TARGET_COUNT
 
 

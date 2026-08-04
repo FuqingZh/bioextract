@@ -23,6 +23,7 @@ dev = [
     "pytest>=9.0.2",
     "ruff>=0.15.14",
     "pyright>=1.1.411",
+    "tomli-w>=1.2.0",
 ]
 
 [tool.ruff]
