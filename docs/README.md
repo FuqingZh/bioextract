@@ -42,6 +42,13 @@ when a domain does not yet have a dedicated architecture document.
 
 ## Plans And History
 
+The current
+[Publication Inspection Plan](implementation-plan/20260804-v1.0-publication-inspection-implementation-plan.md)
+defines the narrow, read-only API for inspecting exactly one caller-supplied
+local bioextract DuckDB publication, its metadata-v1 validation and immutable
+result contract, and the boundary that leaves discovery and catalogs to
+external callers.
+
 The completed
 [Storage And Publication Convergence Plan](implementation-plan/20260803-v1.0-storage-publication-convergence-implementation-plan.md)
 records the accepted direct-access versus materialization boundary, DuckDB-only
