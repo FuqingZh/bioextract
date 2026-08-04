@@ -74,7 +74,7 @@ def test_importing_root_package_does_not_import_resource_modules() -> None:
 
 
 def test_top_level_database_exports_are_exact_and_identical() -> None:
-    assert bioextract.__all__ == list(DATABASE_MODULES)
+    assert bioextract.__all__ == [*DATABASE_MODULES, "inspect_publication"]
     assert set(DATABASE_MODULES) <= set(dir(bioextract))
     for class_name, module_name in DATABASE_MODULES.items():
         resource_module = importlib.import_module(module_name)

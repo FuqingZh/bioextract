@@ -21,6 +21,7 @@ __all__ = [
     "STRINGDatabase",
     "UniProtDatabase",
     "WikiPathwaysDatabase",
+    "inspect_publication",
 ]
 
 if TYPE_CHECKING:
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
     from bioextract.interpro import InterProDatabase
     from bioextract.kegg import KEGGDatabase
     from bioextract.omnipath import OmniPathDatabase
+    from bioextract.publication import inspect_publication
     from bioextract.reactome import ReactomeDatabase
     from bioextract.rhea import RheaDatabase
     from bioextract.stringdb import STRINGDatabase
@@ -50,20 +52,22 @@ _DATABASE_MODULES: dict[str, str] = {
     "WikiPathwaysDatabase": "bioextract.wikipathways",
 }
 
+_PUBLIC_MODULES = {**_DATABASE_MODULES, "inspect_publication": "bioextract.publication"}
+
 
 def __getattr__(name: str) -> Any:
-    """Load one declared database class on first attribute access.
+    """Load one declared public object on first attribute access.
 
     Raises:
-        AttributeError: If ``name`` is not one of the classes in ``__all__``.
+        AttributeError: If ``name`` is not declared in ``__all__``.
     """
-    module_name = _DATABASE_MODULES.get(name)
+    module_name = _PUBLIC_MODULES.get(name)
     if module_name is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-    database_class = getattr(import_module(module_name), name)
-    globals()[name] = database_class
-    return database_class
+    public_object = getattr(import_module(module_name), name)
+    globals()[name] = public_object
+    return public_object
 
 
 def __dir__() -> list[str]:
