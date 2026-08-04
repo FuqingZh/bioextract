@@ -56,11 +56,11 @@ bioextract publication contract, metadata v1 reset, former-Parquet resource
 migrations, eggNOG SQLite behavior, GO subcell cleanup, and acceptance of the
 nine maintained formal publications. All five slices are complete.
 
-The current
+The completed
 [Test Suite Layering Plan](implementation-plan/20260731-v1.0-test-suite-layering.md)
-defines the unit, contract, integration, and external-snapshot smoke
-boundaries, fixture ownership, migration slices, and unchanged 482-case
-baseline.
+records the unit, contract, integration, and external-snapshot smoke
+boundaries, fixture ownership, migration slices, and the growth from its
+482-case pre-migration baseline to the current 598-case hermetic gate.
 
 The completed
 [Public API And Grouped Selection Convergence Plan](implementation-plan/20260731-v1.0-public-api-grouped-selection-convergence.md)
@@ -68,10 +68,10 @@ records the top-level database import contract, shared unique-ID resolution and
 group fan-out model, internal behavior-type boundary, and unchanged
 publication schemas.
 
-The current
+The completed
 [Constructor Source Convergence Plan](implementation-plan/20260731-v1.0-constructor-source-convergence.md)
-defines the accepted three-phase constructor naming contract and the eggNOG,
-STRING, WikiPathways, and Rhea delivery boundaries.
+records the implemented three-phase constructor naming contract and the
+eggNOG, STRING, WikiPathways, and Rhea delivery boundaries.
 
 The completed [UniProtKB Domain Access Plan](implementation-plan/20260730-uniprot-knowledgebase-domain-access.md)
 records the Swiss-Prot DuckDB boundary and version-contract convergence.
