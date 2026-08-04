@@ -115,9 +115,18 @@ def test_default_inspection_opens_read_only_closes_and_does_not_count_domain_row
             observed["closed"] = True
             self.connection.close()
 
-    def connect(path_value: str, *, read_only: bool = False) -> ConnectionProxy:
+    def connect(
+        path_value: str,
+        *,
+        read_only: bool = False,
+        config: dict[str, Any] | None = None,
+    ) -> ConnectionProxy:
         assert read_only is True
-        return ConnectionProxy(original_connect(path_value, read_only=read_only))
+        assert config is not None
+        assert int(config["threads"]) > 0
+        return ConnectionProxy(
+            original_connect(path_value, read_only=read_only, config=config)
+        )
 
     monkeypatch.setattr(publication.duckdb, "connect", connect)
     publication.inspect_publication(path)
@@ -220,8 +229,15 @@ def test_connection_closes_when_validation_fails(
             closed = True
             self.connection.close()
 
-    def connect(path_value: str, *, read_only: bool = False) -> ConnectionProxy:
-        return ConnectionProxy(original_connect(path_value, read_only=read_only))
+    def connect(
+        path_value: str,
+        *,
+        read_only: bool = False,
+        config: dict[str, Any] | None = None,
+    ) -> ConnectionProxy:
+        return ConnectionProxy(
+            original_connect(path_value, read_only=read_only, config=config)
+        )
 
     monkeypatch.setattr(publication.duckdb, "connect", connect)
     with pytest.raises(IntegrityError):

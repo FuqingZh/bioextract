@@ -10,6 +10,7 @@ import duckdb
 
 from bioextract._publication import (
     METADATA_SCHEMA_VERSION,
+    _connect_publication,  # pyright: ignore[reportPrivateUsage]
     validate_duckdb_metadata_v1,
 )
 from bioextract.errors import IntegrityError
@@ -181,7 +182,7 @@ def inspect_publication(
     connection: duckdb.DuckDBPyConnection | None = None
     try:
         publication_path = Path(path).resolve()
-        connection = duckdb.connect(str(publication_path), read_only=True)
+        connection = _connect_publication(publication_path, read_only=True)
         metadata_rows = tuple(
             PublicationMetadata(str(key), str(value))
             for key, value in connection.execute(
