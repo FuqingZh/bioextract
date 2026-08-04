@@ -33,6 +33,29 @@ Read the
 [Domain Access Architecture](docs/architecture/20260729-v1.0-domain-access-architecture.md)
 before adding a resource, public query method, or storage strategy.
 
+## Inspect a publication
+
+Inspect one explicit local publication without selecting a resource-specific
+reader or scanning biological rows:
+
+```python
+import bioextract
+
+publication = bioextract.inspect_publication("out/go.duckdb")
+
+print(publication.resource_name)
+print(publication.resource_schema_version)
+print(publication.release_version)
+print(publication.validation_status)
+print(publication.table_counts_verified)  # False by default
+for table in publication.tables:
+    print(table.table_name, table.table_role, table.row_count)
+```
+
+`inspect_publication()` is the stable top-level function. The immutable result
+and supporting record types remain available from `bioextract.publication`,
+not as top-level package exports.
+
 ## Install
 
 ```console
