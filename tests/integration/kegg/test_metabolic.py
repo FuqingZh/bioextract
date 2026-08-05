@@ -130,15 +130,15 @@ def test_streaming_parser_and_canonical_relations(tmp_path: Path) -> None:
 def test_read_only_open_selection_and_extractors(tmp_path: Path) -> None:
     db, path = publish(tmp_path)
     selection = db.select_ids(["CHEBI:15377", "CHEBI:999"], namespace="chebi")
-    assert selection.extract_matches().select("EntityId").to_series().to_list() == [
+    assert selection.extract_matches().select("entity_id").to_series().to_list() == [
         "C00001"
     ]
-    assert selection.extract_reactions()["ReactionId"].to_list() == ["R00001"]
+    assert selection.extract_reactions()["reaction_id"].to_list() == ["R00001"]
     assert selection.extract_participants().height == 3
-    assert selection.extract_enzymes()["EcNumber"].to_list() == ["3.6.1.3"]
-    assert selection.extract_kos()["KoId"].to_list() == ["K00001"]
-    assert selection.extract_modules()["ModuleId"].to_list() == ["M00001"]
-    assert selection.extract_pathway_memberships()["PathwayId"].to_list() == [
+    assert selection.extract_enzymes()["ec_number"].to_list() == ["3.6.1.3"]
+    assert selection.extract_kos()["ko_id"].to_list() == ["K00001"]
+    assert selection.extract_modules()["module_id"].to_list() == ["M00001"]
+    assert selection.extract_pathway_memberships()["pathway_id"].to_list() == [
         "map00010"
     ]
     assert selection.extract_unmatched_ids().to_dicts() == [
@@ -159,15 +159,15 @@ def test_grouped_selection_and_exact_module_evaluation(tmp_path: Path) -> None:
     complete = db.evaluate_modules(["K00001", "K00003"])
     assert complete.to_dicts() == [
         {
-            "ModuleId": "M00001",
-            "RequiredBlockCount": 2,
-            "SatisfiedBlockCount": 2,
-            "IsComplete": True,
-            "MissingBlockIndexes": [],
+            "module_id": "M00001",
+            "required_block_count": 2,
+            "satisfied_block_count": 2,
+            "is_complete": True,
+            "missing_block_indexes": [],
         }
     ]
     incomplete = db.evaluate_modules(["K00001"])
-    assert incomplete["MissingBlockIndexes"].to_list() == [[2]]
+    assert incomplete["missing_block_indexes"].to_list() == [[2]]
 
 
 def test_grouped_selection_resolves_unique_ids_once_then_expands(
@@ -255,12 +255,12 @@ REACTION    R00001 C00001 -> C00002
     KEGGDatabase.from_metabolic_files(module_entries=module).write_duckdb(path)
     result = KEGGDatabase.from_duckdb(path).evaluate_modules(["K01136", "K01217"])
     assert result.select(
-        "RequiredBlockCount", "SatisfiedBlockCount", "IsComplete"
+        "required_block_count", "satisfied_block_count", "is_complete"
     ).to_dicts() == [
         {
-            "RequiredBlockCount": 2,
-            "SatisfiedBlockCount": 2,
-            "IsComplete": True,
+            "required_block_count": 2,
+            "satisfied_block_count": 2,
+            "is_complete": True,
         }
     ]
     with KEGGDatabase.from_duckdb(path).connect() as connection:
@@ -296,16 +296,16 @@ def test_all_metabolic_namespaces_and_curie_cross_references(
     cross_references = db.select_ids(
         ["R00001"], namespace="kegg_reaction"
     ).extract_cross_references()
-    assert "RHEA:12345" in cross_references["ExternalId"]
-    assert "CHEBI:15377" in cross_references["ExternalId"]
+    assert "RHEA:12345" in cross_references["external_id"]
+    assert "CHEBI:15377" in cross_references["external_id"]
 
 
 def test_ec_replacement_and_obsolete_reason_precedence(tmp_path: Path) -> None:
     db, _ = publish(tmp_path)
     replacement = db.select_ids(["9.9.9.9"], namespace="ec")
     assert replacement.extract_matches().select(
-        "EntityId", "match_type"
-    ).to_dicts() == [{"EntityId": "3.6.1.3", "match_type": "replacement"}]
+        "entity_id", "match_type"
+    ).to_dicts() == [{"entity_id": "3.6.1.3", "match_type": "replacement"}]
     missing = db.select_ids(["8.8.8.8"], namespace="ec")
     assert missing.extract_unmatched_ids().to_dicts() == [
         {"input_id": "8.8.8.8", "reason": "not_found"}
@@ -341,8 +341,8 @@ NAME        Transferred to 1.1.1.999
     db = KEGGDatabase.from_duckdb(path)
 
     assert db.select_ids(["1.1.1.1"], namespace="ec").extract_matches().select(
-        "EntityId", "match_type"
-    ).to_dicts() == [{"EntityId": "1.1.1.3", "match_type": "replacement"}]
+        "entity_id", "match_type"
+    ).to_dicts() == [{"entity_id": "1.1.1.3", "match_type": "replacement"}]
     assert db.select_ids(
         ["1.1.1.4"], namespace="ec"
     ).extract_unmatched_ids().to_dicts() == [
@@ -355,8 +355,8 @@ NAME        Transferred to 1.1.1.999
     ]
     assert db.select_ids(
         ["1.1.1.4"], namespace="ec", include_obsolete=True
-    ).extract_matches().select("EntityId", "match_type").to_dicts() == [
-        {"EntityId": "1.1.1.4", "match_type": "exact"}
+        ).extract_matches().select("entity_id", "match_type").to_dicts() == [
+        {"entity_id": "1.1.1.4", "match_type": "exact"}
     ]
     with db.connect() as connection:
         assert connection.execute(
@@ -508,8 +508,8 @@ def test_relation_only_inputs_preserve_rows_and_enable_namespace(
         {
             "input_id": "3.6.1.3",
             "input_namespace": "ec",
-            "EntityType": "reaction",
-            "EntityId": "R00001",
+            "entity_type": "reaction",
+            "entity_id": "R00001",
             "match_type": "exact",
         }
     ]
@@ -527,7 +527,7 @@ def test_reaction_only_compound_selection_uses_participants(
     KEGGDatabase.from_metabolic_files(reaction_entries=reaction).write_duckdb(path)
     db = KEGGDatabase.from_duckdb(path)
     assert db.select_ids(["C00001"], namespace="kegg_compound").extract_reactions()[
-        "ReactionId"
+        "reaction_id"
     ].to_list() == ["R00001"]
 
 
@@ -542,7 +542,7 @@ def test_module_references_are_recursive_and_cycles_fail(tmp_path: Path) -> None
     path = tmp_path / "modules.duckdb"
     KEGGDatabase.from_metabolic_files(module_entries=modules).write_duckdb(path)
     result = KEGGDatabase.from_duckdb(path).evaluate_modules(["K00001", "K00002"])
-    assert result.filter(result["ModuleId"] == "M00001")["IsComplete"].item()
+    assert result.filter(result["module_id"] == "M00001")["is_complete"].item()
 
     cyclic = _write(
         tmp_path / "cyclic.keg",

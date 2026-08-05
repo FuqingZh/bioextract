@@ -246,17 +246,17 @@ def append_subcellular_location_rows(
                 for evidence_code, evidence_source, evidence_id in entry["evidences"]:
                     rows.append(
                         {
-                            "UniProtId": accession,
-                            "PrimaryUniProtId": primary_accession,
-                            "UniProtEntryName": record.entry_name,
-                            "GeneName": record.gene_name,
-                            "ProteinName": record.protein_name,
-                            "SubcellularLocation": entry["location"],
-                            "SubcellularLocationNote": entry["note"],
-                            "EvidenceCode": evidence_code,
-                            "EvidenceSource": evidence_source,
-                            "EvidenceId": evidence_id,
-                            "SourceDb": source_db,
+                            "uniprot_id": accession,
+                            "primary_uniprot_id": primary_accession,
+                            "uniprot_entry_name": record.entry_name,
+                            "gene_name": record.gene_name,
+                            "protein_name": record.protein_name,
+                            "subcellular_location": entry["location"],
+                            "subcellular_location_note": entry["note"],
+                            "evidence_code": evidence_code,
+                            "evidence_source": evidence_source,
+                            "evidence_id": evidence_id,
+                            "source_db": source_db,
                         }
                     )
 
@@ -490,12 +490,12 @@ def append_eggnog_xref_rows(
         for eggnog_og_id, eggnog_level in eggnog_xrefs:
             rows.append(
                 {
-                    "UniProtId": accession,
-                    "PrimaryUniProtId": primary_accession,
-                    "IsPrimaryAccession": accession == primary_accession,
-                    "EggnogOgId": eggnog_og_id,
-                    "EggnogLevel": eggnog_level,
-                    "SourceDb": source_db,
+                    "uniprot_id": accession,
+                    "primary_uniprot_id": primary_accession,
+                    "is_primary_accession": accession == primary_accession,
+                    "eggnog_og_id": eggnog_og_id,
+                    "eggnog_level": eggnog_level,
+                    "source_db": source_db,
                 }
             )
 

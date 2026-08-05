@@ -235,10 +235,10 @@ independent of the DuckDB connection.
 Every matched output retains:
 
 ```text
-GroupId          # grouped selections only
-InputId
-InputNamespace
-ChEBIId
+group_id         # grouped selections only
+input_id
+input_namespace
+chebi_id
 ...
 ```
 
@@ -296,7 +296,7 @@ relations remain available through `extract_relations()`.
 
 ## Unmatched And Validation Contract
 
-`extract_unmatched_ids()` returns a PascalCase `Reason` field with exactly:
+`extract_unmatched_ids()` returns a lowercase `reason` field with exactly:
 
 ```text
 not_found

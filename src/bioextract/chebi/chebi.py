@@ -273,7 +273,7 @@ class ChEBIDatabase:
             ...     ["CHEBI:15377", "CHEBI:10743"],
             ...     namespace="chebi",
             ... )
-            >>> selection.extract_matches()["ChEBIId"].unique().to_list()  # doctest: +SKIP
+            >>> selection.extract_matches()["chebi_id"].unique().to_list()  # doctest: +SKIP
             ['CHEBI:15377']
         """
         return create_selection(

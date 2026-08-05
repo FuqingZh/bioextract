@@ -460,23 +460,6 @@ def _query_frame(connection: duckdb.DuckDBPyConnection, query: str) -> pl.DataFr
     return pl.DataFrame(cursor.fetchall(), schema=columns, orient="row")
 
 
-def _public_frame(frame: pl.DataFrame) -> pl.DataFrame:
-    shared_columns = {
-        "input_id",
-        "input_namespace",
-        "group_id",
-        "reason",
-        "match_type",
-    }
-    renamed = {
-        column: "".join(part.capitalize() for part in column.split("_"))
-        for column in frame.columns
-        if "_" in column and column not in shared_columns
-    }
-    renamed.update({"ec_number": "EcNumber", "ko_id": "KoId"})
-    return frame.rename({key: value for key, value in renamed.items() if key in frame})
-
-
 def write_duckdb(
     snapshot: MetabolicSnapshot,
     path: Path,
@@ -722,9 +705,9 @@ class KEGGMetabolicSelection:
 
         Examples:
             >>> selection.extract_matches().select(  # doctest: +SKIP
-            ...     "input_id", "EntityId"
+            ...     "input_id", "entity_id"
             ... ).columns
-            ['input_id', 'EntityId']
+            ['input_id', 'entity_id']
         """
         if self._matches is not None:
             return self._matches
@@ -747,8 +730,8 @@ class KEGGMetabolicSelection:
                 "input_id": pl.String,
                 "input_namespace": pl.String,
                 "match_type": pl.String,
-                "EntityType": pl.String,
-                "EntityId": pl.String,
+                "entity_type": pl.String,
+                "entity_id": pl.String,
             }
         )
         if not self.input_ids:
@@ -862,13 +845,13 @@ class KEGGMetabolicSelection:
                 input.input_id AS "input_id",
                 '{ns}' AS "input_namespace",
                 'exact' AS "match_type",
-                '{entity}' AS "EntityType",
-                target_row.{target} AS "EntityId"
+                '{entity}' AS entity_type,
+                target_row.{target} AS entity_id
             FROM _input_id AS input
             JOIN {table} AS target_row
               ON target_row.{column} = input.input_id
             WHERE true{namespace_filter}
-            ORDER BY "input_id", "EntityId"
+            ORDER BY input_id, entity_id
             """,
         )
 
@@ -883,11 +866,11 @@ class KEGGMetabolicSelection:
                     input.input_id AS "input_id",
                     'ec' AS "input_namespace",
                     'exact' AS "match_type",
-                    'enzyme' AS "EntityType",
-                    enzyme.ec_number AS "EntityId"
+                    'enzyme' AS entity_type,
+                    enzyme.ec_number AS entity_id
                 FROM _input_id AS input
                 JOIN enzyme ON enzyme.ec_number = input.input_id
-                ORDER BY "input_id", "EntityId"
+                ORDER BY input_id, entity_id
                 """,
             )
 
@@ -898,8 +881,8 @@ class KEGGMetabolicSelection:
                 path.input_id AS "input_id",
                 'ec' AS "input_namespace",
                 'replacement' AS "match_type",
-                'enzyme' AS "EntityType",
-                enzyme.ec_number AS "EntityId"
+                'enzyme' AS entity_type,
+                enzyme.ec_number AS entity_id
             FROM replacement_path AS path
             JOIN enzyme ON enzyme.ec_number = path.ec_number
             WHERE enzyme.status = 'active'
@@ -932,13 +915,13 @@ class KEGGMetabolicSelection:
                 input.input_id AS "input_id",
                 'ec' AS "input_namespace",
                 'exact' AS "match_type",
-                'enzyme' AS "EntityType",
-                enzyme.ec_number AS "EntityId"
+                'enzyme' AS entity_type,
+                enzyme.ec_number AS entity_id
             FROM _input_id AS input
             JOIN enzyme ON enzyme.ec_number = input.input_id
             WHERE enzyme.status = 'active'
             {replacement}
-            ORDER BY "input_id", "match_type", "EntityId"
+            ORDER BY input_id, match_type, entity_id
             """,
         )
 
@@ -967,9 +950,9 @@ class KEGGMetabolicSelection:
                     *prefix,
                     "input_id",
                     "input_namespace",
-                    "AnchorType",
-                    "AnchorId",
-                    "ReactionId",
+                    "anchor_type",
+                    "anchor_id",
+                    "reaction_id",
                 ),
                 pl.String,
             )
@@ -978,7 +961,7 @@ class KEGGMetabolicSelection:
             self._lineage = _empty(schema)
             return self._lineage
 
-        entity_types = set(matches["EntityType"].to_list())
+        entity_types = set(matches["entity_type"].to_list())
         clauses = [
             """
             SELECT
@@ -1071,11 +1054,11 @@ class KEGGMetabolicSelection:
                     group_id AS "group_id",
                     input_id AS "input_id",
                     input_namespace AS "input_namespace",
-                    anchor_type AS "AnchorType",
-                    anchor_id AS "AnchorId",
-                    reaction_id AS "ReactionId"
+                    anchor_type AS anchor_type,
+                    anchor_id AS anchor_id,
+                    reaction_id AS reaction_id
                 FROM ({" UNION ALL ".join(clauses)})
-                ORDER BY "group_id", "input_id", "AnchorType", "AnchorId", "ReactionId"
+                ORDER BY group_id, input_id, anchor_type, anchor_id, reaction_id
                 """,
             )
         self._lineage = (
@@ -1085,9 +1068,7 @@ class KEGGMetabolicSelection:
         )
         return self._lineage
 
-    def _extract(
-        self, table: str, join_column: str, rename: Mapping[str, str] | None = None
-    ) -> pl.DataFrame:
+    def _extract(self, table: str, join_column: str) -> pl.DataFrame:
         self._require(table)
         lineage = self._reaction_lineage()
         if lineage.is_empty():
@@ -1095,18 +1076,18 @@ class KEGGMetabolicSelection:
         with duckdb.connect(str(self.publication.path), read_only=True) as con:
             frame = _query_frame(con, f"SELECT * FROM {table}")
         result = lineage.join(
-            frame, left_on="ReactionId", right_on=join_column, how="inner"
+            frame, left_on="reaction_id", right_on=join_column, how="inner"
         )
-        return _public_frame(result.rename(rename or {}))
+        return result
 
     def extract_reactions(self) -> pl.DataFrame:
         """Return selected reactions with input and anchor lineage.
 
         Examples:
             >>> selection.extract_reactions().select(  # doctest: +SKIP
-            ...     "ReactionId", "Equation"
+            ...     "reaction_id", "equation"
             ... ).columns
-            ['ReactionId', 'Equation']
+            ['reaction_id', 'equation']
         """
         return self._extract("reaction", "reaction_id")
 
@@ -1115,9 +1096,9 @@ class KEGGMetabolicSelection:
 
         Examples:
             >>> selection.extract_participants().select(  # doctest: +SKIP
-            ...     "ReactionId", "Side", "ParticipantId"
+            ...     "reaction_id", "side", "participant_id"
             ... ).columns
-            ['ReactionId', 'Side', 'ParticipantId']
+            ['reaction_id', 'side', 'participant_id']
         """
         return self._extract("reaction_participant", "reaction_id")
 
@@ -1126,9 +1107,9 @@ class KEGGMetabolicSelection:
 
         Examples:
             >>> selection.extract_enzymes().select(  # doctest: +SKIP
-            ...     "ReactionId", "EcNumber"
+            ...     "reaction_id", "ec_number"
             ... ).columns
-            ['ReactionId', 'EcNumber']
+            ['reaction_id', 'ec_number']
         """
         return self._extract("reaction_enzyme", "reaction_id")
 
@@ -1137,9 +1118,9 @@ class KEGGMetabolicSelection:
 
         Examples:
             >>> selection.extract_kos().select(  # doctest: +SKIP
-            ...     "ReactionId", "KoId"
+            ...     "reaction_id", "ko_id"
             ... ).columns
-            ['ReactionId', 'KoId']
+            ['reaction_id', 'ko_id']
         """
         return self._extract("reaction_ko", "reaction_id")
 
@@ -1148,9 +1129,9 @@ class KEGGMetabolicSelection:
 
         Examples:
             >>> selection.extract_modules().select(  # doctest: +SKIP
-            ...     "ReactionId", "ModuleId"
+            ...     "reaction_id", "module_id"
             ... ).columns
-            ['ReactionId', 'ModuleId']
+            ['reaction_id', 'module_id']
         """
         return self._extract("reaction_module", "reaction_id")
 
@@ -1159,23 +1140,21 @@ class KEGGMetabolicSelection:
 
         Examples:
             >>> selection.extract_compounds().select(  # doctest: +SKIP
-            ...     "ParticipantId", "Name"
+            ...     "participant_id", "name"
             ... ).columns
-            ['ParticipantId', 'Name']
+            ['participant_id', 'name']
         """
         participants = self.extract_participants().filter(
-            pl.col("ParticipantNamespace") == "kegg_compound"
+            pl.col("participant_namespace") == "kegg_compound"
         )
         self._require("compound")
         with duckdb.connect(str(self.publication.path), read_only=True) as con:
             compounds = _query_frame(con, "SELECT * FROM compound")
-        return _public_frame(
-            participants.join(
-                compounds,
-                left_on="ParticipantId",
-                right_on="compound_id",
-                how="left",
-            )
+        return participants.join(
+            compounds,
+            left_on="participant_id",
+            right_on="compound_id",
+            how="left",
         )
 
     def extract_pathway_memberships(self) -> pl.DataFrame:
@@ -1183,9 +1162,9 @@ class KEGGMetabolicSelection:
 
         Examples:
             >>> selection.extract_pathway_memberships().select(  # doctest: +SKIP
-            ...     "ReactionId", "PathwayId"
+            ...     "reaction_id", "pathway_id"
             ... ).columns
-            ['ReactionId', 'PathwayId']
+            ['reaction_id', 'pathway_id']
         """
         return self._extract("reaction_pathway", "reaction_id")
 
@@ -1194,9 +1173,9 @@ class KEGGMetabolicSelection:
 
         Examples:
             >>> selection.extract_cross_references().select(  # doctest: +SKIP
-            ...     "Namespace", "ExternalId"
+            ...     "namespace", "external_id"
             ... ).columns
-            ['Namespace', 'ExternalId']
+            ['namespace', 'external_id']
         """
         frames: list[pl.DataFrame] = []
         compounds = self.extract_compounds()
@@ -1206,7 +1185,7 @@ class KEGGMetabolicSelection:
                 frames.append(
                     compounds.join(
                         _query_frame(con, "SELECT * FROM compound_cross_reference"),
-                        left_on="ParticipantId",
+                        left_on="participant_id",
                         right_on="compound_id",
                         how="inner",
                     )
@@ -1215,13 +1194,13 @@ class KEGGMetabolicSelection:
                 frames.append(
                     reactions.join(
                         _query_frame(con, "SELECT * FROM reaction_cross_reference"),
-                        left_on="ReactionId",
+                        left_on="reaction_id",
                         right_on="reaction_id",
                         how="inner",
                     )
                 )
         return (
-            _public_frame(pl.concat(frames, how="diagonal_relaxed"))
+            pl.concat(frames, how="diagonal_relaxed")
             if frames
             else pl.DataFrame()
         )
@@ -1309,8 +1288,8 @@ def _create_selected_anchor_table(
                 row.get("group_id"),
                 row["input_id"],
                 row["input_namespace"],
-                row["EntityType"],
-                row["EntityId"],
+                row["entity_type"],
+                row["entity_id"],
             )
             for row in matches.iter_rows(named=True)
         ],
@@ -1463,11 +1442,13 @@ def evaluate_modules(
         hits = [block_satisfied(node) for node in blocks]
         result.append(
             {
-                "ModuleId": module,
-                "RequiredBlockCount": len(blocks),
-                "SatisfiedBlockCount": sum(hits),
-                "IsComplete": all(hits),
-                "MissingBlockIndexes": [i for i, hit in enumerate(hits, 1) if not hit],
+                "module_id": module,
+                "required_block_count": len(blocks),
+                "satisfied_block_count": sum(hits),
+                "is_complete": all(hits),
+                "missing_block_indexes": [
+                    i for i, hit in enumerate(hits, 1) if not hit
+                ],
             }
         )
-    return pl.DataFrame(result).sort("ModuleId")
+    return pl.DataFrame(result).sort("module_id")

@@ -234,7 +234,7 @@ def test_reopened_handle_reports_missing_publication_source_capability(
         ),
         (
             "DELETE FROM _bioextract.column_mapping "
-            "WHERE table_name='mapping' AND source_column='UniProtId'",
+            "WHERE table_name='mapping' AND source_column='uniprot_id'",
             "column provenance inventory",
         ),
         (

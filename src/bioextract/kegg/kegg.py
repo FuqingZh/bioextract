@@ -739,7 +739,7 @@ class KEGGDatabase:
         Examples:
             >>> result = db.evaluate_modules(["K00844", "K12407"])  # doctest: +SKIP
             >>> result.columns  # doctest: +SKIP
-            ['ModuleId', 'RequiredBlockCount', 'SatisfiedBlockCount', 'IsComplete', 'MissingBlockIndexes']
+            ['module_id', 'required_block_count', 'satisfied_block_count', 'is_complete', 'missing_block_indexes']
         """
         return evaluate_metabolic_modules(self._require_metabolic_publication(), ko_ids)
 
