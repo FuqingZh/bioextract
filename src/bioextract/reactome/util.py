@@ -64,9 +64,7 @@ def filter_relation_frame(
             how="inner",
         )
         .join(
-            df_pathway_ids.rename(
-                {"reactome_pathway_id": "child_reactome_pathway_id"}
-            ),
+            df_pathway_ids.rename({"reactome_pathway_id": "child_reactome_pathway_id"}),
             on="child_reactome_pathway_id",
             how="inner",
         )

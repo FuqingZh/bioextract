@@ -1199,11 +1199,7 @@ class KEGGMetabolicSelection:
                         how="inner",
                     )
                 )
-        return (
-            pl.concat(frames, how="diagonal_relaxed")
-            if frames
-            else pl.DataFrame()
-        )
+        return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
 
     def extract_unmatched_ids(self) -> pl.DataFrame:
         """Return normalized inputs that resolved to no canonical anchor.

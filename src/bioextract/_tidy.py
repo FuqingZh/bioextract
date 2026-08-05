@@ -139,9 +139,7 @@ class TidyDataset:
                 table_name=names.get(asset.frame_name, asset.frame_name),
                 frame=self.frames[asset.frame_name],
                 role=asset.kind,
-                source_columns=tuple(
-                    declared_source_columns.get(asset.frame_name, ())
-                ),
+                source_columns=tuple(declared_source_columns.get(asset.frame_name, ())),
             )
             for asset in self.assets
         )

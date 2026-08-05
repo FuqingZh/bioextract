@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -59,9 +59,10 @@ class _ReopenedReactomeTidyDataset(TidyDataset):
         *,
         table_names: Mapping[str, str] | None = None,
         if_exists: str = "fail",
+        source_columns: Mapping[str, Collection[str]] | None = None,
         include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
-        del path, table_names, if_exists, include_source_hashes
+        del path, table_names, if_exists, source_columns, include_source_hashes
         raise CapabilityError("write_duckdb() requires a Reactome source-file handle")
 
 
@@ -659,7 +660,9 @@ class ReactomeDatabase:
                     self.snapshot.file_relations
                 )
             else:
-                self._df_relations_raw = self._read_publication_table("pathway_relation")
+                self._df_relations_raw = self._read_publication_table(
+                    "pathway_relation"
+                )
         return self._df_relations_raw
 
     def _has_mapping(self) -> bool:
@@ -892,6 +895,7 @@ _REACTOME_TABLE_CONTRACTS: dict[str, tuple[str, str, tuple[tuple[str, str], ...]
         ),
     ),
 }
+
 
 def _validate_reactome_publication(path: Path) -> frozenset[str]:
     if not path.is_file():

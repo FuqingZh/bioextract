@@ -355,7 +355,7 @@ NAME        Transferred to 1.1.1.999
     ]
     assert db.select_ids(
         ["1.1.1.4"], namespace="ec", include_obsolete=True
-        ).extract_matches().select("entity_id", "match_type").to_dicts() == [
+    ).extract_matches().select("entity_id", "match_type").to_dicts() == [
         {"entity_id": "1.1.1.4", "match_type": "exact"}
     ]
     with db.connect() as connection:

@@ -42,7 +42,10 @@ def test_canonical_publication_requires_final_derived_columns(
                 "PRAGMA table_info('protein_pathway')"
             ).fetchall()
         ] == ["uniprot_id", "reactome_pathway_id"]
-        assert connection.execute("SELECT * FROM _bioextract.column_mapping").fetchall() == []
+        assert (
+            connection.execute("SELECT * FROM _bioextract.column_mapping").fetchall()
+            == []
+        )
 
 
 def test_derived_pascal_case_is_rejected_instead_of_normalized(tmp_path: Path) -> None:

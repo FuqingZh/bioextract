@@ -242,9 +242,9 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
             "comment_text": "Demonstrates a mem-brane fixture.",
         }
     ]
-    assert selection.extract_subcellular_locations()[
-        "location"
-    ].to_list() == ["Nucleus"]
+    assert selection.extract_subcellular_locations()["location"].to_list() == [
+        "Nucleus"
+    ]
     assert selection.extract_keywords()["keyword"].to_list() == [
         "Reference proteome",
         "Nucleus",
@@ -378,7 +378,9 @@ SQ   SEQUENCE   3 AA;  365 MW;  69CB1DB000000000 CRC64;
 
     assert database.select_ids(
         ["Q99999"], namespace="uniprot"
-    ).extract_proteins().select("input_id", "primary_accession", "taxon_id").to_dicts() == [
+    ).extract_proteins().select(
+        "input_id", "primary_accession", "taxon_id"
+    ).to_dicts() == [
         {"input_id": "Q99999", "primary_accession": "P11111", "taxon_id": "9606"},
         {"input_id": "Q99999", "primary_accession": "P22222", "taxon_id": "10090"},
     ]

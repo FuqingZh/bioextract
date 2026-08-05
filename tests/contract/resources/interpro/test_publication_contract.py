@@ -233,8 +233,8 @@ def test_reopened_handle_reports_missing_publication_source_capability(
             "row-count drift",
         ),
         (
-            "DELETE FROM _bioextract.column_mapping "
-            "WHERE table_name='mapping' AND source_column='uniprot_id'",
+            "INSERT INTO _bioextract.column_mapping "
+            "VALUES ('mapping', 'uniprot_id', 'uniprot_id', 'forged')",
             "column provenance inventory",
         ),
         (
@@ -450,7 +450,7 @@ def test_from_duckdb_rejects_duplicate_table_info_keys(tmp_path: Path) -> None:
         InterProDatabase.from_duckdb(path)
 
 
-def test_from_duckdb_rejects_duplicate_column_provenance_keys(
+def test_from_duckdb_rejects_malformed_column_provenance_schema(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "interpro.duckdb"
@@ -464,7 +464,7 @@ def test_from_duckdb_rejects_duplicate_column_provenance_keys(
             "DROP TABLE mapping_copy"
         )
 
-    with pytest.raises(IntegrityError, match="duplicate column-provenance keys"):
+    with pytest.raises(IntegrityError, match="provenance table schema"):
         InterProDatabase.from_duckdb(path)
 
 

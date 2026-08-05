@@ -196,7 +196,7 @@ def parse_pathway_header(
     if len(parts) != 4 or any(not part for part in parts):
         raise ValueError(
             "WikiPathways GMT header must have four '%' separated fields: "
-        "PathwayName%Collection%WikiPathwaysId%Species; "
+            "PathwayName%Collection%WikiPathwaysId%Species; "
             f"path={file_gmt}, line={line_number}, value={header!r}"
         )
     pathway_name, collection, pathway_id, species = parts
