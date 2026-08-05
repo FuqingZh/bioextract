@@ -47,7 +47,7 @@ Mouse pathway%WikiPathways_20260510%WP1%Mus musculus	https://www.wikipathways.or
 - Malformed pathway headers raise a targeted `ValueError`.
 - `extract_pathway()` parses pathway name, collection, version, identifier,
   species, URL, and gene count.
-- `extract_term2gene()` emits `WikiPathwaysId, GeneId`.
+- `extract_term2gene()` emits `wiki_pathways_id, gene_id`.
 - `extract_term2name()` emits pathway display metadata.
 - A single GMT may contain multiple species.
 - `species=` filters pathway metadata and `term2gene` by row content after

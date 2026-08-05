@@ -7,33 +7,33 @@ SCHEMA_VERSION = "wikipathways-gmt-v0.1"
 MEDIA_TYPE_GMT = "application/gmt"
 
 SCHEMA_PATHWAY: SchemaDict = {
-    "WikiPathwaysId": pl.String,
-    "PathwayName": pl.String,
-    "Species": pl.String,
-    "Collection": pl.String,
-    "Version": pl.String,
-    "Url": pl.String,
-    "GeneCount": pl.Int64,
+    "wiki_pathways_id": pl.String,
+    "pathway_name": pl.String,
+    "species": pl.String,
+    "collection": pl.String,
+    "version": pl.String,
+    "url": pl.String,
+    "gene_count": pl.Int64,
 }
 SCHEMA_TERM2GENE: SchemaDict = {
-    "WikiPathwaysId": pl.String,
-    "GeneId": pl.String,
+    "wiki_pathways_id": pl.String,
+    "gene_id": pl.String,
 }
 SCHEMA_TERM2NAME: SchemaDict = {
-    "WikiPathwaysId": pl.String,
-    "PathwayName": pl.String,
-    "Species": pl.String,
-    "Collection": pl.String,
-    "Version": pl.String,
-    "Url": pl.String,
+    "wiki_pathways_id": pl.String,
+    "pathway_name": pl.String,
+    "species": pl.String,
+    "collection": pl.String,
+    "version": pl.String,
+    "url": pl.String,
 }
 SCHEMA_MAPPING: SchemaDict = {
     "input_id": pl.String,
-    "GeneId": pl.String,
-    "WikiPathwaysId": pl.String,
-    "PathwayName": pl.String,
-    "Species": pl.String,
-    "Url": pl.String,
+    "gene_id": pl.String,
+    "wiki_pathways_id": pl.String,
+    "pathway_name": pl.String,
+    "species": pl.String,
+    "url": pl.String,
 }
 SCHEMA_GROUP_MAPPING: SchemaDict = {
     "group_id": pl.String,

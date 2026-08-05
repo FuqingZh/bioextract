@@ -13,26 +13,26 @@ from .constant import SCHEMA_PATHWAY, SCHEMA_TERM2GENE, SCHEMA_TERM2NAME
 
 
 class _PathwayRecord(TypedDict):
-    PathwayName: str
-    Collection: str
-    Version: str
-    WikiPathwaysId: str
-    Species: str
-    Url: str
-    GeneCount: int
+    pathway_name: str
+    collection: str
+    version: str
+    wiki_pathways_id: str
+    species: str
+    url: str
+    gene_count: int
 
 
 class _PathwayHeaderRecord(TypedDict):
-    PathwayName: str
-    Collection: str
-    Version: str
-    WikiPathwaysId: str
-    Species: str
+    pathway_name: str
+    collection: str
+    version: str
+    wiki_pathways_id: str
+    species: str
 
 
 class _Term2GeneRecord(TypedDict):
-    WikiPathwaysId: str
-    GeneId: str
+    wiki_pathways_id: str
+    gene_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,11 +119,11 @@ def read_gmt_frames(files_gmt: tuple[Path, ...]) -> _ParsedGmtDataset:
                 pathway = parse_pathway_header(
                     fields[0], file_gmt=file_gmt, line_number=line_number
                 )
-                pathway_id = pathway["WikiPathwaysId"]
+                pathway_id = pathway["wiki_pathways_id"]
                 if pathway_id in pathway_locations:
                     first_path, first_line = pathway_locations[pathway_id]
                     raise ValueError(
-                        "WikiPathwaysId must be unique across all GMT files: "
+                        "wiki_pathways_id must be unique across all GMT files: "
                         f"id={pathway_id}, first_path={first_path}, "
                         f"first_line={first_line}, duplicate_path={file_gmt}, "
                         f"duplicate_line={line_number}"
@@ -137,15 +137,15 @@ def read_gmt_frames(files_gmt: tuple[Path, ...]) -> _ParsedGmtDataset:
                 gene_ids_unique = sorted(set(gene_ids))
                 pathway_record: _PathwayRecord = {
                     **pathway,
-                    "Url": url,
-                    "GeneCount": len(gene_ids_unique),
+                    "url": url,
+                    "gene_count": len(gene_ids_unique),
                 }
                 pathways.append(pathway_record)
                 for gene_id in gene_ids_unique:
                     term2gene_rows.append(
                         {
-                            "WikiPathwaysId": pathway_id,
-                            "GeneId": gene_id,
+                            "wiki_pathways_id": pathway_id,
+                            "gene_id": gene_id,
                         }
                     )
         if pathway_count == 0:
@@ -154,8 +154,8 @@ def read_gmt_frames(files_gmt: tuple[Path, ...]) -> _ParsedGmtDataset:
                 f"pathway record: path={file_gmt}"
             )
 
-    collections = {pathway["Collection"] for pathway in pathways}
-    versions = {pathway["Version"] for pathway in pathways}
+    collections = {pathway["collection"] for pathway in pathways}
+    versions = {pathway["version"] for pathway in pathways}
     if len(collections) != 1:
         raise ValueError(
             "WikiPathways GMT files must contain one common Collection; "
@@ -168,13 +168,13 @@ def read_gmt_frames(files_gmt: tuple[Path, ...]) -> _ParsedGmtDataset:
         )
 
     lf_pathway = (
-        pl.DataFrame(pathways, schema=SCHEMA_PATHWAY).lazy().sort("WikiPathwaysId")
+        pl.DataFrame(pathways, schema=SCHEMA_PATHWAY).lazy().sort("wiki_pathways_id")
     )
     lf_term2gene = (
         pl.DataFrame(term2gene_rows, schema=SCHEMA_TERM2GENE)
         .lazy()
         .unique()
-        .sort("WikiPathwaysId", "GeneId")
+        .sort("wiki_pathways_id", "gene_id")
     )
     return _ParsedGmtDataset(
         frames={
@@ -196,7 +196,7 @@ def parse_pathway_header(
     if len(parts) != 4 or any(not part for part in parts):
         raise ValueError(
             "WikiPathways GMT header must have four '%' separated fields: "
-            "PathwayName%Collection%WikiPathwaysId%Species; "
+        "PathwayName%Collection%WikiPathwaysId%Species; "
             f"path={file_gmt}, line={line_number}, value={header!r}"
         )
     pathway_name, collection, pathway_id, species = parts
@@ -213,19 +213,19 @@ def parse_pathway_header(
             f"'WikiPathways_': path={file_gmt}, line={line_number}"
         )
     return {
-        "PathwayName": pathway_name,
-        "Collection": collection,
-        "Version": version,
-        "WikiPathwaysId": pathway_id,
-        "Species": species,
+        "pathway_name": pathway_name,
+        "collection": collection,
+        "version": version,
+        "wiki_pathways_id": pathway_id,
+        "species": species,
     }
 
 
 def extract_term2name_frame(lf_pathway: pl.LazyFrame) -> pl.LazyFrame:
     return (
         lf_pathway.select(SCHEMA_TERM2NAME.keys())
-        .unique(subset=["WikiPathwaysId"])
-        .sort("WikiPathwaysId")
+        .unique(subset=["wiki_pathways_id"])
+        .sort("wiki_pathways_id")
     )
 
 
@@ -238,24 +238,24 @@ def extract_mapping_frame(
 ) -> pl.LazyFrame:
     cols_out = [
         "input_id",
-        "GeneId",
-        "WikiPathwaysId",
-        "PathwayName",
-        "Species",
-        "Url",
+        "gene_id",
+        "wiki_pathways_id",
+        "pathway_name",
+        "species",
+        "url",
     ]
     lf_hits = (
         df_input_ids.lazy()
         .join(
             lf_term2gene,
             left_on="input_id",
-            right_on="GeneId",
+            right_on="gene_id",
             how="inner",
         )
-        .with_columns(pl.col("input_id").alias("GeneId"))
+        .with_columns(pl.col("input_id").alias("gene_id"))
         .join(
-            lf_pathway.select("WikiPathwaysId", "PathwayName", "Species", "Url"),
-            on="WikiPathwaysId",
+            lf_pathway.select("wiki_pathways_id", "pathway_name", "species", "url"),
+            on="wiki_pathways_id",
             how="left",
         )
         .select(cols_out)
