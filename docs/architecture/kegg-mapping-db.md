@@ -97,31 +97,34 @@ the semantic kind of the input ID values.
 
 ## Output Contract
 
-`extract_mapping()` exposes one wide public DataFrame:
+`extract_mapping()` exposes one wide public DataFrame. These fields are
+derived from headerless KEGG inputs, so they are created directly with the
+stable public `snake_case` names; no source-header mapping is recorded for
+this relation:
 
 ```text
-OrganismCode
-KeggGeneId
-UniProtId
-NcbiGeneId
-KoId
-KeggPathwayId
-PathwayMapId
-GeneSymbol
-GeneDescription
+organism_code
+kegg_gene_id
+uniprot_id
+ncbi_gene_id
+ko_id
+kegg_pathway_id
+pathway_map_id
+gene_symbol
+gene_description
 ```
 
-`KeggGeneId` keeps the KEGG-native namespace such as `hsa:10458`. Other raw
+`kegg_gene_id` keeps the KEGG-native namespace such as `hsa:10458`. Other raw
 database prefixes are normalized away:
 
 ```text
-up:P12345        -> UniProtId=P12345
-ncbi-geneid:1    -> NcbiGeneId=1
-ko:K00001        -> KoId=K00001
-path:hsa00010    -> KeggPathwayId=hsa00010
+up:P12345        -> uniprot_id=P12345
+ncbi-geneid:1    -> ncbi_gene_id=1
+ko:K00001        -> ko_id=K00001
+path:hsa00010    -> kegg_pathway_id=hsa00010
 ```
 
-`PathwayMapId` is derived from organism-specific pathway IDs:
+`pathway_map_id` is derived from organism-specific pathway IDs:
 
 ```text
 hsa00010 -> map00010
@@ -157,9 +160,9 @@ input_namespace
 main.mapping
 ```
 
-The DuckDB relation retains the former normalized publication columns in
-`snake_case`; reopening restores the documented `extract_mapping()` column
-names and preserves single/grouped selection and unmatched-ID behavior.
+The DuckDB relation uses the same `snake_case` columns as
+`extract_mapping()`; reopening does not perform an inverse rename and
+preserves single/grouped selection and unmatched-ID behavior.
 
 Suggested schema version:
 

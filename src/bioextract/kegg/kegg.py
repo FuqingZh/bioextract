@@ -130,7 +130,7 @@ class KEGGDatabase:
         ... )
         >>> mapping.select_ids(
         ...     ["P12345"], namespace="uniprot"
-        ... ).extract_mapping()["KeggGeneId"].to_list()
+        ... ).extract_mapping()["kegg_gene_id"].to_list()
         ['hsa:1', 'hsa:1']
     """
 
@@ -342,9 +342,9 @@ class KEGGDatabase:
             ...     organism_code="hsa",
             ... )
             >>> db.extract_mapping().select(
-            ...     "KeggGeneId", "UniProtId", "KoId"
+            ...     "kegg_gene_id", "uniprot_id", "ko_id"
             ... ).row(0, named=True)
-            {'KeggGeneId': 'hsa:1', 'UniProtId': 'P12345', 'KoId': 'K00001'}
+            {'kegg_gene_id': 'hsa:1', 'uniprot_id': 'P12345', 'ko_id': 'K00001'}
         """
         organism_code = str(organism_code).strip()
         if not organism_code:
@@ -409,44 +409,22 @@ class KEGGDatabase:
             ...     organism_code="hsa",
             ... )
             >>> db.extract_mapping().filter(
-            ...     pl.col("KeggGeneId") == "hsa:1"
-            ... ).select("UniProtId", "KeggPathwayId").to_dicts()
-            [{'UniProtId': 'P12345', 'KeggPathwayId': 'hsa00010'}, {'UniProtId': 'P12345', 'KeggPathwayId': 'hsa01100'}]
+            ...     pl.col("kegg_gene_id") == "hsa:1"
+            ... ).select("uniprot_id", "kegg_pathway_id").to_dicts()
+            [{'uniprot_id': 'P12345', 'kegg_pathway_id': 'hsa00010'}, {'uniprot_id': 'P12345', 'kegg_pathway_id': 'hsa01100'}]
         """
         self._require_mapping_snapshot("extract KEGG mapping")
         if self._df_mapping is None:
             if self.snapshot.kind == _KeggSnapshotKind.MAPPING_PUBLICATION:
                 with self.connect() as connection:
                     cursor = connection.execute("SELECT * FROM mapping")
-                    physical_schema = {
-                        "organism_code": SCHEMA_MAPPING["OrganismCode"],
-                        "kegg_gene_id": SCHEMA_MAPPING["KeggGeneId"],
-                        "uniprot_id": SCHEMA_MAPPING["UniProtId"],
-                        "ncbi_gene_id": SCHEMA_MAPPING["NcbiGeneId"],
-                        "ko_id": SCHEMA_MAPPING["KoId"],
-                        "kegg_pathway_id": SCHEMA_MAPPING["KeggPathwayId"],
-                        "pathway_map_id": SCHEMA_MAPPING["PathwayMapId"],
-                        "gene_symbol": SCHEMA_MAPPING["GeneSymbol"],
-                        "gene_description": SCHEMA_MAPPING["GeneDescription"],
-                    }
+                    physical_schema = dict(SCHEMA_MAPPING)
                     frame = pl.DataFrame(
                         cursor.fetchall(),
                         schema=physical_schema,
                         orient="row",
                     )
-                self._df_mapping = frame.rename(
-                    {
-                        "organism_code": "OrganismCode",
-                        "kegg_gene_id": "KeggGeneId",
-                        "uniprot_id": "UniProtId",
-                        "ncbi_gene_id": "NcbiGeneId",
-                        "ko_id": "KoId",
-                        "kegg_pathway_id": "KeggPathwayId",
-                        "pathway_map_id": "PathwayMapId",
-                        "gene_symbol": "GeneSymbol",
-                        "gene_description": "GeneDescription",
-                    }
-                )
+                self._df_mapping = frame
             else:
                 self._df_mapping = build_mapping_frame(
                     organism_code=self.snapshot.organism_code or "",
@@ -521,9 +499,9 @@ class KEGGDatabase:
             ...     ["sp|P12345|GENE1_HUMAN"], namespace="uniprot"
             ... )
             >>> selection.extract_mapping().select(
-            ...     "input_id", "KeggGeneId"
+            ...     "input_id", "kegg_gene_id"
             ... ).unique().to_dicts()
-            [{'input_id': 'P12345', 'KeggGeneId': 'hsa:1'}]
+            [{'input_id': 'P12345', 'kegg_gene_id': 'hsa:1'}]
         """
         if self.snapshot.kind == _KeggSnapshotKind.METABOLIC_PUBLICATION:
             publication = self._require_metabolic_publication()
@@ -846,7 +824,7 @@ class KeggSelection:
         >>> selection = db.select_ids(
         ...     ["P12345", "MISSING"], namespace="uniprot"
         ... )
-        >>> selection.extract_mapping()["KeggGeneId"].unique().to_list()
+        >>> selection.extract_mapping()["kegg_gene_id"].unique().to_list()
         ['hsa:1']
         >>> selection.extract_unmatched_ids().to_dicts()
         [{'input_id': 'MISSING'}]
@@ -894,7 +872,7 @@ class KeggSelection:
             ...     organism_code="hsa",
             ... )
             >>> selection = db.select_ids(["P12345"], namespace="uniprot")
-            >>> selection.extract_mapping()["KeggGeneId"].to_list()
+            >>> selection.extract_mapping()["kegg_gene_id"].to_list()
             ['hsa:1', 'hsa:1']
         """
         if self._df_mapping is None:
@@ -1105,21 +1083,7 @@ def _validate_tidy_publication(
         if scope == "brite" and observed_column_mapping:
             raise ValueError("KEGG BRITE column provenance inventory is unsupported")
         if scope == "mapping":
-            expected_column_mapping = {
-                ("mapping", source_column, output_column, "generated_snake_case")
-                for source_column, output_column in {
-                    "OrganismCode": "organism_code",
-                    "KeggGeneId": "kegg_gene_id",
-                    "UniProtId": "uniprot_id",
-                    "NcbiGeneId": "ncbi_gene_id",
-                    "KoId": "ko_id",
-                    "KeggPathwayId": "kegg_pathway_id",
-                    "PathwayMapId": "pathway_map_id",
-                    "GeneSymbol": "gene_symbol",
-                    "GeneDescription": "gene_description",
-                }.items()
-            }
-            if observed_column_mapping != expected_column_mapping:
+            if observed_column_mapping:
                 raise ValueError(
                     "KEGG mapping column provenance inventory is unsupported"
                 )
