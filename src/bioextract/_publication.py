@@ -103,7 +103,7 @@ class RelationSpec:
     table_name: str
     frame: pl.LazyFrame
     role: str = "canonical"
-    preserve_source_headers: bool = False
+    source_columns: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,18 +277,12 @@ def write_duckdb_publication(
                 for index, relation in enumerate(relations):
                     file_relation = Path(dir_tmp) / f"{index:04d}.parquet"
                     frame = relation.frame
-                    if relation.preserve_source_headers:
-                        frame, relation_mappings = _disambiguate_source_columns(
-                            frame,
-                            table_name=relation.table_name,
-                        )
-                        mappings.extend(relation_mappings)
-                    else:
-                        frame, relation_mappings = _normalize_lazy_columns(
-                            frame,
-                            table_name=relation.table_name,
-                        )
-                        mappings.extend(relation_mappings)
+                    frame, relation_mappings = _validate_relation_columns(
+                        frame,
+                        table_name=relation.table_name,
+                        source_columns=relation.source_columns,
+                    )
+                    mappings.extend(relation_mappings)
                     frame.sink_parquet(file_relation)
                     connection.execute(
                         f'CREATE TABLE "{relation.table_name}" AS '
@@ -676,45 +670,36 @@ def _connect_publication(
     )
 
 
-def _normalize_lazy_columns(
+def _validate_relation_columns(
     frame: pl.LazyFrame,
     *,
     table_name: str,
+    source_columns: tuple[str, ...],
 ) -> tuple[pl.LazyFrame, tuple[tuple[str, str, str, str], ...]]:
+    """Validate explicit column ownership before a relation is staged.
+
+    Columns listed in ``source_columns`` retain their official names except
+    for deterministic mappings required by an empty or case-insensitive
+    collision. All other columns are bioextract-owned and must already be
+    final lowercase ``snake_case`` identifiers. No generic rename is applied.
+    """
     columns = frame.collect_schema().names()
+    if len(set(source_columns)) != len(source_columns):
+        raise ValueError(
+            f"Relation {table_name!r} source_columns must not contain duplicates"
+        )
+    missing = sorted(set(source_columns) - set(columns))
+    if missing:
+        raise ValueError(
+            f"Relation {table_name!r} declares missing source columns: {missing}"
+        )
+    source_set = set(source_columns)
     output_by_source: dict[str, str] = {}
     used: set[str] = set()
     mappings: list[tuple[str, str, str, str]] = []
     for source_column in columns:
-        base = _to_snake_case(source_column)
-        output_column = base
-        index = 2
-        while output_column.casefold() in used:
-            output_column = f"{base}_{index}"
-            index += 1
-        used.add(output_column.casefold())
-        output_by_source[source_column] = output_column
-        if output_column != source_column:
-            reason = (
-                "identifier_collision"
-                if output_column != base
-                else "generated_snake_case"
-            )
-            mappings.append((table_name, source_column, output_column, reason))
-    return frame.rename(output_by_source), tuple(mappings)
-
-
-def _disambiguate_source_columns(
-    frame: pl.LazyFrame,
-    *,
-    table_name: str,
-) -> tuple[pl.LazyFrame, tuple[tuple[str, str, str, str], ...]]:
-    """Retain official headers except where DuckDB cannot distinguish them."""
-    columns = frame.collect_schema().names()
-    output_by_source: dict[str, str] = {}
-    used: set[str] = set()
-    mappings: list[tuple[str, str, str, str]] = []
-    for source_column in columns:
+        if source_column not in source_set:
+            continue
         base = source_column if source_column else "column"
         output_column = base
         index = 2
@@ -734,28 +719,21 @@ def _disambiguate_source_columns(
                     else "case_insensitive_collision",
                 )
             )
+    for derived_column in columns:
+        if derived_column in source_set:
+            continue
+        if _SQL_IDENTIFIER.fullmatch(derived_column) is None:
+            raise ValueError(
+                f"Relation {table_name!r} derived column must be lowercase "
+                f"snake_case: {derived_column!r}"
+            )
+        if derived_column.casefold() in used:
+            raise ValueError(
+                f"Relation {table_name!r} derived column collides with an "
+                f"official column: {derived_column!r}"
+            )
+        used.add(derived_column.casefold())
     return frame.rename(output_by_source), tuple(mappings)
-
-
-def _to_snake_case(value: str) -> str:
-    prepared = (
-        value.strip()
-        .replace("UniProt", "Uniprot")
-        .replace("InterPro", "Interpro")
-        .replace("WikiPathways", "Wiki_Pathways")
-        .replace("EggNOG", "Eggnog")
-        .replace("KEGG", "Kegg")
-        .replace("STRING", "String")
-    )
-    prepared = re.sub(r"[^0-9A-Za-z]+", "_", prepared)
-    prepared = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", prepared)
-    prepared = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", prepared)
-    normalized = prepared.strip("_").lower()
-    if not normalized:
-        raise ValueError(f"Column name cannot be normalized safely: {value!r}")
-    if normalized[0].isdigit():
-        normalized = f"column_{normalized}"
-    return normalized
 
 
 def _prepare_destination(

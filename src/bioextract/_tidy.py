@@ -109,7 +109,7 @@ class TidyDataset:
         *,
         table_names: Mapping[str, str] | None = None,
         if_exists: str = "fail",
-        preserve_source_headers: Collection[str] = (),
+        source_columns: Mapping[str, Collection[str]] | None = None,
         include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
         """Publish all configured relations as one provenance-aware DuckDB.
@@ -133,12 +133,15 @@ class TidyDataset:
             ('term',)
         """
         names = table_names or {}
+        declared_source_columns = source_columns or {}
         relations = tuple(
             RelationSpec(
                 table_name=names.get(asset.frame_name, asset.frame_name),
                 frame=self.frames[asset.frame_name],
                 role=asset.kind,
-                preserve_source_headers=asset.frame_name in preserve_source_headers,
+                source_columns=tuple(
+                    declared_source_columns.get(asset.frame_name, ())
+                ),
             )
             for asset in self.assets
         )

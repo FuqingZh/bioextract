@@ -74,7 +74,7 @@ class PublicationColumnMapping:
     """Describe one published source-to-output column mapping.
 
     Examples:
-        >>> PublicationColumnMapping("term", "Term ID", "term_id", "generated_snake_case").output_column
+        >>> PublicationColumnMapping("term", "Term ID", "term_id", "empty_header").output_column
         'term_id'
     """
 

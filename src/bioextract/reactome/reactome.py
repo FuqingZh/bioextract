@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -59,10 +59,9 @@ class _ReopenedReactomeTidyDataset(TidyDataset):
         *,
         table_names: Mapping[str, str] | None = None,
         if_exists: str = "fail",
-        preserve_source_headers: Collection[str] = (),
         include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
-        del path, table_names, if_exists, preserve_source_headers, include_source_hashes
+        del path, table_names, if_exists, include_source_hashes
         raise CapabilityError("write_duckdb() requires a Reactome source-file handle")
 
 

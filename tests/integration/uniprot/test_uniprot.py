@@ -448,7 +448,7 @@ def test_selection_and_fasta_inputs_reject_empty_values(tmp_path: Path) -> None:
     entries = _write_dat(tmp_path / "entries.dat.gz")
     UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(path)
     database = UniProtDatabase.from_duckdb(path)
-    with pytest.raises(ValueError, match="TaxId"):
+    with pytest.raises(ValueError, match="tax_id"):
         database.select_ids(["P12345"], namespace="uniprot", taxon_ids=[""])
     with pytest.raises(ValueError, match="group labels"):
         database.select_groups({"": ["P12345"]}, namespace="uniprot")

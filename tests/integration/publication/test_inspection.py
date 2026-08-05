@@ -28,7 +28,11 @@ def _publication(
     path = tmp_path / "publication.duckdb"
     write_duckdb_publication(
         (
-            RelationSpec("z_relation", pl.DataFrame({"id": [1, 2]}).lazy()),
+            RelationSpec(
+                "z_relation",
+                pl.DataFrame({"Name": ["A", "B"], "name": ["a", "b"]}).lazy(),
+                source_columns=("Name", "name"),
+            ),
             RelationSpec("a_relation", pl.DataFrame({"id": [3]}).lazy()),
         ),
         path,
@@ -40,10 +44,6 @@ def _publication(
         scope="canonical",
         release_version="2026-08",
         release_version_source="official_metadata",
-        column_mappings=(
-            ("z_relation", "Z ID", "z_id", "generated_snake_case"),
-            ("a_relation", "A ID", "a_id", "generated_snake_case"),
-        ),
         validation_issues=validation_issues,
     )
     return path
@@ -83,9 +83,9 @@ def test_inspection_preserves_provenance_and_deterministic_order(
     ]
     assert result.source_files[0].display_path == str(tmp_path / "source.tsv")
     assert [mapping.table_name for mapping in result.column_mappings] == [
-        "a_relation",
         "z_relation",
     ]
+    assert result.column_mappings[0].reason == "case_insensitive_collision"
     assert result.validation_issues[0].message == "fixture warning"
 
 

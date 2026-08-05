@@ -232,7 +232,7 @@ def test_mapping_publication_rejects_forged_column_provenance(tmp_path: Path) ->
     with duckdb.connect(str(path)) as connection:
         connection.execute(
             "INSERT INTO _bioextract.column_mapping VALUES "
-            "('mapping', 'forged', 'forged', 'generated_snake_case')"
+            "('mapping', 'forged', 'forged', 'forged')"
         )
 
     with pytest.raises(ValueError, match="column provenance inventory"):
@@ -245,7 +245,7 @@ def test_brite_publication_rejects_forged_column_provenance(tmp_path: Path) -> N
     with duckdb.connect(str(path)) as connection:
         connection.execute(
             "INSERT INTO _bioextract.column_mapping VALUES "
-            "('pathway', 'forged', 'forged', 'generated_snake_case')"
+            "('pathway', 'forged', 'forged', 'forged')"
         )
 
     with pytest.raises(ValueError, match="BRITE column provenance inventory"):

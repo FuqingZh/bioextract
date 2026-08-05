@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -53,10 +53,9 @@ class _ReopenedWikiPathwaysTidyDataset(TidyDataset):
         *,
         table_names: Mapping[str, str] | None = None,
         if_exists: str = "fail",
-        preserve_source_headers: Collection[str] = (),
         include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
-        del path, table_names, if_exists, preserve_source_headers, include_source_hashes
+        del path, table_names, if_exists, include_source_hashes
         raise CapabilityError(
             "write_duckdb() requires a WikiPathways GMT source handle"
         )
