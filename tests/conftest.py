@@ -5,34 +5,37 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import duckdb
 import pytest
 
-_TEST_THREADS_ENV = "BIOEXTRACT_TEST_THREADS"
-_DEFAULT_TEST_THREADS = 4
+from bioextract._runtime import configure_thread_budget
 
+try:
+    _TEST_THREAD_LIMIT = configure_thread_budget()
+except ValueError as error:
+    raise pytest.UsageError(str(error)) from error
 
-def _test_thread_limit() -> int:
-    raw_limit = os.environ.get(_TEST_THREADS_ENV, str(_DEFAULT_TEST_THREADS))
-    try:
-        limit = int(raw_limit)
-    except ValueError as exc:
-        message = f"{_TEST_THREADS_ENV} must be a positive integer, got {raw_limit!r}"
-        raise pytest.UsageError(message) from exc
-    if limit < 1:
-        message = f"{_TEST_THREADS_ENV} must be a positive integer, got {raw_limit!r}"
-        raise pytest.UsageError(message)
-    return limit
+# Make direct pytest subprocesses inherit the same early bootstrap as the PDM
+# launcher. The current interpreter still needs the low-level setup when it
+# was not started through that launcher.
+os.environ["BIOEXTRACT_RUNTIME_BOOTSTRAP"] = "1"
+_SCRIPTS_DIR = str(Path(__file__).resolve().parents[1] / "scripts")
+_pythonpath = os.environ.get("PYTHONPATH", "")
+_pythonpath_parts = _pythonpath.split(os.pathsep) if _pythonpath else []
+if _SCRIPTS_DIR not in _pythonpath_parts:
+    _pythonpath_parts.insert(0, _SCRIPTS_DIR)
+os.environ["PYTHONPATH"] = os.pathsep.join(_pythonpath_parts)
 
+if os.environ.get("BIOEXTRACT_DUCKDB_BOOTSTRAPPED") != "1":
+    # Import the low-level extension first so its bounded connection becomes
+    # the package default. The high-level package otherwise creates an
+    # unbounded default scheduler before the connection wrapper runs.
+    import _duckdb
 
-_TEST_THREAD_LIMIT = _test_thread_limit()
+    _duckdb.set_default_connection(
+        _duckdb.connect(config={"threads": str(_TEST_THREAD_LIMIT)})
+    )
 
-# Polars reads its thread limit at import time. Root conftest is loaded before
-# test modules, so direct `pytest` and repository-owned PDM commands share the
-# same bounded default. Callers may still choose a smaller explicit limit.
-os.environ.setdefault(_TEST_THREADS_ENV, str(_TEST_THREAD_LIMIT))
-os.environ.setdefault("POLARS_MAX_THREADS", str(_TEST_THREAD_LIMIT))
-os.environ.setdefault("RAYON_NUM_THREADS", str(_TEST_THREAD_LIMIT))
+import duckdb  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)

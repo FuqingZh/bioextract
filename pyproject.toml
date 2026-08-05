@@ -23,6 +23,7 @@ dev = [
     "numpy>=2.5.1",
     "pytest>=9.0.2",
     "ruff>=0.15.14",
+    "threadpoolctl>=3.5.0",
     "pyright>=1.1.411",
 ]
 
@@ -74,16 +75,16 @@ typeCheckingMode = "strict"
 distribution = true
 
 [tool.pdm.scripts]
-format = "ruff format ."
-format-check = "ruff format --check ."
-lint = "ruff check ."
-lint-fix = "ruff check --fix ."
-typecheck = "pyright"
-test-unit = {cmd = "pytest tests/unit", env = {PYTHONPATH = "src", BIOEXTRACT_TEST_THREADS = "4"}}
-test-contract = {cmd = "pytest tests/contract", env = {PYTHONPATH = "src", BIOEXTRACT_TEST_THREADS = "4"}}
-test-integration = {cmd = "pytest tests/integration", env = {PYTHONPATH = "src", BIOEXTRACT_TEST_THREADS = "4"}}
-test-smoke = {cmd = "pytest tests/smoke", env = {PYTHONPATH = "src", BIOEXTRACT_TEST_THREADS = "2"}}
-test = {cmd = "pytest tests/unit tests/contract tests/integration", env = {PYTHONPATH = "src", BIOEXTRACT_TEST_THREADS = "4"}}
-lock-check = "pdm lock --check"
+format = "python scripts/run_with_thread_budget.py -- ruff format ."
+format-check = "python scripts/run_with_thread_budget.py -- ruff format --check ."
+lint = "python scripts/run_with_thread_budget.py -- ruff check ."
+lint-fix = "python scripts/run_with_thread_budget.py -- ruff check --fix ."
+typecheck = "python scripts/run_with_thread_budget.py -- pyright"
+test-unit = {cmd = "python scripts/run_with_thread_budget.py -- pytest tests/unit", env = {PYTHONPATH = "src"}}
+test-contract = {cmd = "python scripts/run_with_thread_budget.py -- pytest tests/contract", env = {PYTHONPATH = "src"}}
+test-integration = {cmd = "python scripts/run_with_thread_budget.py -- pytest tests/integration", env = {PYTHONPATH = "src"}}
+test-smoke = {cmd = "python scripts/run_with_thread_budget.py --default 2 -- pytest tests/smoke", env = {PYTHONPATH = "src"}}
+test = {cmd = "python scripts/run_with_thread_budget.py -- pytest tests/unit tests/contract tests/integration", env = {PYTHONPATH = "src"}}
+lock-check = "python scripts/run_with_thread_budget.py -- pdm lock --check"
 check = {composite = ["lock-check", "format-check", "lint", "typecheck", "test"]}
 precommit = {composite = ["format", "lint-fix", "typecheck", "test"]}

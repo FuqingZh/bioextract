@@ -74,7 +74,10 @@ pdm run test-contract
 pdm run test-integration
 ```
 
-Keep shared-host execution bounded with `BIOEXTRACT_TEST_THREADS=1` or `4`.
+Keep shared-host execution bounded with `BIOEXTRACT_TEST_THREADS=1` (or the
+normal `4` default). The repository launcher applies that ceiling before the
+validation child imports native libraries, but this remains a library budget,
+not a host-wide process-tree cap.
 External snapshot smoke is opt-in through `pdm run test-smoke` and explicit
 publication paths; it is never a reason to weaken the hermetic gate.
 

@@ -6,8 +6,10 @@ Status: current
 
 Automated tests cover:
 
-- OBO plain/gzip/zip/tar detection, SDF molfile supplementation, release
-  archives, and unsafe-member rejection;
+- representation-specific `from_obo(source, ...)` and
+  `from_table_files(source=None, ...)`, OBO plain/gzip/zip/tar detection, SDF
+  molfile supplementation, directory/archive overlays, duplicate candidates,
+  and unsafe-member rejection;
 - canonical compound, secondary ID, name, xref, relation, structure, WURCS,
   and separate ChemOnt relations;
 - complete `CHEBI:<number>` keys and dynamic external namespaces;

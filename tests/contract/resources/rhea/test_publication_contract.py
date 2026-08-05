@@ -178,6 +178,7 @@ def _write_release(root: Path) -> Path:
 def test_from_files_signature_and_removed_constructors() -> None:
     parameters = inspect.signature(RheaDatabase.from_files).parameters
     assert tuple(parameters) == (
+        "source",
         "rdf",
         "directions",
         "relationships",
@@ -190,9 +191,11 @@ def test_from_files_signature_and_removed_constructors() -> None:
         "uniprot_sprot",
         "uniprot_trembl",
     )
+    assert parameters["source"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
     assert all(
         parameter.kind is inspect.Parameter.KEYWORD_ONLY and parameter.default is None
-        for parameter in parameters.values()
+        for name, parameter in parameters.items()
+        if name != "source"
     )
     assert not hasattr(RheaDatabase, "from_reaction_files")
     assert not hasattr(RheaDatabase, "from_compound_files")
@@ -406,7 +409,7 @@ def test_release_is_strict_but_partial_constructor_is_not(
     _write(tmp_path / "chebiId_name.tsv", "1\t A\n")
 
     with pytest.raises(ValueError, match="Incomplete Rhea release"):
-        RheaDatabase.from_release(tmp_path)
+        RheaDatabase.from_files(tmp_path)
 
     db = RheaDatabase.from_files(chebi_names=tmp_path / "chebiId_name.tsv")
     assert db.snapshot.scope == "compounds"
@@ -468,7 +471,7 @@ def test_publication_metadata_and_direction_view_follow_shared_contract(
 ) -> None:
     release = _write_release(tmp_path / "release")
     path = tmp_path / "rhea.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(path)
+    RheaDatabase.from_files(release).write_duckdb(path)
 
     with duckdb.connect(str(path), read_only=True) as connection:
         metadata = dict(
@@ -523,7 +526,7 @@ def test_from_duckdb_rejects_wrong_identity_and_corrupt_inventory(
 
     release = _write_release(tmp_path / "release")
     corrupt = tmp_path / "corrupt.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(corrupt)
+    RheaDatabase.from_files(release).write_duckdb(corrupt)
     with duckdb.connect(str(corrupt)) as connection:
         connection.execute(
             "UPDATE _bioextract.table_info "
@@ -538,7 +541,7 @@ def test_metadata_versions_physical_curie_contract_and_native_connection(
 ) -> None:
     release = _write_release(tmp_path / "release")
     current = tmp_path / "current.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(current)
+    RheaDatabase.from_files(release).write_duckdb(current)
 
     database = RheaDatabase.from_duckdb(current)
     with database.connect() as connection:

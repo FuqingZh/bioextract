@@ -26,14 +26,16 @@ artifacts; the only output is the DuckDB database.
 
 The public constructors disclose complexity by capability:
 
-- `from_files(...)` accepts the 11 keyword-only explicit roles. Any reaction
-  role requires both RDF and the direction quartet; compound and
+- `from_files(source=None, ...)` accepts a complete release directory/archive
+  plus explicit role overlays, or the 11 independent explicit roles. Any
+  reaction role requires both RDF and the direction quartet; compound and
   cross-reference roles remain independently constructible. One supplied
   group has its group scope, while any mixed group profile has `partial`
   scope. Explicit paths are normalized to their actual files, and one physical
   file cannot fill multiple logical roles.
-- `from_release(source)` accepts an extracted directory or zip/tar archive and
-  strictly requires all 15 assets in the current official release contract.
+- With `source`, the final merged inventory must contain all 15 official roles;
+  an explicit role replaces its discovered counterpart and is retained in
+  provenance. Directory and archive sources have equivalent discovery rules.
 - `from_duckdb(path)` validates a bioextract Rhea publication and opens it as a
   read-only domain-query handle.
 

@@ -71,7 +71,7 @@ ChemOnt remains a separate `chemont_*` graph in the same container:
 ```python
 from bioextract import ChEBIDatabase
 
-result = ChEBIDatabase.from_release(
+result = ChEBIDatabase.from_table_files(
     "chebi/database/2026-07-07/raw",
     chemont_obo="ChemOnt_2_1.obo.zip",
 ).write_duckdb("out/chebi.duckdb")
@@ -112,7 +112,7 @@ Build one query-ready database from a complete extracted release or archive:
 ```python
 from bioextract import RheaDatabase
 
-result = RheaDatabase.from_release("rhea-release.zip").write_duckdb(
+result = RheaDatabase.from_files("rhea-release.zip").write_duckdb(
     "out/rhea.duckdb"
 )
 print(result.tables)
@@ -201,7 +201,7 @@ A compound/reaction/enzyme/module snapshot is a multi-relation metabolic
 publication:
 
 ```python
-database = KEGGDatabase.from_metabolic_release("kegg/metabolic/2026-07")
+database = KEGGDatabase.from_metabolic_files("kegg/metabolic/2026-07")
 database.write_duckdb("out/kegg.duckdb")
 
 published = KEGGDatabase.from_duckdb("out/kegg.duckdb")
@@ -442,12 +442,15 @@ Machine identity comes from embedded metadata.
 - `pdm run precommit` applies formatting and lint fixes, then runs strict
   typing and the complete hermetic suite.
 
-Hermetic tests limit DuckDB, Polars, and Rayon-backed work to four threads by
-default. Set `BIOEXTRACT_TEST_THREADS=1` when sharing a constrained host.
+Repository-owned validation commands apply a four-thread native-library
+ceiling before importing Polars, DuckDB, NumPy, or other analytical libraries.
+Set `BIOEXTRACT_TEST_THREADS=1` when sharing a constrained host; the launcher
+also clamps known OpenMP, BLAS, Rayon, and NumExpr variables and the test
+harness sets DuckDB's connection-level thread count.
 
-For publication builds, set `POLARS_MAX_THREADS` before importing Polars or
-bioextract. It bounds both Polars execution and bioextract-owned DuckDB
-publication connections.
+This validation budget is not a hard process-tree `NLWP` cap and does not
+change bioextract runtime defaults for real publication builds. Publication
+callers retain control of their runtime environment.
 
 ## Release
 

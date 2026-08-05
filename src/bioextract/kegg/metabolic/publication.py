@@ -530,11 +530,12 @@ def _source_records(
     *,
     include_source_hashes: bool,
 ) -> list[SourceFileRecord]:
-    logical_sources: Mapping[str, tuple[Path, ...]]
+    logical_sources: dict[str, tuple[Path, ...]]
     if snapshot.archive is not None:
         logical_sources = {"release_archive": (snapshot.archive,)}
+        logical_sources.update(snapshot.sources)
     else:
-        logical_sources = snapshot.sources
+        logical_sources = dict(snapshot.sources)
     records: list[SourceFileRecord] = []
     for role, paths in logical_sources.items():
         for index, source in enumerate(paths):
@@ -568,22 +569,23 @@ def publish(
             release = root / "release"
             release.mkdir()
             extract_archive(snapshot.archive, release)
-            discovered_sources = discover_release_layout(release)
-            missing = [
-                role
-                for role in (
-                    *[f"{family}_entries" for family in ENTRY_ROLES],
-                    *RELATION_ROLES,
-                )
-                if role not in discovered_sources
-            ]
+            discovered_sources = discover_release_layout(
+                release,
+                skipped_roles=snapshot.sources,
+            )
+            merged_sources = {**discovered_sources, **snapshot.sources}
+            required = (
+                *[f"{family}_entries" for family in ENTRY_ROLES],
+                *RELATION_ROLES,
+            )
+            missing = [role for role in required if role not in merged_sources]
             if missing:
                 raise ValueError(
                     "Incomplete KEGG metabolic release archive; "
                     f"missing roles: {missing}"
                 )
             effective = MetabolicSnapshot(
-                discovered_sources, snapshot.release_version, True
+                merged_sources, snapshot.release_version, True
             )
         effective = _resolve_entry_archives(effective, root)
         spool = _Spool(root / "relations")

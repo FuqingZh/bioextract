@@ -71,9 +71,6 @@ from .metabolic.core import (
     from_metabolic_files as create_metabolic_snapshot,
 )
 from .metabolic.core import (
-    from_metabolic_release as discover_metabolic_snapshot,
-)
-from .metabolic.core import (
     open_publication as open_metabolic_publication,
 )
 from .metabolic.core import (
@@ -142,38 +139,9 @@ class KEGGDatabase:
     _publication_path: Path | None = field(default=None, init=False, repr=False)
 
     @classmethod
-    def from_metabolic_release(
-        cls,
-        source: os.PathLike[str] | str,
-        *,
-        release_version: str | None = None,
-    ) -> KEGGDatabase:
-        """Discover a complete local KEGG metabolic release.
-
-        ``source`` may be the release directory, its ``raw`` directory, or a
-        zip/tar archive containing the layout. ``release_version`` is an
-        optional caller-declared official identity. Paths and archive names
-        never supply or validate it. No network access is performed.
-
-        Examples:
-            >>> db = KEGGDatabase.from_metabolic_release(  # doctest: +SKIP
-            ...     "kegg/metabolic/2026-07"
-            ... )
-            >>> db.snapshot.kind.value  # doctest: +SKIP
-            'metabolic_files'
-        """
-        return cls(
-            snapshot=_KeggSnapshot(
-                kind=_KeggSnapshotKind.METABOLIC_FILES,
-                metabolic=discover_metabolic_snapshot(
-                    source, release_version=release_version
-                ),
-            )
-        )
-
-    @classmethod
     def from_metabolic_files(
         cls,
+        source: os.PathLike[str] | str | None = None,
         *,
         compound_list: os.PathLike[str] | str | None = None,
         compound_entries: (
@@ -200,10 +168,12 @@ class KEGGDatabase:
         module_pathway: os.PathLike[str] | str | None = None,
         release_version: str | None = None,
     ) -> KEGGDatabase:
-        """Create a partial or complete metabolic handle from explicit roles.
+        """Create a partial or complete metabolic handle from local inputs.
 
         Entry collections may be a directory, one batch, or a sequence of
-        batches. Missing roles become absent publication capabilities.
+        batches. Missing roles become absent publication capabilities. When
+        ``source`` is provided, it supplies unoverridden roles from a complete
+        release profile and explicit roles replace matching discoveries.
 
         Examples:
             >>> db = KEGGDatabase.from_metabolic_files(  # doctest: +SKIP
@@ -218,6 +188,7 @@ class KEGGDatabase:
             snapshot=_KeggSnapshot(
                 kind=_KeggSnapshotKind.METABOLIC_FILES,
                 metabolic=create_metabolic_snapshot(
+                    source=source,
                     compound_list=compound_list,
                     compound_entries=compound_entries,
                     reaction_list=reaction_list,

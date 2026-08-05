@@ -5,8 +5,9 @@ Status: current
 
 Changes to `RheaDatabase` must verify:
 
-1. `from_files()` has exactly 11 optional keyword-only roles, rejects an empty
-   profile and duplicate physical files across roles, requires RDF and
+1. `from_files(source=None, ...)` has one positional-or-keyword source and 11
+   optional keyword-only roles, rejects an empty partial profile and duplicate
+   physical files across roles, requires RDF and
    directions for any reaction role, and accepts independent compound and
    cross-reference roles plus mixed partial profiles.
 2. gzip/plain RDF detection is content-based.
@@ -16,7 +17,9 @@ Changes to `RheaDatabase` must verify:
 4. A partial write creates no tables for absent components.
 5. Aggregate xrefs create EC/GO views and UniProt provenance distinguishes
    Swiss-Prot from TrEMBL.
-6. A complete extracted release and its archive produce the same row counts.
+6. A complete extracted release and its archive produce the same row counts;
+   `from_files(source, ...)` overlays replace whole roles, including when the
+   source role is absent, while preserving final provenance.
 7. Complete-release discovery rejects missing or duplicate logical assets.
 8. Existing output follows `fail`/`replace`, and a failed staging build does not
    corrupt the destination.
@@ -39,7 +42,8 @@ Changes to `RheaDatabase` must verify:
     unknown metadata contracts are rejected.
 18. `connect()` returns independent native read-only connections and rejects
     persistent writes.
-19. The three superseded explicit-file constructors are absent, all supplied
+19. The three superseded constructors are absent, source overlays retain a
+    complete final release profile, all supplied
     roles appear in provenance with `obsolete_reactions` recorded as
     `obsoletes`, and each source profile has `reactions`, `compounds`,
     `cross_references`, or `partial` construction scope. `write_duckdb()`

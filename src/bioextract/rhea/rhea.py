@@ -72,9 +72,9 @@ class RheaDatabase:
     """Build a query-ready DuckDB database from local Rhea release files.
 
     :meth:`from_files` exposes independently useful or mixed reaction,
-    compound, and cross-reference capabilities. :meth:`from_release` accepts
-    either an extracted release directory or a ``zip``/``tar`` archive and
-    requires the complete official release asset set.
+    compound, and cross-reference capabilities. Its optional ``source``
+    discovers a complete official release profile before explicit role
+    replacements are applied.
 
     Examples:
         Open only the reaction component:
@@ -93,6 +93,7 @@ class RheaDatabase:
     @classmethod
     def from_files(
         cls,
+        source: os.PathLike[str] | str | None = None,
         *,
         rdf: os.PathLike[str] | str | None = None,
         directions: os.PathLike[str] | str | None = None,
@@ -106,12 +107,13 @@ class RheaDatabase:
         uniprot_sprot: os.PathLike[str] | str | None = None,
         uniprot_trembl: os.PathLike[str] | str | None = None,
     ) -> RheaDatabase:
-        """Create a capability-scoped handle from explicit Rhea files.
+        """Create a capability-scoped handle from Rhea files or a release source.
 
         A reaction role requires both ``rdf`` and ``directions``. Compound and
         cross-reference roles are independently constructible. A handle with
         exactly one role group has that group's scope; mixed groups have
-        ``partial`` scope.
+        ``partial`` scope. When ``source`` is provided, it supplies the
+        unoverridden roles and the final profile must be a complete release.
 
         Args:
             rdf: Optional official ``rhea.rdf`` or ``rhea.rdf.gz``.
@@ -126,6 +128,8 @@ class RheaDatabase:
             uniprot_sprot: Optional reviewed UniProt reaction mapping.
             uniprot_trembl: Optional unreviewed UniProt mapping, plain or
                 gzip-compressed.
+            source: Optional extracted release directory or zip/tar archive.
+                Explicit role arguments replace matching discovered roles.
 
         Returns:
             A source-backed handle containing only the supplied capabilities.
@@ -160,25 +164,50 @@ class RheaDatabase:
             "uniprot_sprot": uniprot_sprot,
             "uniprot_trembl": uniprot_trembl,
         }
-        supplied = {
-            name for name, value in explicit_values.items() if value is not None
-        }
-        if not supplied:
-            raise ValueError("At least one Rhea input file role must be provided")
+        explicit_sources = _validate_explicit_sources(explicit_values)
+        supplied = set(explicit_sources)
 
         reaction_roles = {
             "rdf",
             "directions",
             "relationships",
-            "obsolete_reactions",
+            "obsoletes",
             "reaction_smiles",
         }
-        if supplied & reaction_roles and not {"rdf", "directions"} <= supplied:
+        if (
+            source is None
+            and supplied & reaction_roles
+            and not {"rdf", "directions"} <= supplied
+        ):
             missing = sorted({"rdf", "directions"} - supplied)
             raise ValueError(
                 "Rhea reaction input roles require both rdf and directions; "
                 f"missing roles: {', '.join(missing)}"
             )
+
+        if source is not None:
+            source_path = _validate_path(source)
+            if source_path.is_dir():
+                discovered = _discover_release_files(
+                    source_path,
+                    skipped_roles=supplied,
+                )
+                sources = {**discovered, **explicit_sources}
+                _validate_complete_release(sources)
+                _validate_source_inventory(sources)
+                return cls(snapshot=_RheaSnapshot(scope="release", sources=sources))
+            _inspect_archive_release(source_path, skipped_roles=supplied)
+            _validate_source_inventory(explicit_sources)
+            return cls(
+                snapshot=_RheaSnapshot(
+                    scope="release",
+                    sources=explicit_sources,
+                    release_source=source_path,
+                )
+            )
+
+        if not supplied:
+            raise ValueError("At least one Rhea input file role must be provided")
 
         groups = {
             "reactions": reaction_roles,
@@ -187,38 +216,7 @@ class RheaDatabase:
         }
         present_groups = [name for name, roles in groups.items() if supplied & roles]
         scope = present_groups[0] if len(present_groups) == 1 else "partial"
-        sources = _validate_explicit_sources(explicit_values)
-        if "obsolete_reactions" in sources:
-            sources["obsoletes"] = sources.pop("obsolete_reactions")
-        return cls(snapshot=_RheaSnapshot(scope=scope, sources=sources))
-
-    @classmethod
-    def from_release(
-        cls,
-        source: os.PathLike[str] | str,
-    ) -> RheaDatabase:
-        """Create a strict handle from a complete Rhea release.
-
-        ``source`` may be an extracted directory, a zip archive, or a tar
-        archive. Compression is detected from content rather than filename.
-
-        Examples:
-            A missing release path is rejected immediately:
-
-            >>> try:
-            ...     RheaDatabase.from_release("missing-rhea-release")
-            ... except FileNotFoundError as error:
-            ...     print(error.filename)
-            missing-rhea-release
-        """
-        path = _validate_path(source)
-        if path.is_dir():
-            sources = _discover_release_files(path)
-            _validate_complete_release(sources)
-            return cls(snapshot=_RheaSnapshot(scope="release", sources=sources))
-
-        _inspect_archive_release(path)
-        return cls(snapshot=_RheaSnapshot(scope="release", release_source=path))
+        return cls(snapshot=_RheaSnapshot(scope=scope, sources=explicit_sources))
 
     @classmethod
     def from_duckdb(
@@ -421,10 +419,19 @@ class RheaDatabase:
         with tempfile.TemporaryDirectory(prefix="bioextract-rhea-") as dir_tmp:
             root = Path(dir_tmp)
             _extract_archive(archive, root)
-            sources = _discover_release_files(root)
+            sources = _discover_release_files(
+                root,
+                skipped_roles=self.snapshot.sources,
+            )
+            sources = {**sources, **self.snapshot.sources}
             _validate_complete_release(sources)
+            _validate_source_inventory(sources)
             display_paths = {
-                name: f"{archive}::{path.relative_to(root)}"
+                name: (
+                    str(path)
+                    if name in self.snapshot.sources
+                    else f"{archive}::{path.relative_to(root)}"
+                )
                 for name, path in sources.items()
             }
             yield sources, display_paths
@@ -438,6 +445,7 @@ def _validate_explicit_sources(
     for name, value in values.items():
         if value is None:
             continue
+        canonical_name = "obsoletes" if name == "obsolete_reactions" else name
         path = _validate_path(value).resolve()
         if not path.is_file():
             raise ValueError(f"Rhea input is not a file: {path}")
@@ -446,11 +454,11 @@ def _validate_explicit_sources(
         if physical_id in physical_roles:
             other_name, other_path = physical_roles[physical_id]
             raise ValueError(
-                f"Rhea input roles {other_name!r} and {name!r} refer to the "
+                f"Rhea input roles {other_name!r} and {canonical_name!r} refer to the "
                 f"same physical file: {other_path}"
             )
-        physical_roles[physical_id] = (name, path)
-        sources[name] = path
+        physical_roles[physical_id] = (canonical_name, path)
+        sources[canonical_name] = path
     return sources
 
 
@@ -461,7 +469,12 @@ def _validate_path(value: os.PathLike[str] | str) -> Path:
     return path
 
 
-def _discover_release_files(root: Path) -> dict[str, Path]:
+def _discover_release_files(
+    root: Path,
+    *,
+    skipped_roles: Iterable[str] = (),
+) -> dict[str, Path]:
+    skipped = set(skipped_roles)
     candidates_by_basename: dict[str, list[Path]] = {}
     for path in root.rglob("*"):
         if path.is_file():
@@ -469,6 +482,8 @@ def _discover_release_files(root: Path) -> dict[str, Path]:
 
     sources: dict[str, Path] = {}
     for name, basenames in SOURCE_BASENAMES.items():
+        if name in skipped:
+            continue
         matches = [
             path
             for basename in basenames
@@ -493,11 +508,33 @@ def _validate_complete_release(
         raise ValueError(f"Incomplete Rhea release; missing sources: {expected}")
 
 
-def _inspect_archive_release(path: Path) -> None:
+def _validate_source_inventory(sources: Mapping[str, Path]) -> None:
+    physical_roles: dict[tuple[int, int], tuple[str, Path]] = {}
+    for name, path in sources.items():
+        resolved = path.resolve()
+        stat = resolved.stat()
+        physical_id = (stat.st_dev, stat.st_ino)
+        if physical_id in physical_roles:
+            other_name, other_path = physical_roles[physical_id]
+            raise ValueError(
+                f"Rhea input roles {other_name!r} and {name!r} refer to the "
+                f"same physical file: {other_path}"
+            )
+        physical_roles[physical_id] = (name, resolved)
+
+
+def _inspect_archive_release(
+    path: Path,
+    *,
+    skipped_roles: Iterable[str] = (),
+) -> None:
+    skipped = set(skipped_roles)
     names = _archive_member_names(path)
     basenames = [Path(name).name for name in names if not name.endswith("/")]
     missing: list[str] = []
     for name in RELEASE_REQUIRED_SOURCES:
+        if name in skipped:
+            continue
         matches = [
             basename for basename in basenames if basename in SOURCE_BASENAMES[name]
         ]

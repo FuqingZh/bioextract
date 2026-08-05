@@ -4,6 +4,9 @@ Storage status: superseded by the current
 [Storage And Publication Convergence Plan](20260803-v1.0-storage-publication-convergence-implementation-plan.md).
 The decisions and measurements below remain historical; metadata v1/v2/v3
 statements and example filenames are not current publication authority.
+Its former generic `from_release` examples are historical; current ChEBI
+constructor authority is the
+[Runtime And Constructor Convergence Plan](20260805-v1.0-runtime-and-constructor-convergence.md).
 
 Date: 2026-07-29
 Status: implemented

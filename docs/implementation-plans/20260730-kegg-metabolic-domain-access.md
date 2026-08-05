@@ -4,6 +4,9 @@ Storage naming status: superseded by the current
 [Storage And Publication Convergence Plan](20260803-v1.0-storage-publication-convergence-implementation-plan.md).
 The decisions, artifact paths, and measurements below remain historical;
 resource-named DuckDB guidance is not current schema or filename authority.
+Its former `from_metabolic_release` examples are historical; current KEGG
+constructor authority is the
+[Runtime And Constructor Convergence Plan](20260805-v1.0-runtime-and-constructor-convergence.md).
 
 Date: 2026-07-30
 Status: completed

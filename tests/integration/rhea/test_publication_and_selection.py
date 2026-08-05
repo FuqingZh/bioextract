@@ -275,7 +275,7 @@ def test_cross_reference_constructor_builds_views(tmp_path: Path) -> None:
 def test_complete_release_directory_and_archive(tmp_path: Path) -> None:
     release = _write_release(tmp_path / "release")
     file_directory = tmp_path / "directory.duckdb"
-    directory_report = RheaDatabase.from_release(release).write_duckdb(file_directory)
+    directory_report = RheaDatabase.from_files(release).write_duckdb(file_directory)
 
     assert directory_report.release_number == 141
     assert directory_report.release_date == "2026-06-10"
@@ -292,7 +292,7 @@ def test_complete_release_directory_and_archive(tmp_path: Path) -> None:
             if path.is_file():
                 archive.write(path, path.relative_to(tmp_path))
     file_archived_db = tmp_path / "archive.duckdb"
-    archive_report = RheaDatabase.from_release(file_archive).write_duckdb(
+    archive_report = RheaDatabase.from_files(file_archive).write_duckdb(
         file_archived_db
     )
 
@@ -302,12 +302,26 @@ def test_complete_release_directory_and_archive(tmp_path: Path) -> None:
     )
 
 
+def test_complete_release_source_accepts_explicit_role_overlay(tmp_path: Path) -> None:
+    release = _write_release(tmp_path / "release")
+    override = tmp_path / "override.rdf"
+    override.write_bytes((release / "raw" / "rhea.rdf").read_bytes())
+    (release / "raw" / "rhea.rdf").unlink()
+
+    database = RheaDatabase.from_files(release, rdf=override)
+    assert database.snapshot.scope == "release"
+    assert database.snapshot.sources["rdf"] == override.resolve()
+
+    report = database.write_duckdb(tmp_path / "overlay.duckdb")
+    assert report.source_files["rdf"] == str(override.resolve())
+
+
 def test_from_duckdb_selects_exact_reactions_and_domain_relations(
     tmp_path: Path,
 ) -> None:
     release = _write_release(tmp_path / "release")
     path = tmp_path / "rhea.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(path)
+    RheaDatabase.from_files(release).write_duckdb(path)
 
     database = RheaDatabase.from_duckdb(path)
     selection = database.select_reactions(["CHEBI:1"], namespace="chebi")
@@ -386,7 +400,7 @@ def test_grouped_selection_preserves_lineage_and_unmatched_ids(
 ) -> None:
     release = _write_release(tmp_path / "release")
     path = tmp_path / "rhea.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(path)
+    RheaDatabase.from_files(release).write_duckdb(path)
 
     selection = RheaDatabase.from_duckdb(path).select_groups(
         {
@@ -417,7 +431,7 @@ def test_grouped_selection_resolves_unique_ids_once_and_reuses_mapping(
 ) -> None:
     release = _write_release(tmp_path / "release")
     path = tmp_path / "rhea.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(path)
+    RheaDatabase.from_files(release).write_duckdb(path)
     input_table_calls: list[tuple[tuple[str, str], ...]] = []
     original_create_input_table = rhea_query._create_input_table  # pyright: ignore[reportPrivateUsage]
 
@@ -493,7 +507,7 @@ def test_supported_namespaces_resolve_official_mappings(
 ) -> None:
     release = _write_release(tmp_path / "release")
     path = tmp_path / "rhea.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(path)
+    RheaDatabase.from_files(release).write_duckdb(path)
 
     matches = (
         RheaDatabase.from_duckdb(path)
@@ -510,7 +524,7 @@ def test_supported_namespaces_resolve_official_mappings(
 def test_obsolete_policy_is_explicit(tmp_path: Path) -> None:
     release = _write_release(tmp_path / "release")
     path = tmp_path / "rhea.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(path)
+    RheaDatabase.from_files(release).write_duckdb(path)
     database = RheaDatabase.from_duckdb(path)
 
     excluded = database.select_reactions(["10004"], namespace="rhea")

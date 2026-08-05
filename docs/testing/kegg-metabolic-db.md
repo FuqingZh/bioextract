@@ -10,8 +10,9 @@ The focused suites are `tests/unit/kegg/test_metabolic_parsers.py`,
 fixtures only and verifies:
 
 - streaming multi-record compound, reaction, enzyme, and module parsing;
-- directory, single-file, nested zip/tar/gzip, and archive release discovery,
-  including original-archive provenance;
+- `from_metabolic_files(source=None, ...)` partial profiles, directory/raw,
+  nested zip/tar archive discovery, whole-role overlays, duplicate physical
+  files, and original-archive provenance;
 - symbolic/numeric coefficients and C/G equation participants;
 - polymer/side suffix qualifiers without corrupting stoichiometric coefficients;
 - active and real `ENTRY EC ... Obsolete Enzyme` records, recursive replacement

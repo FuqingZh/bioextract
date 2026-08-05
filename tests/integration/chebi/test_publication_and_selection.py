@@ -61,10 +61,64 @@ def test_release_archive_is_detected_from_content(
             archive.add(directory / "compounds.tsv", arcname="nested/compounds.tsv")
             archive.add(directory / "names.tsv", arcname="nested/names.tsv")
 
-    result = ChEBIDatabase.from_release(file_archive).write_duckdb(
+    result = ChEBIDatabase.from_table_files(file_archive).write_duckdb(
         tmp_path / f"{archive_kind}.duckdb"
     )
     assert result.row_counts == {"compound": 1, "compound_name": 1}
+
+
+def test_table_source_accepts_explicit_role_overlay(tmp_path: Path) -> None:
+    release = tmp_path / "release"
+    _write_release(release)
+    override = tmp_path / "override-names.tsv"
+    override.write_bytes((release / "names.tsv").read_bytes())
+    (release / "names.tsv").unlink()
+
+    database = ChEBIDatabase.from_table_files(release, names=override)
+    assert database.snapshot.table_sources["compound_name"] == override.resolve()
+    path = tmp_path / "overlay.duckdb"
+    database.write_duckdb(path)
+    with duckdb.connect(str(path), read_only=True) as connection:
+        assert connection.execute(
+            "SELECT display_path FROM _bioextract.source_file "
+            "WHERE logical_name='compound_name'"
+        ).fetchone() == (str(override.resolve()),)
+
+
+def test_table_archive_accepts_explicit_role_overlay(tmp_path: Path) -> None:
+    release = tmp_path / "release"
+    _write_release(release)
+    archive_path = tmp_path / "release.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        for source in sorted(release.rglob("*")):
+            if source.is_file():
+                archive.write(source, source.relative_to(release))
+    override = tmp_path / "override-names.tsv"
+    override.write_bytes((release / "names.tsv").read_bytes())
+
+    database = ChEBIDatabase.from_table_files(archive_path, names=override)
+    database.write_duckdb(tmp_path / "archive-overlay.duckdb")
+
+
+def test_obo_directory_selects_one_ontology_candidate(tmp_path: Path) -> None:
+    source = tmp_path / "ontology"
+    source.mkdir()
+    (source / "chebi.obo").write_text(OBO, encoding="utf-8")
+    (source / "compounds.tsv").write_text(COMPOUNDS, encoding="utf-8")
+
+    database = ChEBIDatabase.from_obo(source)
+    assert database.snapshot.file_obo == (source / "chebi.obo").resolve()
+    assert database.snapshot.file_sdf is None
+    database.write_duckdb(tmp_path / "ontology.duckdb")
+
+
+def test_obo_directory_rejects_ambiguous_candidates(tmp_path: Path) -> None:
+    source = tmp_path / "ambiguous"
+    source.mkdir()
+    (source / "one.obo").write_text(OBO, encoding="utf-8")
+    (source / "two.obo").write_text(OBO, encoding="utf-8")
+    with pytest.raises(ValueError, match="exactly one .obo"):
+        ChEBIDatabase.from_obo(source)
 
 
 @pytest.mark.parametrize("container", ["plain", "gzip", "zip", "tar"])

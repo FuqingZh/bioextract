@@ -86,56 +86,11 @@ class ChEBIDatabase:
     _publication: _ChEBIPublication | None = field(default=None, repr=False)
 
     @classmethod
-    def from_release(
-        cls,
-        source: os.PathLike[str] | str,
-        *,
-        chemont_obo: os.PathLike[str] | str | None = None,
-    ) -> ChEBIDatabase:
-        """Open a ChEBI table release directory or archive.
-
-        Args:
-            source: Extracted release directory, zip archive, or tar archive.
-            chemont_obo: Optional local ChemOnt OBO path or archive.
-
-        Examples:
-            A missing release path is rejected immediately:
-
-            >>> try:
-            ...     ChEBIDatabase.from_release("missing-chebi-release")
-            ... except FileNotFoundError as error:
-            ...     print(error.filename)
-            missing-chebi-release
-        """
-        path = _require_file_or_directory(source)
-        chemont = _optional_file(chemont_obo)
-        if path.is_dir():
-            table_sources = _discover_table_files(path)
-            file_obo = _discover_named_file(path, "chebi.obo")
-            file_sdf = _discover_named_file(path, "chebi.sdf")
-            if file_obo is None:
-                _require_compounds(table_sources)
-            return cls(
-                snapshot=_ChEBISnapshot(
-                    table_sources=table_sources,
-                    file_obo=file_obo,
-                    file_sdf=file_sdf,
-                    file_chemont_obo=chemont,
-                )
-            )
-        _inspect_release_archive(path)
-        return cls(
-            snapshot=_ChEBISnapshot(
-                release_source=path,
-                file_chemont_obo=chemont,
-            )
-        )
-
-    @classmethod
     def from_table_files(
         cls,
+        source: os.PathLike[str] | str | None = None,
         *,
-        compounds: os.PathLike[str] | str,
+        compounds: os.PathLike[str] | str | None = None,
         names: os.PathLike[str] | str | None = None,
         relations: os.PathLike[str] | str | None = None,
         secondary_ids: os.PathLike[str] | str | None = None,
@@ -169,21 +124,54 @@ class ChEBIDatabase:
             "structure": structures,
             "chemical_data": chemical_data,
         }
+        explicit_sources = {
+            table_name: _require_file(path)
+            for table_name, path in values.items()
+            if path is not None
+        }
+        _validate_table_source_inventory(explicit_sources)
+        chemont = _optional_file(chemont_obo)
+        if source is None:
+            _require_compounds(explicit_sources)
+            return cls(
+                snapshot=_ChEBISnapshot(
+                    table_sources=explicit_sources,
+                    file_chemont_obo=chemont,
+                )
+            )
+
+        source_path = _require_file_or_directory(source)
+        if source_path.is_dir():
+            discovered = _discover_table_files(
+                source_path,
+                skipped_roles=explicit_sources,
+            )
+            table_sources = {**discovered, **explicit_sources}
+            _require_compounds(table_sources)
+            _validate_table_source_inventory(table_sources)
+            return cls(
+                snapshot=_ChEBISnapshot(
+                    table_sources=table_sources,
+                    file_chemont_obo=chemont,
+                )
+            )
+
+        _inspect_release_archive(
+            source_path,
+            skipped_roles=explicit_sources,
+        )
         return cls(
             snapshot=_ChEBISnapshot(
-                table_sources={
-                    table_name: _require_file(path)
-                    for table_name, path in values.items()
-                    if path is not None
-                },
-                file_chemont_obo=_optional_file(chemont_obo),
+                table_sources=explicit_sources,
+                release_source=source_path,
+                file_chemont_obo=chemont,
             )
         )
 
     @classmethod
     def from_obo(
         cls,
-        path: os.PathLike[str] | str,
+        source: os.PathLike[str] | str,
         *,
         sdf: os.PathLike[str] | str | None = None,
         chemont_obo: os.PathLike[str] | str | None = None,
@@ -202,15 +190,34 @@ class ChEBIDatabase:
             ...     print(error.filename)
             missing-chebi.obo
         """
-        source_path = _require_file(path)
-        _inspect_ontology_source(source_path)
+        source_path = _require_file_or_directory(source)
+        if source_path.is_dir():
+            file_obo = _discover_ontology_file(source_path)
+            file_sdf = (
+                _optional_file(sdf)
+                if sdf is not None
+                else _discover_supplement_file(source_path, suffix=".sdf")
+            )
+        else:
+            _inspect_ontology_source(source_path)
+            file_obo = source_path
+            if sdf is not None:
+                file_sdf = _optional_file(sdf)
+            elif zipfile.is_zipfile(source_path) or tarfile.is_tarfile(source_path):
+                file_sdf = (
+                    source_path
+                    if _archive_has_exactly_one(source_path, suffix=".sdf")
+                    else None
+                )
+            else:
+                file_sdf = None
         chemont = _optional_file(chemont_obo)
         if chemont is not None:
             _inspect_ontology_source(chemont)
         return cls(
             snapshot=_ChEBISnapshot(
-                file_obo=source_path,
-                file_sdf=_optional_file(sdf),
+                file_obo=file_obo,
+                file_sdf=file_sdf,
                 file_chemont_obo=chemont,
             )
         )
@@ -553,11 +560,19 @@ def _prepared_table_sources(
     with tempfile.TemporaryDirectory(prefix="bioextract-chebi-") as dir_tmp_value:
         dir_tmp = Path(dir_tmp_value)
         if snapshot.release_source is not None:
-            table_sources = _extract_release_archive(
+            discovered = _extract_release_archive(
                 snapshot.release_source,
                 dir_tmp,
+                skipped_roles=snapshot.table_sources,
             )
+            table_sources = {**discovered, **snapshot.table_sources}
+            _require_compounds(table_sources)
+            _validate_table_source_inventory(table_sources)
             provenance = [_source_record("release_archive", snapshot.release_source)]
+            provenance.extend(
+                _source_record(table_name, file_source)
+                for table_name, file_source in snapshot.table_sources.items()
+            )
         else:
             table_sources = dict(snapshot.table_sources)
             provenance = [
@@ -580,53 +595,123 @@ def _prepared_table_sources(
         yield prepared, provenance
 
 
-def _discover_table_files(directory: Path) -> dict[str, Path]:
-    by_base_name: dict[str, Path] = {}
+def _discover_table_files(
+    directory: Path,
+    *,
+    skipped_roles: Mapping[str, Path] | Iterable[str] = (),
+) -> dict[str, Path]:
+    skipped = set(skipped_roles)
+    by_base_name: dict[str, list[Path]] = {}
     for candidate in directory.rglob("*"):
         if candidate.is_file():
-            name = candidate.name
-            if name.endswith(".gz"):
-                name = name[:-3]
-            by_base_name.setdefault(name, candidate)
-    return {
-        table_name: by_base_name[base_name]
-        for table_name, base_name in _TABLE_FILES.items()
-        if base_name in by_base_name
-    }
+            name = candidate.name.removesuffix(".gz").lower()
+            by_base_name.setdefault(name, []).append(candidate)
+    discovered: dict[str, Path] = {}
+    for table_name, base_name in _TABLE_FILES.items():
+        if table_name in skipped:
+            continue
+        matches = by_base_name.get(base_name.lower(), [])
+        if len(matches) > 1:
+            raise ValueError(
+                f"ChEBI source contains multiple candidates for {table_name}: "
+                + ", ".join(str(path) for path in sorted(matches))
+            )
+        if matches:
+            discovered[table_name] = matches[0]
+    return discovered
 
 
-def _discover_named_file(directory: Path, base_name: str) -> Path | None:
+def _discover_ontology_file(directory: Path) -> Path:
     matches = sorted(
         candidate
         for candidate in directory.rglob("*")
         if candidate.is_file()
-        and candidate.name.removesuffix(".gz").lower() == base_name.lower()
+        and candidate.name.lower().removesuffix(".gz").endswith(".obo")
     )
+    if len(matches) != 1:
+        raise ValueError(
+            "ChEBI source directory must contain exactly one .obo candidate; "
+            f"found {len(matches)}"
+        )
+    return matches[0]
+
+
+def _discover_supplement_file(directory: Path, *, suffix: str) -> Path | None:
+    matches = sorted(
+        candidate
+        for candidate in directory.rglob("*")
+        if candidate.is_file()
+        and candidate.name.lower().removesuffix(".gz").endswith(suffix)
+    )
+    if len(matches) > 1:
+        raise ValueError(
+            f"ChEBI source directory contains multiple {suffix} candidates: "
+            + ", ".join(str(path) for path in matches)
+        )
     return matches[0] if matches else None
 
 
-def _inspect_release_archive(path: Path) -> None:
+def _archive_has_exactly_one(path: Path, *, suffix: str) -> bool:
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            names = [
+                member.filename for member in archive.infolist() if not member.is_dir()
+            ]
+    elif tarfile.is_tarfile(path):
+        with tarfile.open(path, mode="r:*") as archive:
+            names = [member.name for member in archive.getmembers() if member.isfile()]
+    else:
+        return False
+    for member in names:
+        _validate_archive_member(member)
+    matches = [member for member in names if member.lower().endswith(suffix)]
+    if len(matches) > 1:
+        raise ValueError(
+            f"ChEBI source archive must contain at most one {suffix} member; "
+            f"found {len(matches)}"
+        )
+    return bool(matches)
+
+
+def _inspect_release_archive(
+    path: Path,
+    *,
+    skipped_roles: Mapping[str, Path] | Iterable[str] = (),
+) -> None:
     with tempfile.TemporaryDirectory(prefix="bioextract-chebi-inspect-") as value:
-        _extract_release_archive(path, Path(value))
+        extracted = _extract_release_archive(
+            path,
+            Path(value),
+            skipped_roles=skipped_roles,
+        )
+        if "compound" not in extracted and "compound" not in set(skipped_roles):
+            _require_compounds(extracted)
 
 
-def _extract_release_archive(path: Path, directory: Path) -> dict[str, Path]:
+def _extract_release_archive(
+    path: Path,
+    directory: Path,
+    *,
+    skipped_roles: Mapping[str, Path] | Iterable[str] = (),
+) -> dict[str, Path]:
     expected_by_basename = {
-        base_name: table_name for table_name, base_name in _TABLE_FILES.items()
+        base_name.lower(): table_name for table_name, base_name in _TABLE_FILES.items()
     }
     expected_by_basename.update(
         {
-            f"{base_name}.gz": table_name
+            f"{base_name.lower()}.gz": table_name
             for table_name, base_name in _TABLE_FILES.items()
         }
     )
     extracted: dict[str, Path] = {}
+    skipped = set(skipped_roles)
     if zipfile.is_zipfile(path):
         _extract_zip_release(
             path,
             expected_by_basename,
             directory,
             extracted,
+            skipped,
         )
     elif tarfile.is_tarfile(path):
         _extract_tar_release(
@@ -634,12 +719,12 @@ def _extract_release_archive(path: Path, directory: Path) -> dict[str, Path]:
             expected_by_basename,
             directory,
             extracted,
+            skipped,
         )
     else:
         raise ValueError(
             f"ChEBI release source is not a directory, zip, or tar archive: {path}"
         )
-    _require_compounds(extracted)
     return extracted
 
 
@@ -648,6 +733,7 @@ def _extract_zip_release(
     expected_by_basename: Mapping[str, str],
     directory: Path,
     extracted: dict[str, Path],
+    skipped_roles: set[str],
 ) -> None:
     with zipfile.ZipFile(path) as archive:
         members = (
@@ -661,7 +747,13 @@ def _extract_zip_release(
             for member in archive.infolist()
             if not member.is_dir()
         )
-        _copy_release_members(members, expected_by_basename, directory, extracted)
+        _copy_release_members(
+            members,
+            expected_by_basename,
+            directory,
+            extracted,
+            skipped_roles,
+        )
 
 
 def _extract_tar_release(
@@ -669,6 +761,7 @@ def _extract_tar_release(
     expected_by_basename: Mapping[str, str],
     directory: Path,
     extracted: dict[str, Path],
+    skipped_roles: set[str],
 ) -> None:
     with tarfile.open(path, mode="r:*") as archive:
         members = (
@@ -682,7 +775,13 @@ def _extract_tar_release(
             for member in archive.getmembers()
             if member.isfile()
         )
-        _copy_release_members(members, expected_by_basename, directory, extracted)
+        _copy_release_members(
+            members,
+            expected_by_basename,
+            directory,
+            extracted,
+            skipped_roles,
+        )
 
 
 def _copy_release_members(
@@ -690,13 +789,19 @@ def _copy_release_members(
     expected_by_basename: Mapping[str, str],
     directory: Path,
     extracted: dict[str, Path],
+    skipped_roles: set[str],
 ) -> None:
     for member_name, opener in members:
         _validate_archive_member(member_name)
-        base_name = PurePosixPath(member_name).name
+        base_name = PurePosixPath(member_name).name.lower()
         table_name = expected_by_basename.get(base_name)
-        if table_name is None or table_name in extracted:
+        if table_name is None or table_name in skipped_roles:
             continue
+        if table_name in extracted:
+            raise ValueError(
+                f"ChEBI release archive contains multiple candidates for "
+                f"{table_name}: {member_name}"
+            )
         suffix = ".tsv.gz" if base_name.endswith(".gz") else ".tsv"
         path = directory / f"{table_name}{suffix}"
         with opener() as handle_in, path.open("wb") as handle_out:
@@ -794,6 +899,21 @@ def _validate_archive_member(member_name: str) -> None:
 def _require_compounds(table_sources: Mapping[str, Path]) -> None:
     if "compound" not in table_sources:
         raise ValueError("ChEBI release does not contain compounds.tsv")
+
+
+def _validate_table_source_inventory(table_sources: Mapping[str, Path]) -> None:
+    physical_roles: dict[tuple[int, int], tuple[str, Path]] = {}
+    for table_name, path in table_sources.items():
+        resolved = path.resolve()
+        stat = resolved.stat()
+        physical_id = (stat.st_dev, stat.st_ino)
+        if physical_id in physical_roles:
+            other_name, other_path = physical_roles[physical_id]
+            raise ValueError(
+                f"ChEBI input roles {other_name!r} and {table_name!r} refer to "
+                f"the same physical file: {other_path}"
+            )
+        physical_roles[physical_id] = (table_name, resolved)
 
 
 def _require_file_or_directory(path: os.PathLike[str] | str) -> Path:

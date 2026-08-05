@@ -420,7 +420,7 @@ def metabolic_release(tmp_path: Path, *, directory_name: str = "2026-07") -> Pat
 def test_release_discovery_uses_exact_layout(tmp_path: Path) -> None:
     release = metabolic_release(tmp_path)
     raw = release / "raw"
-    db = KEGGDatabase.from_metabolic_release(raw.parent)
+    db = KEGGDatabase.from_metabolic_files(raw.parent)
     snapshot = db.snapshot.metabolic
     assert snapshot is not None
     assert len(snapshot.sources["reaction_entries"]) == 1
@@ -432,7 +432,7 @@ def test_release_directory_name_does_not_create_release_metadata(
 ) -> None:
     release = metabolic_release(tmp_path, directory_name="2099-12")
     path = tmp_path / "unknown-release.duckdb"
-    KEGGDatabase.from_metabolic_release(release).write_duckdb(path)
+    KEGGDatabase.from_metabolic_files(release).write_duckdb(path)
 
     with duckdb.connect(str(path), read_only=True) as connection:
         metadata = dict(
@@ -445,9 +445,9 @@ def test_release_directory_name_does_not_create_release_metadata(
 def test_caller_release_version_is_recorded_with_caller_source(tmp_path: Path) -> None:
     release = metabolic_release(tmp_path, directory_name="arbitrary-layout")
     path = tmp_path / "caller-release.duckdb"
-    KEGGDatabase.from_metabolic_release(
-        release, release_version="2026-07"
-    ).write_duckdb(path)
+    KEGGDatabase.from_metabolic_files(release, release_version="2026-07").write_duckdb(
+        path
+    )
 
     with duckdb.connect(str(path), read_only=True) as connection:
         metadata = dict(
@@ -491,9 +491,36 @@ def test_release_archive_accepts_an_extra_top_level_directory(tmp_path: Path) ->
             if source.is_file():
                 output.write(source, source.relative_to(tmp_path / "archive-root"))
     path = tmp_path / "release.duckdb"
-    KEGGDatabase.from_metabolic_release(archive).write_duckdb(path)
+    KEGGDatabase.from_metabolic_files(archive).write_duckdb(path)
     with KEGGDatabase.from_duckdb(path).connect() as connection:
         assert connection.execute("SELECT count(*) FROM compound").fetchone() == (2,)
+
+
+def test_release_source_accepts_explicit_relation_overlay(tmp_path: Path) -> None:
+    release = metabolic_release(tmp_path)
+    override = tmp_path / "override-reaction-ko.tsv"
+    override.write_bytes((release / "raw" / "reaction_ko.tsv").read_bytes())
+    (release / "raw" / "reaction_ko.tsv").unlink()
+
+    database = KEGGDatabase.from_metabolic_files(
+        release,
+        reaction_ko=override,
+        release_version="2026-07",
+    )
+    snapshot = database.snapshot.metabolic
+    assert snapshot is not None
+    assert snapshot.complete_release is True
+    assert snapshot.sources["reaction_ko"] == (override.resolve(),)
+
+    path = tmp_path / "overlay.duckdb"
+    database.write_duckdb(path)
+    with duckdb.connect(str(path), read_only=True) as connection:
+        source_paths = dict(
+            connection.execute(
+                "SELECT logical_name, display_path FROM _bioextract.source_file"
+            ).fetchall()
+        )
+    assert source_paths["reaction_ko:0"] == str(override.resolve())
 
 
 def test_relation_only_inputs_preserve_rows_and_enable_namespace(

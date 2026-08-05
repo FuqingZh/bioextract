@@ -14,10 +14,10 @@ scopes.
 
 ## Construction And Publication
 
-Use `from_metabolic_release()` for a complete release directory, its `raw`
-directory, or a zip/tar archive. Use the explicit keyword-only
-`from_metabolic_files()` roles for partial fixtures and nonstandard layouts.
-Both constructors accept optional `release_version`. It records only a
+Use `from_metabolic_files(source=None, ...)` for a complete release directory,
+its `raw` directory, or a zip/tar archive, with explicit role arguments as
+overlays. Omitting `source` keeps the partial explicit-role behavior. The
+constructor accepts optional `release_version`. It records only a
 caller-declared official release identity with
 `release_version_source=caller`; directory, file, and archive names never
 supply or validate release identity.

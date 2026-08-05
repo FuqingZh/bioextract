@@ -59,7 +59,8 @@ def test_removed_legacy_writer_apis_are_not_exported() -> None:
 
 def test_resource_factories_do_not_expose_limits() -> None:
     factories = (
-        chebi.ChEBIDatabase.from_release,
+        chebi.ChEBIDatabase.from_table_files,
+        chebi.ChEBIDatabase.from_obo,
         go.GODatabase.from_obo,
         kegg.KEGGDatabase.from_brite_json,
         reactome.ReactomeDatabase.from_files,
@@ -70,7 +71,7 @@ def test_resource_factories_do_not_expose_limits() -> None:
         uniprot.UniProtDatabase.from_knowledgebase,
         stringdb.STRINGDatabase.from_files,
         omnipath.OmniPathDatabase.from_files,
-        rhea.RheaDatabase.from_release,
+        rhea.RheaDatabase.from_files,
     )
     assert all(
         "limits" not in inspect.signature(factory).parameters for factory in factories
@@ -79,8 +80,8 @@ def test_resource_factories_do_not_expose_limits() -> None:
 
 def test_resource_factory_parameter_names_follow_domain_roles() -> None:
     expected = {
-        chebi.ChEBIDatabase.from_release: ("source", "chemont_obo"),
         chebi.ChEBIDatabase.from_table_files: (
+            "source",
             "compounds",
             "names",
             "relations",
@@ -90,7 +91,7 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "chemical_data",
             "chemont_obo",
         ),
-        chebi.ChEBIDatabase.from_obo: ("path", "sdf", "chemont_obo"),
+        chebi.ChEBIDatabase.from_obo: ("source", "sdf", "chemont_obo"),
         chebi.ChEBIDatabase.from_duckdb: ("path",),
         go.GODatabase.from_obo: ("path",),
         go.GODatabase.from_duckdb: ("path",),
@@ -103,7 +104,25 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "gene_list",
             "ncbi_gene_conversion",
         ),
-        kegg.KEGGDatabase.from_metabolic_release: ("source", "release_version"),
+        kegg.KEGGDatabase.from_metabolic_files: (
+            "source",
+            "compound_list",
+            "compound_entries",
+            "reaction_list",
+            "reaction_entries",
+            "enzyme_list",
+            "enzyme_entries",
+            "module_list",
+            "module_entries",
+            "compound_pubchem",
+            "compound_reaction",
+            "reaction_enzyme",
+            "reaction_ko",
+            "reaction_module",
+            "reaction_pathway",
+            "module_pathway",
+            "release_version",
+        ),
         kegg.KEGGDatabase.from_duckdb: ("path",),
         reactome.ReactomeDatabase.from_files: (
             "uniprot_mapping",
@@ -138,6 +157,7 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
         ),
         omnipath.OmniPathDatabase.from_files: ("enzsub", "interactions"),
         rhea.RheaDatabase.from_files: (
+            "source",
             "rdf",
             "directions",
             "relationships",
@@ -150,7 +170,6 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "uniprot_sprot",
             "uniprot_trembl",
         ),
-        rhea.RheaDatabase.from_release: ("source",),
         rhea.RheaDatabase.from_duckdb: ("path",),
     }
     assert {
@@ -175,10 +194,19 @@ def test_phase_1_constructor_parameter_kinds_are_explicit() -> None:
     )
 
     rhea_parameters = inspect.signature(rhea.RheaDatabase.from_files).parameters
+    assert rhea_parameters["source"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert rhea_parameters["source"].default is None
     assert all(
         parameter.kind is inspect.Parameter.KEYWORD_ONLY and parameter.default is None
-        for parameter in rhea_parameters.values()
+        for name, parameter in rhea_parameters.items()
+        if name != "source"
     )
+
+
+def test_converged_constructor_names_are_observable() -> None:
+    assert not hasattr(chebi.ChEBIDatabase, "from_release")
+    assert not hasattr(kegg.KEGGDatabase, "from_metabolic_release")
+    assert not hasattr(rhea.RheaDatabase, "from_release")
 
 
 def test_phase_2_constructor_parameter_kinds_are_explicit() -> None:
@@ -191,3 +219,16 @@ def test_phase_2_constructor_parameter_kinds_are_explicit() -> None:
         for name in ("species", "glob")
     )
     assert parameters["glob"].default is True
+
+    chebi_table = inspect.signature(chebi.ChEBIDatabase.from_table_files).parameters
+    chebi_obo = inspect.signature(chebi.ChEBIDatabase.from_obo).parameters
+    kegg_metabolic = inspect.signature(
+        kegg.KEGGDatabase.from_metabolic_files
+    ).parameters
+    for signature_parameters in (chebi_table, chebi_obo, kegg_metabolic):
+        assert (
+            signature_parameters["source"].kind
+            is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        )
+    assert chebi_table["source"].default is None
+    assert kegg_metabolic["source"].default is None
