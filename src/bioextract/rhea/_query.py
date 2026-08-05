@@ -53,60 +53,60 @@ _SCHEMA_MATCH: SchemaDict = {
     "group_id": pl.String,
     "input_id": pl.String,
     "input_namespace": pl.String,
-    "RheaId": pl.Int64,
-    "MasterId": pl.Int64,
-    "Direction": pl.String,
+    "rhea_id": pl.Int64,
+    "master_id": pl.Int64,
+    "direction": pl.String,
 }
 _SCHEMA_UNIQUE_MATCH: SchemaDict = {
     name: dtype for name, dtype in _SCHEMA_MATCH.items() if name != "group_id"
 }
 _SCHEMA_REACTION: SchemaDict = {
     **_SCHEMA_MATCH,
-    "Accession": pl.String,
-    "Equation": pl.String,
-    "EquationHtml": pl.String,
-    "Status": pl.String,
-    "IsBalanced": pl.Boolean,
-    "IsTransport": pl.Boolean,
-    "Comment": pl.String,
-    "IsObsolete": pl.Boolean,
-    "ReactionSmiles": pl.String,
+    "accession": pl.String,
+    "equation": pl.String,
+    "equation_html": pl.String,
+    "status": pl.String,
+    "is_balanced": pl.Boolean,
+    "is_transport": pl.Boolean,
+    "comment": pl.String,
+    "is_obsolete": pl.Boolean,
+    "reaction_smiles": pl.String,
 }
 _SCHEMA_PARTICIPANT: SchemaDict = {
     **_SCHEMA_MATCH,
-    "ParticipantId": pl.String,
-    "CompoundId": pl.String,
-    "Side": pl.String,
-    "DirectionalRole": pl.String,
-    "CoefficientText": pl.String,
-    "CoefficientNumeric": pl.Float64,
-    "Location": pl.String,
-    "RheaCompoundId": pl.Int64,
-    "CompoundAccession": pl.String,
-    "CompoundType": pl.String,
-    "CompoundName": pl.String,
-    "Formula": pl.String,
-    "ChargeText": pl.String,
-    "ChargeNumeric": pl.Int64,
-    "ChEBIId": pl.String,
-    "UnderlyingChEBIId": pl.String,
-    "PolymerizationIndex": pl.String,
+    "participant_id": pl.String,
+    "compound_id": pl.String,
+    "side": pl.String,
+    "directional_role": pl.String,
+    "coefficient_text": pl.String,
+    "coefficient_numeric": pl.Float64,
+    "location": pl.String,
+    "rhea_compound_id": pl.Int64,
+    "compound_accession": pl.String,
+    "compound_type": pl.String,
+    "compound_name": pl.String,
+    "formula": pl.String,
+    "charge_text": pl.String,
+    "charge_numeric": pl.Int64,
+    "chebi_id": pl.String,
+    "underlying_chebi_id": pl.String,
+    "polymerization_index": pl.String,
 }
 _SCHEMA_CROSS_REFERENCE: SchemaDict = {
     **_SCHEMA_MATCH,
-    "ReferenceDatabase": pl.String,
-    "ReferenceId": pl.String,
-    "UniProtSection": pl.String,
+    "reference_database": pl.String,
+    "reference_id": pl.String,
+    "uniprot_section": pl.String,
 }
 _SCHEMA_PUBLICATION: SchemaDict = {
     **_SCHEMA_MATCH,
-    "PubMedId": pl.String,
+    "pubmed_id": pl.String,
 }
 _SCHEMA_RELATIONSHIP: SchemaDict = {
     **_SCHEMA_MATCH,
-    "FromReactionId": pl.Int64,
-    "ToReactionId": pl.Int64,
-    "RelationType": pl.String,
+    "from_reaction_id": pl.Int64,
+    "to_reaction_id": pl.Int64,
+    "relation_type": pl.String,
 }
 _SCHEMA_UNMATCHED: SchemaDict = {
     "group_id": pl.String,
@@ -168,7 +168,7 @@ class RheaReactionSelection:
         Examples:
             Materialize the identifier-to-reaction mapping:
 
-            >>> selection.extract_matches()["RheaId"].head(1).to_list()  # doctest: +SKIP
+            >>> selection.extract_matches()["rhea_id"].head(1).to_list()  # doctest: +SKIP
             [10000]
         """
         frame = self._matches_cache
@@ -184,9 +184,9 @@ class RheaReactionSelection:
             Read exact direction alongside the reaction equation:
 
             >>> selection.extract_reactions().select(  # doctest: +SKIP
-            ...     "RheaId", "Direction", "Equation"
+            ...     "rhea_id", "direction", "equation"
             ... ).columns
-            ['RheaId', 'Direction', 'Equation']
+            ['rhea_id', 'direction', 'equation']
         """
         publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         _require_tables(publication, {"reaction"}, operation="extract reactions")
@@ -202,22 +202,22 @@ class RheaReactionSelection:
                 selected.group_id AS "group_id",
                 selected.input_id AS "input_id",
                 selected.input_namespace AS "input_namespace",
-                reaction.rhea_id AS "RheaId",
-                reaction.master_id AS "MasterId",
-                reaction.direction AS "Direction",
-                reaction.accession AS "Accession",
-                reaction.equation AS "Equation",
-                reaction.equation_html AS "EquationHtml",
-                reaction.status AS "Status",
-                reaction.is_balanced AS "IsBalanced",
-                reaction.is_transport AS "IsTransport",
-                reaction.comment AS "Comment",
-                reaction.is_obsolete AS "IsObsolete",
-                {smiles_expression} AS "ReactionSmiles"
+                reaction.rhea_id AS rhea_id,
+                reaction.master_id AS master_id,
+                reaction.direction AS direction,
+                reaction.accession AS accession,
+                reaction.equation AS equation,
+                reaction.equation_html AS equation_html,
+                reaction.status AS status,
+                reaction.is_balanced AS is_balanced,
+                reaction.is_transport AS is_transport,
+                reaction.comment AS comment,
+                reaction.is_obsolete AS is_obsolete,
+                {smiles_expression} AS reaction_smiles
             FROM _selected_reaction AS selected
             JOIN reaction USING (rhea_id)
             {smiles_join}
-            ORDER BY "group_id", "input_id", "RheaId"
+            ORDER BY group_id, input_id, rhea_id
         """
         return self._query_selected(query, schema=_SCHEMA_REACTION)
 
@@ -228,9 +228,9 @@ class RheaReactionSelection:
             Read retained sides and nullable direction-specific roles:
 
             >>> selection.extract_participants().select(  # doctest: +SKIP
-            ...     "Side", "DirectionalRole", "ChEBIId"
+            ...     "side", "directional_role", "chebi_id"
             ... ).columns
-            ['Side', 'DirectionalRole', 'ChEBIId']
+            ['side', 'directional_role', 'chebi_id']
         """
         publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         _require_tables(
@@ -248,31 +248,31 @@ class RheaReactionSelection:
                 selected.group_id AS "group_id",
                 selected.input_id AS "input_id",
                 selected.input_namespace AS "input_namespace",
-                participant.rhea_id AS "RheaId",
-                participant.master_id AS "MasterId",
-                participant.direction AS "Direction",
-                participant.participant_id AS "ParticipantId",
-                participant.compound_id AS "CompoundId",
-                participant.side AS "Side",
-                participant.directional_role AS "DirectionalRole",
-                participant.coefficient_text AS "CoefficientText",
-                participant.coefficient_numeric AS "CoefficientNumeric",
-                participant.location AS "Location",
-                compound.rhea_compound_id AS "RheaCompoundId",
-                compound.public_accession AS "CompoundAccession",
-                compound.compound_type AS "CompoundType",
-                compound.name AS "CompoundName",
-                compound.formula AS "Formula",
-                compound.charge_text AS "ChargeText",
-                compound.charge_numeric AS "ChargeNumeric",
-                compound.chebi_id AS "ChEBIId",
-                compound.underlying_chebi_id AS "UnderlyingChEBIId",
-                compound.polymerization_index AS "PolymerizationIndex"
+                participant.rhea_id AS rhea_id,
+                participant.master_id AS master_id,
+                participant.direction AS direction,
+                participant.participant_id AS participant_id,
+                participant.compound_id AS compound_id,
+                participant.side AS side,
+                participant.directional_role AS directional_role,
+                participant.coefficient_text AS coefficient_text,
+                participant.coefficient_numeric AS coefficient_numeric,
+                participant.location AS location,
+                compound.rhea_compound_id AS rhea_compound_id,
+                compound.public_accession AS compound_accession,
+                compound.compound_type AS compound_type,
+                compound.name AS compound_name,
+                compound.formula AS formula,
+                compound.charge_text AS charge_text,
+                compound.charge_numeric AS charge_numeric,
+                compound.chebi_id AS chebi_id,
+                compound.underlying_chebi_id AS underlying_chebi_id,
+                compound.polymerization_index AS polymerization_index
             FROM _selected_reaction AS selected
             JOIN reaction_participant_direction AS participant USING (rhea_id)
             LEFT JOIN compound USING (compound_id)
             ORDER BY
-                "group_id", "input_id", "RheaId", "Side", "ParticipantId"
+                group_id, input_id, rhea_id, side, participant_id
         """
         return self._query_selected(query, schema=_SCHEMA_PARTICIPANT)
 
@@ -283,9 +283,9 @@ class RheaReactionSelection:
             Materialize the normalized reference relation:
 
             >>> selection.extract_cross_references().select(  # doctest: +SKIP
-            ...     "ReferenceDatabase", "ReferenceId"
+            ...     "reference_database", "reference_id"
             ... ).columns
-            ['ReferenceDatabase', 'ReferenceId']
+            ['reference_database', 'reference_id']
         """
         publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         has_xref = "reaction_xref" in publication.tables
@@ -335,16 +335,16 @@ class RheaReactionSelection:
                 group_id AS "group_id",
                 input_id AS "input_id",
                 input_namespace AS "input_namespace",
-                rhea_id AS "RheaId",
-                master_id AS "MasterId",
-                direction AS "Direction",
-                reference_database AS "ReferenceDatabase",
-                reference_id AS "ReferenceId",
-                uniprot_section AS "UniProtSection"
+                rhea_id AS rhea_id,
+                master_id AS master_id,
+                direction AS direction,
+                reference_database AS reference_database,
+                reference_id AS reference_id,
+                uniprot_section AS uniprot_section
             FROM ({" UNION ALL ".join(branches)})
             ORDER BY
-                "group_id", "input_id", "RheaId",
-                "ReferenceDatabase", "ReferenceId"
+                group_id, input_id, rhea_id,
+                reference_database, reference_id
         """
         return self._query_selected(query, schema=_SCHEMA_CROSS_REFERENCE)
 
@@ -355,9 +355,9 @@ class RheaReactionSelection:
             Read PubMed IDs while retaining reaction lineage:
 
             >>> selection.extract_publications().select(  # doctest: +SKIP
-            ...     "RheaId", "PubMedId"
+            ...     "rhea_id", "pubmed_id"
             ... ).columns
-            ['RheaId', 'PubMedId']
+            ['rhea_id', 'pubmed_id']
         """
         publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         _require_tables(
@@ -370,13 +370,13 @@ class RheaReactionSelection:
                 selected.group_id AS "group_id",
                 selected.input_id AS "input_id",
                 selected.input_namespace AS "input_namespace",
-                selected.rhea_id AS "RheaId",
-                selected.master_id AS "MasterId",
-                selected.direction AS "Direction",
-                publication.pubmed_id AS "PubMedId"
+                selected.rhea_id AS rhea_id,
+                selected.master_id AS master_id,
+                selected.direction AS direction,
+                publication.pubmed_id AS pubmed_id
             FROM _selected_reaction AS selected
             JOIN reaction_publication AS publication USING (rhea_id)
-            ORDER BY "group_id", "input_id", "RheaId", "PubMedId"
+            ORDER BY group_id, input_id, rhea_id, pubmed_id
         """
         return self._query_selected(query, schema=_SCHEMA_PUBLICATION)
 
@@ -387,9 +387,9 @@ class RheaReactionSelection:
             Preserve each directed Rhea hierarchy edge:
 
             >>> selection.extract_relationships().select(  # doctest: +SKIP
-            ...     "FromReactionId", "ToReactionId", "RelationType"
+            ...     "from_reaction_id", "to_reaction_id", "relation_type"
             ... ).columns
-            ['FromReactionId', 'ToReactionId', 'RelationType']
+            ['from_reaction_id', 'to_reaction_id', 'relation_type']
         """
         publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         _require_tables(
@@ -402,19 +402,19 @@ class RheaReactionSelection:
                 selected.group_id AS "group_id",
                 selected.input_id AS "input_id",
                 selected.input_namespace AS "input_namespace",
-                selected.rhea_id AS "RheaId",
-                selected.master_id AS "MasterId",
-                selected.direction AS "Direction",
-                relation.from_reaction_id AS "FromReactionId",
-                relation.to_reaction_id AS "ToReactionId",
-                relation.relation_type AS "RelationType"
+                selected.rhea_id AS rhea_id,
+                selected.master_id AS master_id,
+                selected.direction AS direction,
+                relation.from_reaction_id AS from_reaction_id,
+                relation.to_reaction_id AS to_reaction_id,
+                relation.relation_type AS relation_type
             FROM _selected_reaction AS selected
             JOIN reaction_relationship AS relation
               ON relation.from_reaction_id = selected.master_id
               OR relation.to_reaction_id = selected.master_id
             ORDER BY
-                "group_id", "input_id", "RheaId",
-                "FromReactionId", "ToReactionId", "RelationType"
+                group_id, input_id, rhea_id,
+                from_reaction_id, to_reaction_id, relation_type
         """
         return self._query_selected(query, schema=_SCHEMA_RELATIONSHIP)
 
@@ -488,13 +488,13 @@ class RheaReactionSelection:
             SELECT DISTINCT
                 input.input_id AS "input_id",
                 '{self.namespace}' AS "input_namespace",
-                reaction.rhea_id AS "RheaId",
-                reaction.master_id AS "MasterId",
-                reaction.direction AS "Direction"
+                reaction.rhea_id AS rhea_id,
+                reaction.master_id AS master_id,
+                reaction.direction AS direction
             FROM _input_id AS input
             {join}
             WHERE true {obsolete_filter}
-            ORDER BY "input_id", "RheaId"
+            ORDER BY input_id, rhea_id
         """
         with _connect(publication) as connection:
             _create_input_table(connection, self._input_rows)
@@ -867,9 +867,9 @@ def _create_selected_table(
             row["group_id"] if grouped else None,
             row["input_id"],
             row["input_namespace"],
-            row["RheaId"],
-            row["MasterId"],
-            row["Direction"],
+            row["rhea_id"],
+            row["master_id"],
+            row["direction"],
         )
         for row in matches.to_dicts()
     ]
