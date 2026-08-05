@@ -116,8 +116,8 @@ def test_idmapping_reads_plain_and_gzip(tmp_path: Path, compressed: bool) -> Non
         with gzip.open(compressed_path, "rt", encoding="utf-8") as source:
             path.write_text(source.read(), encoding="utf-8")
     frame = UniProtDatabase.from_idmapping(path).read_mapping(taxon_ids=["9606"])
-    assert frame.select("UniProtId", "TaxId").to_dicts() == [
-        {"UniProtId": "P12345", "TaxId": "9606"}
+    assert frame.select("uniprot_id", "tax_id").to_dicts() == [
+        {"uniprot_id": "P12345", "tax_id": "9606"}
     ]
     publication = tmp_path / f"published-{compressed}.duckdb"
     UniProtDatabase.from_idmapping(path).write_duckdb(publication, taxon_ids=["9606"])
@@ -143,9 +143,9 @@ def test_idmapping_parquet_and_hive_inputs(tmp_path: Path) -> None:
             "SELECT media_type FROM _bioextract.source_file"
         ).fetchone() == ("application/vnd.apache.parquet",)
 
-    hive = tmp_path / "hive" / "TaxId=9606"
+    hive = tmp_path / "hive" / "tax_id=9606"
     hive.mkdir(parents=True)
-    frame.drop("TaxId").write_parquet(hive / "part.parquet")
+    frame.drop("tax_id").write_parquet(hive / "part.parquet")
     (tmp_path / "hive" / "README.txt").write_text("ignored", encoding="utf-8")
     assert (
         UniProtDatabase.from_idmapping(tmp_path / "hive")
@@ -159,7 +159,7 @@ def test_idmapping_taxon_validation_and_all_taxa_opt_in(tmp_path: Path) -> None:
     database = UniProtDatabase.from_idmapping(
         _write_idmapping(tmp_path / "mapping.tab.gz")
     )
-    with pytest.raises(ValueError, match="TaxId"):
+    with pytest.raises(ValueError, match="tax_id"):
         database.scan_mapping(taxon_ids=["9606", ""])
     with pytest.raises(ValueError, match="allow_all_taxa"):
         database.write_duckdb(tmp_path / "blocked.duckdb")

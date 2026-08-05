@@ -239,11 +239,7 @@ class UniProtDatabase:
             ),
             extra_metadata={"bioextract.capability.mapping": "true"},
         )
-        return dataset.write_duckdb(
-            path,
-            if_exists=if_exists,
-            preserve_source_headers=("mapping",),
-        )
+        return dataset.write_duckdb(path, if_exists=if_exists)
 
     def connect(self) -> duckdb.DuckDBPyConnection:
         """Open a caller-owned read-only DuckDB connection.
@@ -314,7 +310,7 @@ class UniProtDatabase:
             query = "SELECT * FROM mapping"
             params: list[str] = []
             if taxon_ids:
-                query += f" WHERE TaxId IN ({','.join('?' for _ in taxon_ids)})"
+                query += f" WHERE tax_id IN ({','.join('?' for _ in taxon_ids)})"
                 params.extend(taxon_ids)
             return connection.sql(query, params=params).pl(lazy=True)
         source = self._required_source_path()

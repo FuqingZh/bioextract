@@ -49,7 +49,7 @@ def normalize_taxids(taxids: tuple[str | int, ...]) -> tuple[str, ...]:
         dict.fromkeys(str(taxid).strip() for taxid in taxids if str(taxid).strip())
     )
     if len(taxids_normalized) != len(taxids):
-        raise ValueError("TaxId values must be non-empty after normalization")
+        raise ValueError("tax_id values must be non-empty after normalization")
     return taxids_normalized
 
 
@@ -70,14 +70,14 @@ def scan_hive_mapping_dataset(dir_mapping: Path) -> pl.LazyFrame:
     return pl.scan_parquet(
         dir_mapping / "**" / "*.parquet",
         hive_partitioning=True,
-        hive_schema={"TaxId": pl.String},
+        hive_schema={"tax_id": pl.String},
     )
 
 
 def filter_taxids(lf: pl.LazyFrame, taxids: tuple[str, ...]) -> pl.LazyFrame:
     if not taxids:
         return lf
-    return lf.filter(pl.col("TaxId").is_in(taxids))
+    return lf.filter(pl.col("tax_id").is_in(taxids))
 
 
 def validate_mapping_schema(lf: pl.LazyFrame) -> None:

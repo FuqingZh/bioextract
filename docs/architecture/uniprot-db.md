@@ -13,7 +13,9 @@ default.
 
 Idmapping publication is one `mapping` table with resource schema
 `uniprot-idmapping-duckdb-v1`, source profile
-`uniprot-idmapping-selected-22-column-v1`, and the exact capability
+`uniprot-idmapping-selected-22-column-v1`. The headerless source is parsed
+directly into final `snake_case` fields (including `uniprot_id` and `tax_id`),
+and the exact capability
 `bioextract.capability.mapping=true`. `from_duckdb()` distinguishes this
 profile from `uniprot-knowledgebase-duckdb-v1` using metadata v1, capabilities,
 exact table inventory, and physical schema. Both profiles return fresh
