@@ -47,27 +47,31 @@ def read_relation_frame(file_relations: Path) -> pl.DataFrame:
 def filter_species_frame(df: pl.DataFrame, species: str | None) -> pl.DataFrame:
     if species is None:
         return df
-    return df.filter(pl.col("Species") == species)
+    return df.filter(pl.col("species") == species)
 
 
 def filter_relation_frame(
     df_relations: pl.DataFrame,
     df_pathways: pl.DataFrame,
 ) -> pl.DataFrame:
-    df_pathway_ids = df_pathways.select("ReactomePathwayId").unique()
+    df_pathway_ids = df_pathways.select("reactome_pathway_id").unique()
     return (
         df_relations.join(
-            df_pathway_ids.rename({"ReactomePathwayId": "ParentReactomePathwayId"}),
-            on="ParentReactomePathwayId",
+            df_pathway_ids.rename(
+                {"reactome_pathway_id": "parent_reactome_pathway_id"}
+            ),
+            on="parent_reactome_pathway_id",
             how="inner",
         )
         .join(
-            df_pathway_ids.rename({"ReactomePathwayId": "ChildReactomePathwayId"}),
-            on="ChildReactomePathwayId",
+            df_pathway_ids.rename(
+                {"reactome_pathway_id": "child_reactome_pathway_id"}
+            ),
+            on="child_reactome_pathway_id",
             how="inner",
         )
         .unique()
-        .sort("ParentReactomePathwayId", "ChildReactomePathwayId")
+        .sort("parent_reactome_pathway_id", "child_reactome_pathway_id")
     )
 
 
@@ -79,21 +83,21 @@ def extract_mapping_frame(
 ) -> pl.DataFrame:
     cols_out = [
         "input_id",
-        "UniProtId",
-        "ReactomePathwayId",
-        "PathwayName",
-        "EvidenceCode",
-        "Species",
-        "ReactomeUrl",
+        "uniprot_id",
+        "reactome_pathway_id",
+        "pathway_name",
+        "evidence_code",
+        "species",
+        "reactome_url",
     ]
     df_hits = (
         df_input_ids.join(
             df_mapping,
             left_on="input_id",
-            right_on="UniProtId",
+            right_on="uniprot_id",
             how="inner",
         )
-        .with_columns(pl.col("input_id").alias("UniProtId"))
+        .with_columns(pl.col("input_id").alias("uniprot_id"))
         .select(cols_out)
         .unique()
         .sort(cols_out)
@@ -132,17 +136,17 @@ def extract_unmatched_ids_frame(
 
 def extract_term2gene_frame(df_mapping: pl.DataFrame) -> pl.DataFrame:
     return (
-        df_mapping.select("ReactomePathwayId", "UniProtId")
+        df_mapping.select("reactome_pathway_id", "uniprot_id")
         .unique()
-        .sort("ReactomePathwayId", "UniProtId")
+        .sort("reactome_pathway_id", "uniprot_id")
     )
 
 
 def extract_term2name_frame(df_pathways: pl.DataFrame) -> pl.DataFrame:
     return (
-        df_pathways.select("ReactomePathwayId", "PathwayName", "Species")
-        .unique(subset=["ReactomePathwayId"])
-        .sort("ReactomePathwayId")
+        df_pathways.select("reactome_pathway_id", "pathway_name", "species")
+        .unique(subset=["reactome_pathway_id"])
+        .sort("reactome_pathway_id")
     )
 
 

@@ -160,12 +160,12 @@ object, following the existing STRINGdb and OmniPath pattern.
 
 ```text
 input_id
-UniProtId
-ReactomePathwayId
-PathwayName
-EvidenceCode
-Species
-ReactomeUrl
+uniprot_id
+reactome_pathway_id
+pathway_name
+evidence_code
+species
+reactome_url
 ```
 
 For grouped selections it prepends:
@@ -173,12 +173,12 @@ For grouped selections it prepends:
 ```text
 group_id
 input_id
-UniProtId
-ReactomePathwayId
-PathwayName
-EvidenceCode
-Species
-ReactomeUrl
+uniprot_id
+reactome_pathway_id
+pathway_name
+evidence_code
+species
+reactome_url
 ```
 
 `extract_unmatched_ids()` returns:
@@ -197,23 +197,23 @@ input_id
 `extract_term2gene()` returns:
 
 ```text
-ReactomePathwayId
-UniProtId
+reactome_pathway_id
+uniprot_id
 ```
 
 `extract_term2name()` returns:
 
 ```text
-ReactomePathwayId
-PathwayName
-Species
+reactome_pathway_id
+pathway_name
+species
 ```
 
 `extract_pathway_relations()` returns:
 
 ```text
-ParentReactomePathwayId
-ChildReactomePathwayId
+parent_reactome_pathway_id
+child_reactome_pathway_id
 ```
 
 When species-scoped, relations should be limited to edges where both parent and

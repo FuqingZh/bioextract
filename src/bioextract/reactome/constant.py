@@ -7,15 +7,18 @@ SCHEMA_VERSION = "reactome-mapping-v0.1"
 MEDIA_TYPE_TSV = "text/tab-separated-values"
 
 COLS_MAPPING_RAW = [
-    "UniProtId",
-    "ReactomePathwayId",
-    "ReactomeUrl",
-    "PathwayName",
-    "EvidenceCode",
-    "Species",
+    "uniprot_id",
+    "reactome_pathway_id",
+    "reactome_url",
+    "pathway_name",
+    "evidence_code",
+    "species",
 ]
-COLS_PATHWAY_RAW = ["ReactomePathwayId", "PathwayName", "Species"]
-COLS_RELATION_RAW = ["ParentReactomePathwayId", "ChildReactomePathwayId"]
+COLS_PATHWAY_RAW = ["reactome_pathway_id", "pathway_name", "species"]
+COLS_RELATION_RAW = [
+    "parent_reactome_pathway_id",
+    "child_reactome_pathway_id",
+]
 
 SCHEMA_MAPPING_RAW: SchemaDict = dict.fromkeys(COLS_MAPPING_RAW, pl.String)
 SCHEMA_PATHWAY_RAW: SchemaDict = dict.fromkeys(COLS_PATHWAY_RAW, pl.String)

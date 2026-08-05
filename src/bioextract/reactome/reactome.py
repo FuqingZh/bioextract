@@ -91,7 +91,7 @@ class ReactomeDatabase:
         >>> (
         ...     db.with_species("Homo sapiens")
         ...     .select_ids(["P04637"])
-        ...     .extract_mapping()["ReactomePathwayId"]
+        ...     .extract_mapping()["reactome_pathway_id"]
         ...     .to_list()
         ... )
         ['R-HSA-6798695', 'R-HSA-69563']
@@ -282,7 +282,7 @@ class ReactomeDatabase:
             ...     db.with_species("Homo sapiens")
             ...     .build_tidy()
             ...     .frames["mapping"]
-            ...     .collect()["Species"]
+            ...     .collect()["species"]
             ...     .unique()
             ...     .to_list()
             ... )
@@ -396,7 +396,7 @@ class ReactomeDatabase:
             ...     uniprot_mapping="data/reactome/UniProt2Reactome.txt"
             ... ).with_species("Homo sapiens")
             >>> db.extract_term2gene().head(2).to_dicts()
-            [{'ReactomePathwayId': 'R-HSA-6798695', 'UniProtId': 'P04637'}, {'ReactomePathwayId': 'R-HSA-6798695', 'UniProtId': 'Q9Y243'}]
+            [{'reactome_pathway_id': 'R-HSA-6798695', 'uniprot_id': 'P04637'}, {'reactome_pathway_id': 'R-HSA-6798695', 'uniprot_id': 'Q9Y243'}]
         """
         self._assert_publication_current()
         if self._df_term2gene is None:
@@ -420,11 +420,11 @@ class ReactomeDatabase:
             ... ).with_species("Homo sapiens")
             >>> (
             ...     db.extract_term2name()
-            ...     .select("ReactomePathwayId", "PathwayName")
+            ...     .select("reactome_pathway_id", "pathway_name")
             ...     .head(1)
             ...     .to_dicts()
             ... )
-            [{'ReactomePathwayId': 'R-HSA-1640170', 'PathwayName': 'Cell Cycle'}]
+            [{'reactome_pathway_id': 'R-HSA-1640170', 'pathway_name': 'Cell Cycle'}]
         """
         self._assert_publication_current()
         if self._df_term2name is None:
@@ -449,7 +449,7 @@ class ReactomeDatabase:
             ...     relations="data/reactome/ReactomePathwaysRelation.txt",
             ... ).with_species("Homo sapiens")
             >>> db.extract_pathway_relations().head(1).to_dicts()
-            [{'ParentReactomePathwayId': 'R-HSA-1640170', 'ChildReactomePathwayId': 'R-HSA-6798695'}]
+            [{'parent_reactome_pathway_id': 'R-HSA-1640170', 'child_reactome_pathway_id': 'R-HSA-6798695'}]
         """
         self._assert_publication_current()
         if not self._has_relation():
@@ -470,8 +470,8 @@ class ReactomeDatabase:
                     self._relation_raw_frame()
                     .unique()
                     .sort(
-                        "ParentReactomePathwayId",
-                        "ChildReactomePathwayId",
+                        "parent_reactome_pathway_id",
+                        "child_reactome_pathway_id",
                     )
                 )
             else:
@@ -630,17 +630,7 @@ class ReactomeDatabase:
                     self.snapshot.file_uniprot2reactome
                 )
             else:
-                self._df_mapping_raw = self._read_publication_table(
-                    "protein_pathway",
-                    {
-                        "uniprot_id": "UniProtId",
-                        "reactome_pathway_id": "ReactomePathwayId",
-                        "reactome_url": "ReactomeUrl",
-                        "pathway_name": "PathwayName",
-                        "evidence_code": "EvidenceCode",
-                        "species": "Species",
-                    },
-                )
+                self._df_mapping_raw = self._read_publication_table("protein_pathway")
         return self._df_mapping_raw
 
     def _pathway_raw_frame(self) -> pl.DataFrame:
@@ -654,14 +644,7 @@ class ReactomeDatabase:
                 assert self.snapshot.file_pathways is not None
                 self._df_pathways_raw = read_pathway_frame(self.snapshot.file_pathways)
             else:
-                self._df_pathways_raw = self._read_publication_table(
-                    "pathway",
-                    {
-                        "reactome_pathway_id": "ReactomePathwayId",
-                        "pathway_name": "PathwayName",
-                        "species": "Species",
-                    },
-                )
+                self._df_pathways_raw = self._read_publication_table("pathway")
         return self._df_pathways_raw
 
     def _relation_raw_frame(self) -> pl.DataFrame:
@@ -677,13 +660,7 @@ class ReactomeDatabase:
                     self.snapshot.file_relations
                 )
             else:
-                self._df_relations_raw = self._read_publication_table(
-                    "pathway_relation",
-                    {
-                        "parent_reactome_pathway_id": "ParentReactomePathwayId",
-                        "child_reactome_pathway_id": "ChildReactomePathwayId",
-                    },
-                )
+                self._df_relations_raw = self._read_publication_table("pathway_relation")
         return self._df_relations_raw
 
     def _has_mapping(self) -> bool:
@@ -728,16 +705,12 @@ class ReactomeDatabase:
             raise CapabilityError(publication_message)
         raise ValueError(source_message)
 
-    def _read_publication_table(
-        self,
-        table_name: str,
-        rename: Mapping[str, str],
-    ) -> pl.DataFrame:
+    def _read_publication_table(self, table_name: str) -> pl.DataFrame:
         with self.connect() as connection:
             frame = pl.read_database(  # pyright: ignore[reportUnknownMemberType]
                 f'SELECT * FROM "{table_name}"', connection
             )
-        return frame.rename(rename)
+        return frame
 
     def _build_tidy_frame(self, frame_name: str) -> pl.DataFrame:
         match frame_name:
@@ -800,11 +773,11 @@ class ReactomeSelection:
         >>> selection = db.select_ids(["P04637"])
         >>> (
         ...     selection.extract_mapping()
-        ...     .select("input_id", "ReactomePathwayId")
+        ...     .select("input_id", "reactome_pathway_id")
         ...     .head(1)
         ...     .to_dicts()
         ... )
-        [{'input_id': 'P04637', 'ReactomePathwayId': 'R-HSA-6798695'}]
+        [{'input_id': 'P04637', 'reactome_pathway_id': 'R-HSA-6798695'}]
     """
 
     dataset: ReactomeDatabase
@@ -840,7 +813,7 @@ class ReactomeSelection:
             ...     uniprot_mapping="data/reactome/UniProt2Reactome.txt"
             ... ).with_species("Homo sapiens")
             >>> selection = db.select_ids(["P04637"])
-            >>> selection.extract_mapping()["ReactomePathwayId"].to_list()
+            >>> selection.extract_mapping()["reactome_pathway_id"].to_list()
             ['R-HSA-6798695', 'R-HSA-69563']
         """
         self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
@@ -920,36 +893,6 @@ _REACTOME_TABLE_CONTRACTS: dict[str, tuple[str, str, tuple[tuple[str, str], ...]
         ),
     ),
 }
-
-_REACTOME_COLUMN_MAPPINGS = {
-    ("pathway", "PathwayName", "pathway_name", "generated_snake_case"),
-    ("pathway", "ReactomePathwayId", "reactome_pathway_id", "generated_snake_case"),
-    ("pathway", "Species", "species", "generated_snake_case"),
-    (
-        "pathway_relation",
-        "ChildReactomePathwayId",
-        "child_reactome_pathway_id",
-        "generated_snake_case",
-    ),
-    (
-        "pathway_relation",
-        "ParentReactomePathwayId",
-        "parent_reactome_pathway_id",
-        "generated_snake_case",
-    ),
-    ("protein_pathway", "EvidenceCode", "evidence_code", "generated_snake_case"),
-    ("protein_pathway", "PathwayName", "pathway_name", "generated_snake_case"),
-    (
-        "protein_pathway",
-        "ReactomePathwayId",
-        "reactome_pathway_id",
-        "generated_snake_case",
-    ),
-    ("protein_pathway", "ReactomeUrl", "reactome_url", "generated_snake_case"),
-    ("protein_pathway", "Species", "species", "generated_snake_case"),
-    ("protein_pathway", "UniProtId", "uniprot_id", "generated_snake_case"),
-}
-
 
 def _validate_reactome_publication(path: Path) -> frozenset[str]:
     if not path.is_file():
@@ -1045,10 +988,7 @@ def _validate_reactome_publication(path: Path) -> frozenset[str]:
                     "FROM _bioextract.column_mapping"
                 ).fetchall()
             }
-            expected_column_mappings = {
-                row for row in _REACTOME_COLUMN_MAPPINGS if row[0] in expected_tables
-            }
-            if column_mappings != expected_column_mappings:
+            if column_mappings:
                 raise ValueError("Reactome column provenance inventory is unsupported")
     except duckdb.Error as error:
         raise ValueError(f"Cannot open Reactome DuckDB publication: {path}") from error
