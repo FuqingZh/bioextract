@@ -123,5 +123,5 @@ canonical match. Extractors expose proteins, accessions, names, EC, GO,
 cross-references, comments, locations, keywords, sequences, isoforms, isoform
 identifiers, variations, and unmatched inputs.
 
-See the [implementation plan](../implementation-plan/20260730-uniprot-knowledgebase-domain-access.md)
+See the [implementation plan](../implementation-plans/20260730-uniprot-knowledgebase-domain-access.md)
 for validation details and deferred scope.

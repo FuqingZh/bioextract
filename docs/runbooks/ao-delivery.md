@@ -96,7 +96,7 @@ input subtree and output target; `/cephfs_data` is never recursively scanned.
 The following are repository-owned and reviewable:
 
 - `AGENTS.md`;
-- `docs/README.md`, architecture, testing, and implementation-plan documents;
+- `docs/README.md`, architecture, testing, and implementation-plans documents;
 - `pyproject.toml` and `.github/workflows/` gates.
 
 The following are host-owned and must be changed only through AO or the host
