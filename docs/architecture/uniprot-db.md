@@ -87,25 +87,25 @@ unique `Alternative` owner product.
 ## Selection And Extractor Schemas
 
 Every matched extractor begins with the stable selection prefix
-`group_id, input_id, input_namespace, UniProtId`, then adds:
+`group_id, input_id, input_namespace, primary_accession`, then adds:
 
 | Extractor | Stable additional columns |
 | --- | --- |
-| `extract_proteins` | `EntryName, IsReviewed, TaxonId, ProteinExistence, SequenceLength, MolecularWeight, SequenceVersion, EntryVersion` |
-| `extract_accessions` | `Accession, AccessionOrder, IsPrimaryAccession` |
-| `extract_protein_names` | `NameType, ProteinName, NameOrder` |
-| `extract_gene_names` | `NameType, GeneName, NameOrder` |
-| `extract_ec_numbers` | `ECNumber` |
-| `extract_go_annotations` | `GOId, Aspect, TermName, EvidenceCode, EvidenceSource` |
-| `extract_cross_references` | `Database, ExternalId, Properties, IsoformId` |
-| `extract_comments` | `CommentId, CommentType, CommentText` |
-| `extract_subcellular_locations` | `SubcellularLocation, SubcellularLocationNote` |
-| `extract_keywords` | `Keyword, KeywordOrder` |
-| `extract_sequences` | `SequenceId, SequenceType, Sequence, Length, CRC64, SHA256` |
-| `extract_isoforms` | `IsoformId, IsoformName, IsoformOrder, SequenceStatus, SequenceId` |
-| `extract_isoform_identifiers` | `IsoformId, Identifier, IdentifierOrder, IsMain` |
-| `extract_sequence_variations` | `VariationId, StartPosition, EndPosition, Note` |
-| `extract_isoform_variations` | `IsoformId, VariationId, VariationOrder` |
+| `extract_proteins` | `entry_name, is_reviewed, taxon_id, protein_existence, sequence_length, molecular_weight, sequence_version, entry_version` |
+| `extract_accessions` | `accession, accession_order, is_primary` |
+| `extract_protein_names` | `name_type, name, name_order` |
+| `extract_gene_names` | `name_type, name, name_order` |
+| `extract_ec_numbers` | `ec_number` |
+| `extract_go_annotations` | `go_id, aspect, term_name, evidence_code, evidence_source` |
+| `extract_cross_references` | `database, external_id, properties, isoform_id` |
+| `extract_comments` | `comment_id, comment_type, comment_text` |
+| `extract_subcellular_locations` | `location, note` |
+| `extract_keywords` | `keyword, keyword_order` |
+| `extract_sequences` | `sequence_id, sequence_type, sequence, length, crc64, sha256` |
+| `extract_isoforms` | `isoform_id, name, isoform_order, sequence_status, sequence_id` |
+| `extract_isoform_identifiers` | `isoform_id, identifier, identifier_order, is_main` |
+| `extract_sequence_variations` | `variation_id, start_position, end_position, note` |
+| `extract_isoform_variations` | `isoform_id, variation_id, variation_order` |
 
 `extract_unmatched_ids()` instead returns
 `group_id, input_id, input_namespace, reason`. Empty selections preserve the
