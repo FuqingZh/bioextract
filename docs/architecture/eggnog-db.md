@@ -35,13 +35,14 @@ cog-24.fun.tab
 
 `cog-24.fun.tab` is optional. Without it, the output still keeps:
 
-- `EggnogProteinId`
-- `EggnogOgId`
-- `EggnogLevel`
-- `CogCategory`
-- `OgDescription`
+- `name`
+- `og`
+- `level`
+- `cog_category`
+- `description`
+- `COG_categories`
 
-and leaves `CogClass` / `CogName` null.
+and leaves `cog_class` / `cog_name` null.
 
 ## Public API
 
@@ -80,19 +81,20 @@ selection do not repeat the SQLite lookup.
 The wide mapping table exposes:
 
 ```text
-EggnogProteinId
-EggnogOgId
-EggnogLevel
-CogCategory
-CogClass
-CogName
-OgDescription
+name
+og
+level
+description
+COG_categories
+cog_category
+cog_class
+cog_name
 ```
 
 Many-to-many expansion is preserved:
 
 - one protein may map to multiple OGs
-- one OG may emit multiple `CogCategory` rows
+- one OG may emit multiple `cog_category` rows
 
 This keeps selected output auditable and easy to project into downstream term
 tables without eagerly loading the complete snapshot.

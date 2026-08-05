@@ -20,34 +20,36 @@ from .constant import (
 
 def read_cog_fun_frame(file_cog_fun: Path | None) -> pl.DataFrame:
     schema = {
-        "CogCategory": pl.String,
-        "CogClass": pl.String,
-        "_Color": pl.String,
-        "CogName": pl.String,
+        "cog_category": pl.String,
+        "cog_class": pl.String,
+        "_color": pl.String,
+        "cog_name": pl.String,
     }
     if file_cog_fun is None:
         return pl.DataFrame(
             schema={
-                "CogCategory": pl.String,
-                "CogClass": pl.String,
-                "CogName": pl.String,
+                "cog_category": pl.String,
+                "cog_class": pl.String,
+                "cog_name": pl.String,
             }
         )
     if file_cog_fun.stat().st_size == 0:
-        return pl.DataFrame(schema=schema).select("CogCategory", "CogClass", "CogName")
+        return pl.DataFrame(schema=schema).select(
+            "cog_category", "cog_class", "cog_name"
+        )
     df = pl.scan_csv(
         file_cog_fun,
         separator="\t",
         has_header=False,
-        new_columns=["CogCategory", "CogClass", "_Color", "CogName"],
+        new_columns=["cog_category", "cog_class", "_color", "cog_name"],
         schema_overrides=schema,
         truncate_ragged_lines=True,
     ).collect()
     return (
-        df.filter(pl.col("CogCategory").str.len_chars() == 1)
-        .select("CogCategory", "CogClass", "CogName")
+        df.filter(pl.col("cog_category").str.len_chars() == 1)
+        .select("cog_category", "cog_class", "cog_name")
         .unique()
-        .sort("CogCategory")
+        .sort("cog_category")
     )
 
 
@@ -94,9 +96,9 @@ def read_mapping_frame_from_sqlite(
             for og_id, og_level in parse_ogs(ogs_text):
                 rows.append(
                     {
-                        "EggnogProteinId": protein_id,
-                        "EggnogOgId": og_id,
-                        "EggnogLevel": og_level,
+                        "name": protein_id,
+                        "og": og_id,
+                        "level": og_level,
                     }
                 )
 
@@ -105,16 +107,12 @@ def read_mapping_frame_from_sqlite(
 
         df_protein_og = pl.DataFrame(
             rows,
-            schema={
-                "EggnogProteinId": pl.String,
-                "EggnogOgId": pl.String,
-                "EggnogLevel": pl.String,
-            },
+            schema={"name": pl.String, "og": pl.String, "level": pl.String},
         ).unique()
 
         og_rows = read_og_rows(
             conn,
-            df_protein_og.select("EggnogOgId", "EggnogLevel").unique().iter_rows(),
+            df_protein_og.select("og", "level").unique().iter_rows(),
         )
 
     if not og_rows:
@@ -123,10 +121,10 @@ def read_mapping_frame_from_sqlite(
     df_og = pl.DataFrame(
         og_rows,
         schema={
-            "EggnogOgId": pl.String,
-            "EggnogLevel": pl.String,
-            "OgDescription": pl.String,
-            "CogCategories": pl.String,
+            "og": pl.String,
+            "level": pl.String,
+            "description": pl.String,
+            "COG_categories": pl.String,
         },
     )
     df_categories = expand_cog_categories(df_og)
@@ -136,10 +134,10 @@ def read_mapping_frame_from_sqlite(
     return (
         df_protein_og.join(
             df_categories,
-            on=["EggnogOgId", "EggnogLevel"],
+            on=["og", "level"],
             how="inner",
         )
-        .join(df_cog_fun, on="CogCategory", how="left")
+        .join(df_cog_fun, on="cog_category", how="left")
         .select(COLS_MAPPING)
         .unique()
         .sort(COLS_MAPPING)
@@ -206,10 +204,10 @@ def format_og_query_rows(
 ) -> list[dict[str, str | None]]:
     return [
         {
-            "EggnogOgId": str(og_id),
-            "EggnogLevel": str(level) if level is not None else None,
-            "OgDescription": str(description) if description is not None else None,
-            "CogCategories": str(categories) if categories is not None else None,
+            "og": str(og_id),
+            "level": str(level) if level is not None else None,
+            "description": str(description) if description is not None else None,
+            "COG_categories": str(categories) if categories is not None else None,
         }
         for og_id, level, description, categories in cursor
     ]
@@ -234,22 +232,24 @@ def parse_ogs(value: str | None) -> list[tuple[str, str | None]]:
 def expand_cog_categories(df_og: pl.DataFrame) -> pl.DataFrame:
     rows: list[dict[str, str | None]] = []
     for row in df_og.iter_rows(named=True):
-        for category in parse_cog_categories(row["CogCategories"]):
+        for category in parse_cog_categories(row["COG_categories"]):
             rows.append(
                 {
-                    "EggnogOgId": row["EggnogOgId"],
-                    "EggnogLevel": row["EggnogLevel"],
-                    "OgDescription": row["OgDescription"],
-                    "CogCategory": category,
+                    "og": row["og"],
+                    "level": row["level"],
+                    "description": row["description"],
+                    "COG_categories": row["COG_categories"],
+                    "cog_category": category,
                 }
             )
     if not rows:
         return pl.DataFrame(
             schema={
-                "EggnogOgId": pl.String,
-                "EggnogLevel": pl.String,
-                "OgDescription": pl.String,
-                "CogCategory": pl.String,
+                "og": pl.String,
+                "level": pl.String,
+                "description": pl.String,
+                "COG_categories": pl.String,
+                "cog_category": pl.String,
             }
         )
     return pl.DataFrame(rows).unique()
@@ -277,11 +277,11 @@ def extract_mapping_frame(
         df_input_ids.join(
             df_mapping,
             left_on="input_id",
-            right_on="EggnogProteinId",
+            right_on="name",
             how="inner",
         )
         .with_columns(
-            pl.col("input_id").alias("EggnogProteinId"),
+            pl.col("input_id").alias("name"),
             pl.lit(namespace).alias("input_namespace"),
         )
         .select(cols_out)

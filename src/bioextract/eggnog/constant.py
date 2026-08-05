@@ -9,23 +9,25 @@ NAMESPACE_VALUES = ("eggnog_protein",)
 EggnogNamespace = Literal["eggnog_protein"]
 
 COLS_MAPPING = [
-    "EggnogProteinId",
-    "EggnogOgId",
-    "EggnogLevel",
-    "CogCategory",
-    "CogClass",
-    "CogName",
-    "OgDescription",
+    "name",
+    "og",
+    "level",
+    "description",
+    "COG_categories",
+    "cog_category",
+    "cog_class",
+    "cog_name",
 ]
 
 SCHEMA_MAPPING: SchemaDict = {
-    "EggnogProteinId": pl.String,
-    "EggnogOgId": pl.String,
-    "EggnogLevel": pl.String,
-    "CogCategory": pl.String,
-    "CogClass": pl.String,
-    "CogName": pl.String,
-    "OgDescription": pl.String,
+    "name": pl.String,
+    "og": pl.String,
+    "level": pl.String,
+    "description": pl.String,
+    "COG_categories": pl.String,
+    "cog_category": pl.String,
+    "cog_class": pl.String,
+    "cog_name": pl.String,
 }
 
 SCHEMA_UNMAPPED: SchemaDict = {"input_id": pl.String}

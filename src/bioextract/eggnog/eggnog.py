@@ -43,8 +43,8 @@ class EggNOGDatabase:
     """Access one local eggNOG mapper resource snapshot.
 
     Construction validates paths without expanding the SQLite mapping. The
-    optional COG function table enriches `CogClass` and
-    `CogName`; those columns remain null when the table is omitted. Materialized
+    optional COG function table enriches `cog_class` and
+    `cog_name`; those columns remain null when the table is omitted. Materialized
     selected mapping frames are cached on their selection handles.
 
     Examples:
@@ -55,7 +55,7 @@ class EggNOGDatabase:
         ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
         ... )
         >>> db.select_ids(["9606.ENSP1"]).extract_mapping().select(
-        ...     "EggnogProteinId", "CogCategory", "CogName"
+        ...     "name", "cog_category", "cog_name"
         ... ).head(1).rows()
         [('9606.ENSP1', 'E', 'Amino acid transport and metabolism')]
     """
@@ -95,7 +95,7 @@ class EggNOGDatabase:
             ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
             ... )
             >>> db.select_ids(["9606.ENSP1"]).extract_mapping().select(
-            ...     "CogCategory", "CogName"
+            ...     "cog_category", "cog_name"
             ... ).head(1).rows()
             [('E', 'Amino acid transport and metabolism')]
         """
@@ -151,7 +151,7 @@ class EggNOGDatabase:
             ... )
             >>> selection = db.select_ids(["9606.ENSP1"])
             >>> selection.extract_mapping().select(
-            ...     "input_id", "EggnogOgId", "CogCategory"
+            ...     "input_id", "og", "cog_category"
             ... ).rows()
             [('9606.ENSP1', 'OG0001', 'E'), ('9606.ENSP1', 'OG0001', 'G'), ('9606.ENSP1', 'OG0002', 'S')]
         """
@@ -189,7 +189,7 @@ class EggNOGDatabase:
             ...     {"up": ["9606.ENSP1"], "down": ["9606.MISSING"]},
             ... )
             >>> selection.extract_mapping().select(
-            ...     "group_id", "CogCategory"
+            ...     "group_id", "cog_category"
             ... ).rows()
             [('up', 'E'), ('up', 'G'), ('up', 'S')]
         """
@@ -209,7 +209,7 @@ class EggNOGDatabase:
         """Read and cache the optional COG function lookup.
 
         Returns:
-            A frame keyed by `CogCategory`. If no lookup file was configured,
+            A frame keyed by `cog_category`. If no lookup file was configured,
             the frame is empty but retains the expected lookup schema.
 
         Examples:
@@ -220,7 +220,7 @@ class EggNOGDatabase:
             ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
             ... )
             >>> db.read_cog_fun().select(
-            ...     "CogCategory", "CogName"
+            ...     "cog_category", "cog_name"
             ... ).head(1).rows()
             [('E', 'Amino acid transport and metabolism')]
         """
@@ -244,7 +244,7 @@ class EggnogSelection:
         ...     "fixtures/eggnog/eggnog.db"
         ... )
         >>> selection = db.select_ids(["9606.ENSP1"])
-        >>> selection.extract_mapping().get_column("CogCategory").to_list()
+        >>> selection.extract_mapping().get_column("cog_category").to_list()
         ['E', 'G', 'S']
     """
 
@@ -288,7 +288,7 @@ class EggnogSelection:
             ... )
             >>> selection = db.select_ids(["9606.ENSP1"])
             >>> selection.extract_mapping().select(
-            ...     "input_id", "CogCategory"
+            ...     "input_id", "cog_category"
             ... ).rows()
             [('9606.ENSP1', 'E'), ('9606.ENSP1', 'G'), ('9606.ENSP1', 'S')]
         """

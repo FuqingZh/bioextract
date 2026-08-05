@@ -68,52 +68,57 @@ def test_selected_mapping_from_sqlite_expands_og_cog_categories(
         db.select_ids(["9606.ENSP1"])
         .extract_mapping()
         .select(
-            "EggnogProteinId",
-            "EggnogOgId",
-            "EggnogLevel",
-            "CogCategory",
-            "CogClass",
-            "CogName",
-            "OgDescription",
+            "name",
+            "og",
+            "level",
+            "description",
+            "COG_categories",
+            "cog_category",
+            "cog_class",
+            "cog_name",
         )
     )
 
     assert df_mapping.columns == [
-        "EggnogProteinId",
-        "EggnogOgId",
-        "EggnogLevel",
-        "CogCategory",
-        "CogClass",
-        "CogName",
-        "OgDescription",
+        "name",
+        "og",
+        "level",
+        "description",
+        "COG_categories",
+        "cog_category",
+        "cog_class",
+        "cog_name",
     ]
     assert df_mapping.to_dicts() == [
         {
-            "EggnogProteinId": "9606.ENSP1",
-            "EggnogOgId": "OG0001",
-            "EggnogLevel": "2759",
-            "CogCategory": "E",
-            "CogClass": "3",
-            "CogName": "Amino acid transport and metabolism",
-            "OgDescription": "alpha OG",
+            "name": "9606.ENSP1",
+            "og": "OG0001",
+            "level": "2759",
+            "description": "alpha OG",
+            "COG_categories": "EG",
+            "cog_category": "E",
+            "cog_class": "3",
+            "cog_name": "Amino acid transport and metabolism",
         },
         {
-            "EggnogProteinId": "9606.ENSP1",
-            "EggnogOgId": "OG0001",
-            "EggnogLevel": "2759",
-            "CogCategory": "G",
-            "CogClass": "3",
-            "CogName": "Carbohydrate transport and metabolism",
-            "OgDescription": "alpha OG",
+            "name": "9606.ENSP1",
+            "og": "OG0001",
+            "level": "2759",
+            "description": "alpha OG",
+            "COG_categories": "EG",
+            "cog_category": "G",
+            "cog_class": "3",
+            "cog_name": "Carbohydrate transport and metabolism",
         },
         {
-            "EggnogProteinId": "9606.ENSP1",
-            "EggnogOgId": "OG0002",
-            "EggnogLevel": "2759",
-            "CogCategory": "S",
-            "CogClass": "4",
-            "CogName": "Function unknown",
-            "OgDescription": "beta OG",
+            "name": "9606.ENSP1",
+            "og": "OG0002",
+            "level": "2759",
+            "description": "beta OG",
+            "COG_categories": "S",
+            "cog_category": "S",
+            "cog_class": "4",
+            "cog_name": "Function unknown",
         },
     ]
 
@@ -131,22 +136,22 @@ def test_select_ids_queries_subset_and_reports_unmapped(tmp_path: Path) -> None:
 
     df_mapping = selection.extract_mapping()
     assert df_mapping.select(
-        "input_id", "input_namespace", "CogCategory"
+        "input_id", "input_namespace", "cog_category"
     ).to_dicts() == [
         {
             "input_id": "9606.ENSP1",
             "input_namespace": "eggnog_protein",
-            "CogCategory": "E",
+            "cog_category": "E",
         },
         {
             "input_id": "9606.ENSP1",
             "input_namespace": "eggnog_protein",
-            "CogCategory": "G",
+            "cog_category": "G",
         },
         {
             "input_id": "9606.ENSP1",
             "input_namespace": "eggnog_protein",
-            "CogCategory": "S",
+            "cog_category": "S",
         },
     ]
     assert selection.extract_unmatched_ids().to_dicts() == [
@@ -175,13 +180,13 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
         "input_id",
         "input_namespace",
     ]
-    assert df_mapping.select("group_id", "CogCategory").to_dicts() == [
-        {"group_id": "down", "CogCategory": "E"},
-        {"group_id": "down", "CogCategory": "G"},
-        {"group_id": "down", "CogCategory": "S"},
-        {"group_id": "up", "CogCategory": "E"},
-        {"group_id": "up", "CogCategory": "G"},
-        {"group_id": "up", "CogCategory": "S"},
+    assert df_mapping.select("group_id", "cog_category").to_dicts() == [
+        {"group_id": "down", "cog_category": "E"},
+        {"group_id": "down", "cog_category": "G"},
+        {"group_id": "down", "cog_category": "S"},
+        {"group_id": "up", "cog_category": "E"},
+        {"group_id": "up", "cog_category": "G"},
+        {"group_id": "up", "cog_category": "S"},
     ]
     assert selection.extract_unmatched_ids().to_dicts() == [
         {"group_id": "down", "input_id": "9606.MISSING"}
