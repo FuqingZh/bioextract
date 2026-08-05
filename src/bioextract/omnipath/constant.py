@@ -2,6 +2,7 @@ import re
 from typing import Literal
 
 import polars as pl
+from polars._typing import SchemaDict
 
 SCHEMA_ENZSUB_RAW = {
     "enzyme": pl.String,
@@ -20,66 +21,46 @@ SCHEMA_INTERACTIONS_RAW = {
 }
 
 SCHEMA_UNMAPPED = {
-    "InputId": pl.String,
+    "input_id": pl.String,
 }
 
 SCHEMA_GROUPS = {
-    "GroupId": pl.String,
+    "group_id": pl.String,
 }
 
 SCHEMA_GROUP_INPUT_IDS = {
-    "GroupId": pl.String,
-    "InputId": pl.String,
+    "group_id": pl.String,
+    "input_id": pl.String,
 }
 
 SCHEMA_ENZSUB = {
-    "SourceId": pl.String,
-    "TargetId": pl.String,
-    "TargetSite": pl.String,
-    "Modification": pl.String,
+    "enzyme": pl.String,
+    "substrate": pl.String,
+    "residue_type": pl.String,
+    "residue_offset": pl.String,
+    "modification": pl.String,
+    "target_site": pl.String,
 }
 
 SCHEMA_GROUP_ENZSUB = {
-    "GroupId": pl.String,
-    "SourceId": pl.String,
-    "TargetId": pl.String,
-    "TargetSite": pl.String,
-    "Modification": pl.String,
+    "group_id": pl.String,
+    **SCHEMA_ENZSUB,
 }
 
-SCHEMA_INTERACTIONS = {
-    "SourceId": pl.String,
-    "TargetId": pl.String,
-    "IsDirected": pl.Boolean,
-    "IsStimulation": pl.Boolean,
-    "IsInhibition": pl.Boolean,
+SCHEMA_INTERACTIONS: SchemaDict = {
+    "source": pl.String,
+    "target": pl.String,
+    "is_directed": pl.Boolean,
+    "is_stimulation": pl.Boolean,
+    "is_inhibition": pl.Boolean,
 }
 
 SCHEMA_GROUP_INTERACTIONS = {
-    "GroupId": pl.String,
-    "SourceId": pl.String,
-    "TargetId": pl.String,
-    "IsDirected": pl.Boolean,
-    "IsStimulation": pl.Boolean,
-    "IsInhibition": pl.Boolean,
-}
-
-COLS_RENAMED_ENZSUB = {
-    "enzyme": "SourceId",
-    "substrate": "TargetId",
-    "residue_type": "_ResidueType",
-    "residue_offset": "_ResidueOffset",
-    "modification": "Modification",
-}
-
-COLS_RENAMED_INTERACTIONS = {
-    "source": "SourceId",
-    "target": "TargetId",
-    "is_directed": "IsDirected",
-    "is_stimulation": "IsStimulation",
-    "is_inhibition": "IsInhibition",
+    "group_id": pl.String,
+    **SCHEMA_INTERACTIONS,
 }
 
 RE_UNIPROT_PIPE = re.compile(r"^[^|]+\|([^|]+)\|")
 
 OmniPathResourceName = Literal["enzsub", "interactions"]
+OmniPathNamespace = Literal["protein"]

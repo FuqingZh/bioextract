@@ -3,7 +3,7 @@
 The focused suite verifies:
 
 - raw plain/gzip, Parquet, and legacy hive idmapping scans;
-- exact 22-column schema validation and scoped eager reads;
+- exact 22-column `snake_case` schema validation and scoped eager reads;
 - atomic one-table idmapping DuckDB publication with no sidecar;
 - metadata-v1 exactness and idmapping/knowledgebase profile discrimination;
 - source/reopened mapping parity, taxon scoping, all-taxa safety, fresh

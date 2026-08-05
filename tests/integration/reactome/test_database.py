@@ -68,34 +68,34 @@ def test_extract_mapping_and_unmapped_single_selection(tmp_path: Path) -> None:
 
     assert selection.extract_mapping().to_dicts() == [
         {
-            "InputId": "P04637",
-            "UniProtId": "P04637",
-            "ReactomePathwayId": "R-HSA-6798695",
-            "PathwayName": "Neutrophil degranulation",
-            "EvidenceCode": "TAS",
-            "Species": "Homo sapiens",
-            "ReactomeUrl": "https://reactome.org/PathwayBrowser/#/R-HSA-6798695",
+            "input_id": "P04637",
+            "uniprot_id": "P04637",
+            "reactome_pathway_id": "R-HSA-6798695",
+            "pathway_name": "Neutrophil degranulation",
+            "evidence_code": "TAS",
+            "species": "Homo sapiens",
+            "reactome_url": "https://reactome.org/PathwayBrowser/#/R-HSA-6798695",
         },
         {
-            "InputId": "P04637",
-            "UniProtId": "P04637",
-            "ReactomePathwayId": "R-HSA-69563",
-            "PathwayName": "p53-Dependent G1 DNA Damage Response",
-            "EvidenceCode": "TAS",
-            "Species": "Homo sapiens",
-            "ReactomeUrl": "https://reactome.org/PathwayBrowser/#/R-HSA-69563",
+            "input_id": "P04637",
+            "uniprot_id": "P04637",
+            "reactome_pathway_id": "R-HSA-69563",
+            "pathway_name": "p53-Dependent G1 DNA Damage Response",
+            "evidence_code": "TAS",
+            "species": "Homo sapiens",
+            "reactome_url": "https://reactome.org/PathwayBrowser/#/R-HSA-69563",
         },
         {
-            "InputId": "Q9Y243",
-            "UniProtId": "Q9Y243",
-            "ReactomePathwayId": "R-HSA-6798695",
-            "PathwayName": "Neutrophil degranulation",
-            "EvidenceCode": "TAS",
-            "Species": "Homo sapiens",
-            "ReactomeUrl": "https://reactome.org/PathwayBrowser/#/R-HSA-6798695",
+            "input_id": "Q9Y243",
+            "uniprot_id": "Q9Y243",
+            "reactome_pathway_id": "R-HSA-6798695",
+            "pathway_name": "Neutrophil degranulation",
+            "evidence_code": "TAS",
+            "species": "Homo sapiens",
+            "reactome_url": "https://reactome.org/PathwayBrowser/#/R-HSA-6798695",
         },
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [{"InputId": "MISSING"}]
+    assert selection.extract_unmatched_ids().to_dicts() == [{"input_id": "MISSING"}]
 
 
 def test_grouped_selection_preserves_groups(tmp_path: Path) -> None:
@@ -115,19 +115,19 @@ def test_grouped_selection_preserves_groups(tmp_path: Path) -> None:
 
     df_mapping = selection.extract_mapping()
     assert df_mapping.columns == [
-        "GroupId",
-        "InputId",
-        "UniProtId",
-        "ReactomePathwayId",
-        "PathwayName",
-        "EvidenceCode",
-        "Species",
-        "ReactomeUrl",
+        "group_id",
+        "input_id",
+        "uniprot_id",
+        "reactome_pathway_id",
+        "pathway_name",
+        "evidence_code",
+        "species",
+        "reactome_url",
     ]
-    assert df_mapping.filter(df_mapping["InputId"] == "P04637").height == 4
+    assert df_mapping.filter(df_mapping["input_id"] == "P04637").height == 4
     assert selection.extract_mapping() is df_mapping
     assert selection.extract_unmatched_ids().to_dicts() == [
-        {"GroupId": "TumorA", "InputId": "MISSING"}
+        {"group_id": "TumorA", "input_id": "MISSING"}
     ]
 
 
@@ -142,35 +142,35 @@ def test_extract_enrichment_inputs_and_relations_are_species_scoped(
     ).with_species("Homo sapiens")
 
     assert db.extract_term2gene().to_dicts() == [
-        {"ReactomePathwayId": "R-HSA-6798695", "UniProtId": "P04637"},
-        {"ReactomePathwayId": "R-HSA-6798695", "UniProtId": "Q9Y243"},
-        {"ReactomePathwayId": "R-HSA-69563", "UniProtId": "P04637"},
+        {"reactome_pathway_id": "R-HSA-6798695", "uniprot_id": "P04637"},
+        {"reactome_pathway_id": "R-HSA-6798695", "uniprot_id": "Q9Y243"},
+        {"reactome_pathway_id": "R-HSA-69563", "uniprot_id": "P04637"},
     ]
     assert db.extract_term2name().to_dicts() == [
         {
-            "ReactomePathwayId": "R-HSA-1640170",
-            "PathwayName": "Cell Cycle",
-            "Species": "Homo sapiens",
+            "reactome_pathway_id": "R-HSA-1640170",
+            "pathway_name": "Cell Cycle",
+            "species": "Homo sapiens",
         },
         {
-            "ReactomePathwayId": "R-HSA-6798695",
-            "PathwayName": "Neutrophil degranulation",
-            "Species": "Homo sapiens",
+            "reactome_pathway_id": "R-HSA-6798695",
+            "pathway_name": "Neutrophil degranulation",
+            "species": "Homo sapiens",
         },
         {
-            "ReactomePathwayId": "R-HSA-69563",
-            "PathwayName": "p53-Dependent G1 DNA Damage Response",
-            "Species": "Homo sapiens",
+            "reactome_pathway_id": "R-HSA-69563",
+            "pathway_name": "p53-Dependent G1 DNA Damage Response",
+            "species": "Homo sapiens",
         },
     ]
     assert db.extract_pathway_relations().to_dicts() == [
         {
-            "ParentReactomePathwayId": "R-HSA-1640170",
-            "ChildReactomePathwayId": "R-HSA-6798695",
+            "parent_reactome_pathway_id": "R-HSA-1640170",
+            "child_reactome_pathway_id": "R-HSA-6798695",
         },
         {
-            "ParentReactomePathwayId": "R-HSA-1640170",
-            "ChildReactomePathwayId": "R-HSA-69563",
+            "parent_reactome_pathway_id": "R-HSA-1640170",
+            "child_reactome_pathway_id": "R-HSA-69563",
         },
     ]
 

@@ -23,7 +23,7 @@ def _normalize_input_id_expr(col_name: str) -> pl.Expr:
             expr_raw,
         )
         .replace("", None)
-        .alias("InputId")
+        .alias("input_id")
     )
 
 
@@ -47,9 +47,10 @@ def scan_links(file_links: Path, version: str) -> pl.LazyFrame:
 
 def validate_alias_required_cols(cols_available: list[str], version: str) -> None:
     cols_expected = set(SCHEMA_ALIASES[version])
-    if "alias" not in cols_expected or "alias" not in cols_available:
+    required = {"alias", "source"}
+    if not required.issubset(cols_expected) or not required.issubset(cols_available):
         raise ValueError(
-            f"STRING aliases file for version {version} must contain 'alias'; "
+            f"STRING aliases file for version {version} must contain alias/source; "
             f"available={cols_available}"
         )
 
@@ -90,31 +91,38 @@ def create_string_mapping_lazy_frame(
             [
                 pl.col(col_string_id_aliases)
                 .cast(pl.String)
-                .str.strip_chars()
                 .replace("", None)
-                .alias("StringId"),
+                .alias(col_string_id_aliases),
+                pl.col("alias").cast(pl.String).alias("alias"),
                 _normalize_input_id_expr("alias"),
+                (
+                    pl.col("source").cast(pl.String)
+                    if has_source_aliases
+                    else pl.lit(None).cast(pl.String)
+                ).alias("source"),
                 (
                     pl.col("source").cast(pl.String).str.strip_chars()
                     if has_source_aliases
-                    else pl.lit("unknown")
-                ).alias("MapSource"),
+                    else pl.lit(None).cast(pl.String)
+                ).alias("_SourceForRank"),
             ]
         )
-        .drop_nulls(["InputId", "StringId"])
-        .join(lf_input_ids, on="InputId", how="inner")
+        .drop_nulls(["input_id", col_string_id_aliases])
+        .join(lf_input_ids, on="input_id", how="inner")
     )
 
     rank_default = create_unknown_source_rank(len(source_rank_map))
     if source_rank_map:
         lf_rank = pl.LazyFrame(
             {
-                "MapSource": list(source_rank_map.keys()),
+                "_SourceForRank": list(source_rank_map.keys()),
                 "_SourceRank": list(source_rank_map.values()),
             },
-            schema={"MapSource": pl.String, "_SourceRank": pl.Int64},
+            schema={"_SourceForRank": pl.String, "_SourceRank": pl.Int64},
         )
-        lf_string_mapping = lf_string_mapping.join(lf_rank, on="MapSource", how="left")
+        lf_string_mapping = lf_string_mapping.join(
+            lf_rank, on="_SourceForRank", how="left"
+        )
     else:
         lf_string_mapping = lf_string_mapping.with_columns(
             pl.lit(None).cast(pl.Int64).alias("_SourceRank")
@@ -124,9 +132,9 @@ def create_string_mapping_lazy_frame(
         lf_string_mapping.with_columns(
             pl.col("_SourceRank").fill_null(rank_default).cast(pl.Int64)
         )
-        .sort([*cols_sort_prefix, "_SourceRank", "MapSource"])
+        .sort([*cols_sort_prefix, "_SourceRank", "source"])
         .unique(subset=cols_partition, keep="first")
-        .drop("_SourceRank")
+        .drop("_SourceRank", "_SourceForRank")
         .select(cols_select_out)
     )
 
@@ -152,11 +160,11 @@ def extract_string_mapping_frame(
             source_rank_map=source_rank_map,
             col_string_id_aliases=col_string_id_aliases,
             has_source_aliases=has_source_aliases,
-            cols_partition=["InputId", "StringId"],
-            cols_sort_prefix=["InputId", "StringId"],
-            cols_select_out=["InputId", "StringId", "MapSource"],
+            cols_partition=["input_id", col_string_id_aliases],
+            cols_sort_prefix=["input_id", col_string_id_aliases],
+            cols_select_out=["input_id", col_string_id_aliases, "alias", "source"],
         )
-        .sort(["InputId", "StringId", "MapSource"])
+        .sort(["input_id", col_string_id_aliases, "source"])
         .collect()
     )
 
@@ -176,16 +184,12 @@ def create_edges_lazy_frame(
 ) -> pl.LazyFrame:
     return (
         lf_links.select(
-            pl.col("protein1").cast(pl.String).str.strip_chars().alias("StringIdA"),
-            pl.col("protein2").cast(pl.String).str.strip_chars().alias("StringIdB"),
-            pl.col("combined_score").cast(pl.Int64).alias("Score"),
+            pl.col("protein1").cast(pl.String).str.strip_chars().alias("_link_a"),
+            pl.col("protein2").cast(pl.String).str.strip_chars().alias("_link_b"),
+            pl.col("combined_score").cast(pl.Int64).alias("combined_score"),
         )
-        .with_columns(pl_sel.by_name("StringIdA", "StringIdB").replace("", None))
-        .drop_nulls(["StringIdA", "StringIdB", "Score"])
-        .filter(
-            pl.col("StringIdA").ne(pl.col("StringIdB"))
-            & pl.col("Score").ge(int(min_combined_score))
-        )
+        .with_columns(pl_sel.by_name("_link_a", "_link_b").replace("", None))
+        .drop_nulls(["_link_a", "_link_b", "combined_score"])
         .join(
             lf_string_ids_a,
             left_on=cols_join_left_a,
@@ -199,17 +203,14 @@ def create_edges_lazy_frame(
             how="inner",
         )
         .with_columns(
-            pl.when(pl.col("StringIdA").le(pl.col("StringIdB")))
-            .then(pl.col("StringIdA"))
-            .otherwise(pl.col("StringIdB"))
-            .alias("_Lo"),
-            pl.when(pl.col("StringIdA").le(pl.col("StringIdB")))
-            .then(pl.col("StringIdB"))
-            .otherwise(pl.col("StringIdA"))
-            .alias("_Hi"),
+            pl.when(pl.col("_link_a").le(pl.col("_link_b")))
+            .then(pl.col("_link_a"))
+            .otherwise(pl.col("_link_b"))
+            .alias("_lo"),
+            pl.when(pl.col("_link_a").le(pl.col("_link_b")))
+            .then(pl.col("_link_b"))
+            .otherwise(pl.col("_link_a"))
+            .alias("_hi"),
         )
-        .group_by(cols_partition)
-        .agg(pl.col("Score").max().cast(pl.Int64).alias("Score"))
-        .rename({"_Lo": "StringIdA", "_Hi": "StringIdB"})
-        .select(cols_select_out)
+        .select([*cols_partition, "combined_score", "_lo", "_hi"])
     )

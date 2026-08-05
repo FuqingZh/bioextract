@@ -375,11 +375,11 @@ logic rather than performing statistical enrichment. It returns exact
 top-level-block evaluation:
 
 ```text
-ModuleId
-RequiredBlockCount
-SatisfiedBlockCount
-IsComplete
-MissingBlockIndexes
+module_id
+required_block_count
+satisfied_block_count
+is_complete
+missing_block_indexes
 ```
 
 Do not add an arbitrary completeness threshold or a custom stability score.
@@ -426,7 +426,7 @@ Selection is reaction-centered but not an unbounded graph closure:
 3. participants, enzymes, KOs, modules, and pathways are extracted only from
    that selected reaction set;
 4. compound anchors remain identifiable separately from co-participants;
-5. every output retains `GroupId`, `InputId`, and `InputNamespace` lineage when
+5. every output retains `group_id`, `input_id`, and `input_namespace` lineage when
    applicable.
 
 This rule supports the real annotation paths without a hidden recursive walk:
@@ -561,7 +561,7 @@ requests.
 Completed locally on 2026-07-30. The implementation uses exact and
 archive-safe release-layout discovery, streaming NDJSON relation spools, the
 shared metadata-v3 DuckDB publication lifecycle, capability-to-inventory
-validation, validated read-only reopening, reaction-centered PascalCase
+validation, validated read-only reopening, reaction-centered snake_case
 extractors, transferred/obsolete EC semantics, and recursive exact module
 block evaluation with cycle detection. Focused KEGG tests and `pdm run check`
 pass.

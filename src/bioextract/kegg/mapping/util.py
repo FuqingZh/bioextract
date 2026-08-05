@@ -16,86 +16,86 @@ from .constant import (
 def read_conv_uniprot_frame(file_conv_uniprot: Path) -> pl.DataFrame:
     df = _read_two_col_tsv(
         file_conv_uniprot,
-        columns=["UniProtId", "KeggGeneId"],
-        schema={"UniProtId": pl.String, "KeggGeneId": pl.String},
+        columns=["uniprot_id", "kegg_gene_id"],
+        schema={"uniprot_id": pl.String, "kegg_gene_id": pl.String},
     )
     if df.height == 0:
         return df
     return (
-        df.with_columns(pl.col("UniProtId").str.strip_prefix("up:"))
+        df.with_columns(pl.col("uniprot_id").str.strip_prefix("up:"))
         .unique()
-        .sort("KeggGeneId", "UniProtId")
+        .sort("kegg_gene_id", "uniprot_id")
     )
 
 
 def read_conv_ncbi_geneid_frame(file_conv_ncbi_geneid: Path | None) -> pl.DataFrame:
-    schema = {"NcbiGeneId": pl.String, "KeggGeneId": pl.String}
+    schema = {"ncbi_gene_id": pl.String, "kegg_gene_id": pl.String}
     if file_conv_ncbi_geneid is None:
         return pl.DataFrame(schema=schema)
     df = _read_two_col_tsv(
         file_conv_ncbi_geneid,
-        columns=["NcbiGeneId", "KeggGeneId"],
+        columns=["ncbi_gene_id", "kegg_gene_id"],
         schema=schema,
     )
     if df.height == 0:
         return df
     return (
-        df.with_columns(pl.col("NcbiGeneId").str.strip_prefix("ncbi-geneid:"))
+        df.with_columns(pl.col("ncbi_gene_id").str.strip_prefix("ncbi-geneid:"))
         .unique()
-        .sort("KeggGeneId", "NcbiGeneId")
+        .sort("kegg_gene_id", "ncbi_gene_id")
     )
 
 
 def read_gene_ko_frame(file_gene_ko: Path) -> pl.DataFrame:
     df = _read_two_col_tsv(
         file_gene_ko,
-        columns=["KeggGeneId", "KoId"],
-        schema={"KeggGeneId": pl.String, "KoId": pl.String},
+        columns=["kegg_gene_id", "ko_id"],
+        schema={"kegg_gene_id": pl.String, "ko_id": pl.String},
     )
     if df.height == 0:
         return df
     return (
-        df.with_columns(pl.col("KoId").str.strip_prefix("ko:"))
+        df.with_columns(pl.col("ko_id").str.strip_prefix("ko:"))
         .unique()
-        .sort("KeggGeneId", "KoId")
+        .sort("kegg_gene_id", "ko_id")
     )
 
 
 def read_gene_pathway_frame(file_gene_pathway: Path) -> pl.DataFrame:
     df = _read_two_col_tsv(
         file_gene_pathway,
-        columns=["KeggGeneId", "KeggPathwayId"],
-        schema={"KeggGeneId": pl.String, "KeggPathwayId": pl.String},
+        columns=["kegg_gene_id", "kegg_pathway_id"],
+        schema={"kegg_gene_id": pl.String, "kegg_pathway_id": pl.String},
     )
     if df.height == 0:
-        return df.with_columns(pl.lit(None, dtype=pl.String).alias("PathwayMapId"))
+        return df.with_columns(pl.lit(None, dtype=pl.String).alias("pathway_map_id"))
     return (
-        df.with_columns(pl.col("KeggPathwayId").str.strip_prefix("path:"))
-        .with_columns(derive_pathway_map_id_expr().alias("PathwayMapId"))
+        df.with_columns(pl.col("kegg_pathway_id").str.strip_prefix("path:"))
+        .with_columns(derive_pathway_map_id_expr().alias("pathway_map_id"))
         .unique()
-        .sort("KeggGeneId", "KeggPathwayId")
+        .sort("kegg_gene_id", "kegg_pathway_id")
     )
 
 
 def read_gene_list_frame(file_gene_list: Path | None) -> pl.DataFrame:
     schema = {
-        "KeggGeneId": pl.String,
-        "GeneSymbol": pl.String,
-        "GeneDescription": pl.String,
+        "kegg_gene_id": pl.String,
+        "gene_symbol": pl.String,
+        "gene_description": pl.String,
     }
     if file_gene_list is None:
         return pl.DataFrame(schema=schema)
     df = _read_two_col_tsv(
         file_gene_list,
-        columns=["KeggGeneId", "_GeneText"],
-        schema={"KeggGeneId": pl.String, "_GeneText": pl.String},
+        columns=["kegg_gene_id", "_gene_text"],
+        schema={"kegg_gene_id": pl.String, "_gene_text": pl.String},
     )
     if df.height == 0:
         return pl.DataFrame(schema=schema)
 
     rows: list[dict[str, str | None]] = []
     for row in df.iter_rows(named=True):
-        text = str(row["_GeneText"]).strip()
+        text = str(row["_gene_text"]).strip()
         if ";" in text:
             symbol, description = text.split(";", 1)
             symbol = symbol.strip() or None
@@ -105,12 +105,12 @@ def read_gene_list_frame(file_gene_list: Path | None) -> pl.DataFrame:
             description = None
         rows.append(
             {
-                "KeggGeneId": row["KeggGeneId"],
-                "GeneSymbol": symbol,
-                "GeneDescription": description,
+                "kegg_gene_id": row["kegg_gene_id"],
+                "gene_symbol": symbol,
+                "gene_description": description,
             }
         )
-    return pl.DataFrame(rows, schema=schema).unique().sort("KeggGeneId")
+    return pl.DataFrame(rows, schema=schema).unique().sort("kegg_gene_id")
 
 
 def build_mapping_frame(
@@ -125,15 +125,15 @@ def build_mapping_frame(
     df_gene_ids = (
         pl.concat(
             [
-                df_conv_uniprot.select("KeggGeneId"),
-                df_conv_ncbi_geneid.select("KeggGeneId"),
-                df_gene_ko.select("KeggGeneId"),
-                df_gene_pathway.select("KeggGeneId"),
-                df_gene_list.select("KeggGeneId"),
+                df_conv_uniprot.select("kegg_gene_id"),
+                df_conv_ncbi_geneid.select("kegg_gene_id"),
+                df_gene_ko.select("kegg_gene_id"),
+                df_gene_pathway.select("kegg_gene_id"),
+                df_gene_list.select("kegg_gene_id"),
             ],
             how="vertical_relaxed",
         )
-        .drop_nulls("KeggGeneId")
+        .drop_nulls("kegg_gene_id")
         .unique()
     )
     if df_gene_ids.height == 0:
@@ -141,12 +141,12 @@ def build_mapping_frame(
 
     validate_organism_code(df_gene_ids, organism_code=organism_code)
     return (
-        df_gene_ids.join(df_conv_uniprot, on="KeggGeneId", how="left")
-        .join(df_conv_ncbi_geneid, on="KeggGeneId", how="left")
-        .join(df_gene_ko, on="KeggGeneId", how="left")
-        .join(df_gene_pathway, on="KeggGeneId", how="left")
-        .join(df_gene_list, on="KeggGeneId", how="left")
-        .with_columns(pl.lit(organism_code).alias("OrganismCode"))
+        df_gene_ids.join(df_conv_uniprot, on="kegg_gene_id", how="left")
+        .join(df_conv_ncbi_geneid, on="kegg_gene_id", how="left")
+        .join(df_gene_ko, on="kegg_gene_id", how="left")
+        .join(df_gene_pathway, on="kegg_gene_id", how="left")
+        .join(df_gene_list, on="kegg_gene_id", how="left")
+        .with_columns(pl.lit(organism_code).alias("organism_code"))
         .select(COLS_MAPPING)
         .unique()
         .sort(COLS_MAPPING)
@@ -163,17 +163,17 @@ def extract_mapping_frame(
     validate_namespace(namespace)
     col_join = column_by_namespace(namespace)
     cols_group = list(cols_group_id)
-    cols_out = cols_group + ["InputId", "InputNamespace"] + COLS_MAPPING
+    cols_out = cols_group + ["input_id", "input_namespace"] + COLS_MAPPING
     return (
         df_input_ids.join(
             df_mapping,
-            left_on="InputId",
+            left_on="input_id",
             right_on=col_join,
             how="inner",
         )
         .with_columns(
-            pl.col("InputId").alias(col_join),
-            pl.lit(namespace).alias("InputNamespace"),
+            pl.col("input_id").alias(col_join),
+            pl.lit(namespace).alias("input_namespace"),
         )
         .select(cols_out)
         .unique()
@@ -187,7 +187,7 @@ def extract_unmatched_ids_frame(
     *,
     cols_group_id: tuple[str, ...],
 ) -> pl.DataFrame:
-    cols_index = list(cols_group_id) + ["InputId"]
+    cols_index = list(cols_group_id) + ["input_id"]
     df_mapped_input_ids = df_mapping.select(cols_index).unique().sort(cols_index)
     return (
         df_input_ids.join(df_mapped_input_ids, on=cols_index, how="anti")
@@ -207,11 +207,11 @@ def validate_namespace(namespace: str) -> None:
 def column_by_namespace(namespace: KEGGNamespace) -> str:
     match namespace:
         case "uniprot":
-            return "UniProtId"
+            return "uniprot_id"
         case "ncbi_gene":
-            return "NcbiGeneId"
+            return "ncbi_gene_id"
         case "kegg_gene":
-            return "KeggGeneId"
+            return "kegg_gene_id"
         case _:
             validate_namespace(namespace)
             raise AssertionError("unreachable")
@@ -219,10 +219,10 @@ def column_by_namespace(namespace: KEGGNamespace) -> str:
 
 def validate_organism_code(df_gene_ids: pl.DataFrame, *, organism_code: str) -> None:
     prefix = f"{organism_code}:"
-    df_invalid = df_gene_ids.filter(~pl.col("KeggGeneId").str.starts_with(prefix))
+    df_invalid = df_gene_ids.filter(~pl.col("kegg_gene_id").str.starts_with(prefix))
     if df_invalid.height == 0:
         return
-    examples = df_invalid.get_column("KeggGeneId").head(5).to_list()
+    examples = df_invalid.get_column("kegg_gene_id").head(5).to_list()
     raise ValueError(
         "KEGG gene IDs do not match organism_code: "
         f"organism_code={organism_code!r}, examples={examples!r}"
@@ -230,7 +230,7 @@ def validate_organism_code(df_gene_ids: pl.DataFrame, *, organism_code: str) -> 
 
 
 def derive_pathway_map_id_expr() -> pl.Expr:
-    return pl.lit("map") + pl.col("KeggPathwayId").str.extract(
+    return pl.lit("map") + pl.col("kegg_pathway_id").str.extract(
         r"^[A-Za-z]+([0-9]{5})$", 1
     )
 

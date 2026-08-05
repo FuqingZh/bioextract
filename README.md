@@ -156,7 +156,7 @@ their `extract_*()` terminals return eager Polars `DataFrame` objects.
 Participant output retains the exact Rhea ID, master ID, direction, side, and
 compound fields. ChEBI fields are complete `CHEBI:<number>` CURIEs and can be
 equality-joined to a ChEBI publication without prefix construction or casts.
-`DirectionalRole` is populated only for `LR` and `RL`;
+`directional_role` is populated only for `LR` and `RL`;
 undefined and bidirectional reactions retain null rather than inventing a
 substrate/product orientation.
 

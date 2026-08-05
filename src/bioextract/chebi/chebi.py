@@ -273,7 +273,7 @@ class ChEBIDatabase:
             ...     ["CHEBI:15377", "CHEBI:10743"],
             ...     namespace="chebi",
             ... )
-            >>> selection.extract_matches()["ChEBIId"].unique().to_list()  # doctest: +SKIP
+            >>> selection.extract_matches()["chebi_id"].unique().to_list()  # doctest: +SKIP
             ['CHEBI:15377']
         """
         return create_selection(
@@ -301,7 +301,7 @@ class ChEBIDatabase:
             ...     {"solvent": ["CHEBI:15377"]},
             ...     namespace="chebi",
             ... )
-            >>> selection.extract_matches()["GroupId"].to_list()  # doctest: +SKIP
+            >>> selection.extract_matches()["group_id"].to_list()  # doctest: +SKIP
             ['solvent']
         """
         return create_group_selection(
@@ -366,9 +366,9 @@ class ChEBIDatabase:
                 relations.extend(
                     RelationSpec(
                         table_name=table_name,
-                        frame=_scan_official_tsv(file_source),
+                        frame=(frame := _scan_official_tsv(file_source)),
                         role=_TABLE_ROLES[table_name],
-                        preserve_source_headers=True,
+                        source_columns=tuple(frame.collect_schema().names()),
                     )
                     for table_name, file_source in table_sources.items()
                 )

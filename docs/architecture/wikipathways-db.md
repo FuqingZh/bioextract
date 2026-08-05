@@ -142,45 +142,45 @@ other resolved files contain valid records.
 `extract_pathway()` returns:
 
 ```text
-WikiPathwaysId
-PathwayName
-Species
-Collection
-Version
-Url
-GeneCount
+wiki_pathways_id
+pathway_name
+species
+collection
+version
+url
+gene_count
 ```
 
 `extract_term2gene()` returns:
 
 ```text
-WikiPathwaysId
-GeneId
+wiki_pathways_id
+gene_id
 ```
 
 `extract_term2name()` returns:
 
 ```text
-WikiPathwaysId
-PathwayName
-Species
-Collection
-Version
-Url
+wiki_pathways_id
+pathway_name
+species
+collection
+version
+url
 ```
 
 `extract_mapping()` returns:
 
 ```text
-InputId
-GeneId
-WikiPathwaysId
-PathwayName
-Species
-Url
+input_id
+gene_id
+wiki_pathways_id
+pathway_name
+species
+url
 ```
 
-Grouped mapping prepends `GroupId`.
+Grouped mapping prepends `group_id`.
 
 ## Publication
 

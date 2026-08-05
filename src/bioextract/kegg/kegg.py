@@ -130,7 +130,7 @@ class KEGGDatabase:
         ... )
         >>> mapping.select_ids(
         ...     ["P12345"], namespace="uniprot"
-        ... ).extract_mapping()["KeggGeneId"].to_list()
+        ... ).extract_mapping()["kegg_gene_id"].to_list()
         ['hsa:1', 'hsa:1']
     """
 
@@ -342,9 +342,9 @@ class KEGGDatabase:
             ...     organism_code="hsa",
             ... )
             >>> db.extract_mapping().select(
-            ...     "KeggGeneId", "UniProtId", "KoId"
+            ...     "kegg_gene_id", "uniprot_id", "ko_id"
             ... ).row(0, named=True)
-            {'KeggGeneId': 'hsa:1', 'UniProtId': 'P12345', 'KoId': 'K00001'}
+            {'kegg_gene_id': 'hsa:1', 'uniprot_id': 'P12345', 'ko_id': 'K00001'}
         """
         organism_code = str(organism_code).strip()
         if not organism_code:
@@ -409,44 +409,22 @@ class KEGGDatabase:
             ...     organism_code="hsa",
             ... )
             >>> db.extract_mapping().filter(
-            ...     pl.col("KeggGeneId") == "hsa:1"
-            ... ).select("UniProtId", "KeggPathwayId").to_dicts()
-            [{'UniProtId': 'P12345', 'KeggPathwayId': 'hsa00010'}, {'UniProtId': 'P12345', 'KeggPathwayId': 'hsa01100'}]
+            ...     pl.col("kegg_gene_id") == "hsa:1"
+            ... ).select("uniprot_id", "kegg_pathway_id").to_dicts()
+            [{'uniprot_id': 'P12345', 'kegg_pathway_id': 'hsa00010'}, {'uniprot_id': 'P12345', 'kegg_pathway_id': 'hsa01100'}]
         """
         self._require_mapping_snapshot("extract KEGG mapping")
         if self._df_mapping is None:
             if self.snapshot.kind == _KeggSnapshotKind.MAPPING_PUBLICATION:
                 with self.connect() as connection:
                     cursor = connection.execute("SELECT * FROM mapping")
-                    physical_schema = {
-                        "organism_code": SCHEMA_MAPPING["OrganismCode"],
-                        "kegg_gene_id": SCHEMA_MAPPING["KeggGeneId"],
-                        "uniprot_id": SCHEMA_MAPPING["UniProtId"],
-                        "ncbi_gene_id": SCHEMA_MAPPING["NcbiGeneId"],
-                        "ko_id": SCHEMA_MAPPING["KoId"],
-                        "kegg_pathway_id": SCHEMA_MAPPING["KeggPathwayId"],
-                        "pathway_map_id": SCHEMA_MAPPING["PathwayMapId"],
-                        "gene_symbol": SCHEMA_MAPPING["GeneSymbol"],
-                        "gene_description": SCHEMA_MAPPING["GeneDescription"],
-                    }
+                    physical_schema = dict(SCHEMA_MAPPING)
                     frame = pl.DataFrame(
                         cursor.fetchall(),
                         schema=physical_schema,
                         orient="row",
                     )
-                self._df_mapping = frame.rename(
-                    {
-                        "organism_code": "OrganismCode",
-                        "kegg_gene_id": "KeggGeneId",
-                        "uniprot_id": "UniProtId",
-                        "ncbi_gene_id": "NcbiGeneId",
-                        "ko_id": "KoId",
-                        "kegg_pathway_id": "KeggPathwayId",
-                        "pathway_map_id": "PathwayMapId",
-                        "gene_symbol": "GeneSymbol",
-                        "gene_description": "GeneDescription",
-                    }
-                )
+                self._df_mapping = frame
             else:
                 self._df_mapping = build_mapping_frame(
                     organism_code=self.snapshot.organism_code or "",
@@ -521,9 +499,9 @@ class KEGGDatabase:
             ...     ["sp|P12345|GENE1_HUMAN"], namespace="uniprot"
             ... )
             >>> selection.extract_mapping().select(
-            ...     "InputId", "KeggGeneId"
+            ...     "input_id", "kegg_gene_id"
             ... ).unique().to_dicts()
-            [{'InputId': 'P12345', 'KeggGeneId': 'hsa:1'}]
+            [{'input_id': 'P12345', 'kegg_gene_id': 'hsa:1'}]
         """
         if self.snapshot.kind == _KeggSnapshotKind.METABOLIC_PUBLICATION:
             publication = self._require_metabolic_publication()
@@ -584,7 +562,7 @@ class KEGGDatabase:
                 independently within every group.
 
         Returns:
-            A selection whose matched and unmapped outputs retain ``GroupId``.
+            A selection whose matched and unmapped outputs retain ``group_id``.
 
         Raises:
             ValueError: If this is a BRITE snapshot, the namespace or a group
@@ -603,9 +581,9 @@ class KEGGDatabase:
             ...     {"up": ["P12345"]}, namespace="uniprot"
             ... )
             >>> selection.extract_mapping().select(
-            ...     "GroupId", "InputId"
+            ...     "group_id", "input_id"
             ... ).unique().to_dicts()
-            [{'GroupId': 'up', 'InputId': 'P12345'}]
+            [{'group_id': 'up', 'input_id': 'P12345'}]
         """
         if self.snapshot.kind == _KeggSnapshotKind.METABOLIC_PUBLICATION:
             publication = self._require_metabolic_publication()
@@ -761,7 +739,7 @@ class KEGGDatabase:
         Examples:
             >>> result = db.evaluate_modules(["K00844", "K12407"])  # doctest: +SKIP
             >>> result.columns  # doctest: +SKIP
-            ['ModuleId', 'RequiredBlockCount', 'SatisfiedBlockCount', 'IsComplete', 'MissingBlockIndexes']
+            ['module_id', 'required_block_count', 'satisfied_block_count', 'is_complete', 'missing_block_indexes']
         """
         return evaluate_metabolic_modules(self._require_metabolic_publication(), ko_ids)
 
@@ -831,8 +809,8 @@ class KeggSelection:
 
     Selections are created by :meth:`KEGGDatabase.select_ids` or
     :meth:`KEGGDatabase.select_groups`. Matched output retains the normalized
-    ``InputId`` and its ``InputNamespace``; grouped selections additionally prepend
-    ``GroupId``.
+    ``input_id`` and its ``input_namespace``; grouped selections additionally prepend
+    ``group_id``.
 
     Examples:
         Materialize matched rows and report IDs that did not map:
@@ -846,10 +824,10 @@ class KeggSelection:
         >>> selection = db.select_ids(
         ...     ["P12345", "MISSING"], namespace="uniprot"
         ... )
-        >>> selection.extract_mapping()["KeggGeneId"].unique().to_list()
+        >>> selection.extract_mapping()["kegg_gene_id"].unique().to_list()
         ['hsa:1']
         >>> selection.extract_unmatched_ids().to_dicts()
-        [{'InputId': 'MISSING'}]
+        [{'input_id': 'MISSING'}]
     """
 
     dataset: KEGGDatabase
@@ -862,7 +840,7 @@ class KeggSelection:
 
     @property
     def is_grouped(self) -> bool:
-        """Report whether this selection carries `GroupId` through outputs.
+        """Report whether this selection carries `group_id` through outputs.
 
         Examples:
             Inspect a grouped selection:
@@ -894,7 +872,7 @@ class KeggSelection:
             ...     organism_code="hsa",
             ... )
             >>> selection = db.select_ids(["P12345"], namespace="uniprot")
-            >>> selection.extract_mapping()["KeggGeneId"].to_list()
+            >>> selection.extract_mapping()["kegg_gene_id"].to_list()
             ['hsa:1', 'hsa:1']
         """
         if self._df_mapping is None:
@@ -905,11 +883,11 @@ class KeggSelection:
                 cols_group_id=(),
             )
             if self._df_group_membership is not None:
-                columns = ["GroupId", *mapping.columns]
+                columns = ["group_id", *mapping.columns]
                 mapping = (
                     self._df_group_membership.join(
                         mapping,
-                        on="InputId",
+                        on="input_id",
                         how="inner",
                     )
                     .select(columns)
@@ -923,7 +901,7 @@ class KeggSelection:
         """Extract normalized input IDs with no KEGG mapping row.
 
         Grouped selections report an ID as unmapped independently within each
-        group and include ``GroupId`` in the result.
+        group and include ``group_id`` in the result.
 
         Examples:
             Retain a normalized input accession that did not map:
@@ -938,7 +916,7 @@ class KeggSelection:
             ...     ["P12345", "MISSING"], namespace="uniprot"
             ... )
             >>> selection.extract_unmatched_ids().to_dicts()
-            [{'InputId': 'MISSING'}]
+            [{'input_id': 'MISSING'}]
         """
         if self._df_unmapped is None:
             mapping = self.extract_mapping()
@@ -949,15 +927,15 @@ class KeggSelection:
                     cols_group_id=(),
                 )
             else:
-                mapped_input_ids = mapping.select("InputId").unique()
+                mapped_input_ids = mapping.select("input_id").unique()
                 self._df_unmapped = (
                     self._df_group_membership.join(
                         mapped_input_ids,
-                        on="InputId",
+                        on="input_id",
                         how="anti",
                     )
-                    .select("GroupId", "InputId")
-                    .sort("GroupId", "InputId")
+                    .select("group_id", "input_id")
+                    .sort("group_id", "input_id")
                 )
         return self._df_unmapped
 
@@ -1105,21 +1083,7 @@ def _validate_tidy_publication(
         if scope == "brite" and observed_column_mapping:
             raise ValueError("KEGG BRITE column provenance inventory is unsupported")
         if scope == "mapping":
-            expected_column_mapping = {
-                ("mapping", source_column, output_column, "generated_snake_case")
-                for source_column, output_column in {
-                    "OrganismCode": "organism_code",
-                    "KeggGeneId": "kegg_gene_id",
-                    "UniProtId": "uniprot_id",
-                    "NcbiGeneId": "ncbi_gene_id",
-                    "KoId": "ko_id",
-                    "KeggPathwayId": "kegg_pathway_id",
-                    "PathwayMapId": "pathway_map_id",
-                    "GeneSymbol": "gene_symbol",
-                    "GeneDescription": "gene_description",
-                }.items()
-            }
-            if observed_column_mapping != expected_column_mapping:
+            if observed_column_mapping:
                 raise ValueError(
                     "KEGG mapping column provenance inventory is unsupported"
                 )

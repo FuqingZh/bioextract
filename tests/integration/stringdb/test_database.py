@@ -7,6 +7,7 @@ import polars as pl
 import pytest
 
 import bioextract.stringdb.stringdb as stringdb_module
+from bioextract.errors import CapabilityError, IntegrityError
 from bioextract.stringdb import STRINGDatabase
 
 
@@ -29,7 +30,7 @@ def _write_demo_string_files(
         aliases,
         "\n".join(
             [
-                "#string_protein_id\talias\tsource",
+                "string_protein_id\talias\tsource",
                 "9606.ENSP0001\tP04637\tUniProt_AC",
                 "9606.ENSP0001\tTP53\tUniProt_GN_Name",
                 "9606.ENSP0002\tEGFR\tUniProt_GN_Name",
@@ -45,7 +46,7 @@ def _write_demo_string_files(
         "\n".join(
             [
                 "protein1 protein2 combined_score",
-                "9606.ENSP0001 9606.ENSP0002 400",
+                "9606.ENSP0001 9606.ENSP0002 700",
                 "9606.ENSP0002 9606.ENSP0001 700",
                 "9606.ENSP0001 9606.ENSP0001 999",
                 "9606.ENSP0001 9606.ENSP0003 450",
@@ -87,17 +88,24 @@ def test_extract_string_mapping_accepts_hash_string_id_header(tmp_path: Path) ->
 
     df_result = selection.extract_string_mapping()
 
-    assert df_result.columns == ["InputId", "StringId", "MapSource"]
+    assert df_result.columns == [
+        "input_id",
+        "#string_protein_id",
+        "alias",
+        "source",
+    ]
     assert df_result.to_dicts() == [
         {
-            "InputId": "EGFR",
-            "StringId": "9606.ENSP0002",
-            "MapSource": "UniProt_GN_Name",
+            "input_id": "EGFR",
+            "#string_protein_id": "9606.ENSP0002",
+            "alias": "EGFR",
+            "source": "UniProt_GN_Name",
         },
         {
-            "InputId": "P04637",
-            "StringId": "9606.ENSP0001",
-            "MapSource": "UniProt_AC",
+            "input_id": "P04637",
+            "#string_protein_id": "9606.ENSP0001",
+            "alias": "P04637",
+            "source": "UniProt_AC",
         },
     ]
 
@@ -113,19 +121,29 @@ def test_stringdb_single_query_minimal_round_trip(tmp_path: Path) -> None:
         .with_min_combined_score(400)
     )
 
-    assert selection.extract_edges().columns == ["StringIdA", "StringIdB", "Score"]
-    assert selection.extract_string_mapping().columns == [
-        "InputId",
-        "StringId",
-        "MapSource",
+    assert selection.extract_edges().columns == [
+        "string_id_a",
+        "string_id_b",
+        "combined_score",
     ]
-    assert selection.extract_unmatched_ids().columns == ["InputId"]
+    assert selection.extract_string_mapping().columns == [
+        "input_id",
+        "string_protein_id",
+        "alias",
+        "source",
+    ]
+    assert selection.extract_unmatched_ids().columns == ["input_id"]
     assert selection.extract_edges().to_dicts() == [
         {
-            "StringIdA": "9606.ENSP0001",
-            "StringIdB": "9606.ENSP0002",
-            "Score": 700,
-        }
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0001",
+            "combined_score": 999,
+        },
+        {
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0002",
+            "combined_score": 700,
+        },
     ]
 
 
@@ -154,21 +172,44 @@ def test_stringdb_group_query_minimal_round_trip(tmp_path: Path) -> None:
     df_mapping = selection.extract_string_mapping()
     df_unmapped = selection.extract_unmatched_ids()
 
-    assert df_edges.columns == ["GroupId", "StringIdA", "StringIdB", "Score"]
-    assert df_mapping.columns == ["GroupId", "InputId", "StringId", "MapSource"]
-    assert df_unmapped.columns == ["GroupId", "InputId"]
+    assert df_edges.columns == [
+        "group_id",
+        "string_id_a",
+        "string_id_b",
+        "combined_score",
+    ]
+    assert df_mapping.columns == [
+        "group_id",
+        "input_id",
+        "string_protein_id",
+        "alias",
+        "source",
+    ]
+    assert df_unmapped.columns == ["group_id", "input_id"]
     assert df_edges.to_dicts() == [
         {
-            "GroupId": "G1",
-            "StringIdA": "9606.ENSP0001",
-            "StringIdB": "9606.ENSP0002",
-            "Score": 700,
+            "group_id": "G1",
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0001",
+            "combined_score": 999,
         },
         {
-            "GroupId": "G2",
-            "StringIdA": "9606.ENSP0001",
-            "StringIdB": "9606.ENSP0003",
-            "Score": 450,
+            "group_id": "G1",
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0002",
+            "combined_score": 700,
+        },
+        {
+            "group_id": "G2",
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0001",
+            "combined_score": 999,
+        },
+        {
+            "group_id": "G2",
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0003",
+            "combined_score": 450,
         },
     ]
 
@@ -204,14 +245,16 @@ def test_extract_string_mapping_accepts_plain_and_gzip_inputs(tmp_path: Path) ->
         df_result = selection.extract_string_mapping()
         assert df_result.to_dicts() == [
             {
-                "InputId": "EGFR",
-                "StringId": "9606.ENSP0002",
-                "MapSource": "UniProt_GN_Name",
+                "input_id": "EGFR",
+                "string_protein_id": "9606.ENSP0002",
+                "alias": "EGFR",
+                "source": "UniProt_GN_Name",
             },
             {
-                "InputId": "TP53",
-                "StringId": "9606.ENSP0001",
-                "MapSource": "UniProt_GN_Name",
+                "input_id": "TP53",
+                "string_protein_id": "9606.ENSP0001",
+                "alias": "TP53",
+                "source": "UniProt_GN_Name",
             },
         ]
 
@@ -236,50 +279,64 @@ def test_extract_core_outputs_return_expected_frames(tmp_path: Path) -> None:
         df_mapping = selection.extract_string_mapping()
         df_unmapped = selection.extract_unmatched_ids()
 
-        assert df_edges.columns == ["StringIdA", "StringIdB", "Score"]
-        assert df_mapping.columns == ["InputId", "StringId", "MapSource"]
-        assert df_unmapped.columns == ["InputId"]
+        assert df_edges.columns == ["string_id_a", "string_id_b", "combined_score"]
+        assert df_mapping.columns == [
+            "input_id",
+            "string_protein_id",
+            "alias",
+            "source",
+        ]
+        assert df_unmapped.columns == ["input_id"]
 
         assert df_edges.to_dicts() == [
             {
-                "StringIdA": "9606.ENSP0001",
-                "StringIdB": "9606.ENSP0002",
-                "Score": 700,
+                "string_id_a": "9606.ENSP0001",
+                "string_id_b": "9606.ENSP0001",
+                "combined_score": 999,
             },
             {
-                "StringIdA": "9606.ENSP0001",
-                "StringIdB": "9606.ENSP0003",
-                "Score": 450,
+                "string_id_a": "9606.ENSP0001",
+                "string_id_b": "9606.ENSP0002",
+                "combined_score": 700,
             },
             {
-                "StringIdA": "9606.ENSP0002",
-                "StringIdB": "9606.ENSP9999",
-                "Score": 800,
+                "string_id_a": "9606.ENSP0001",
+                "string_id_b": "9606.ENSP0003",
+                "combined_score": 450,
+            },
+            {
+                "string_id_a": "9606.ENSP0002",
+                "string_id_b": "9606.ENSP9999",
+                "combined_score": 800,
             },
         ]
         assert df_mapping.to_dicts() == [
             {
-                "InputId": "CDK2",
-                "StringId": "9606.ENSP0003",
-                "MapSource": "UniProt_GN_Name",
+                "input_id": "CDK2",
+                "string_protein_id": "9606.ENSP0003",
+                "alias": "CDK2",
+                "source": "UniProt_GN_Name",
             },
             {
-                "InputId": "EGFR",
-                "StringId": "9606.ENSP0002",
-                "MapSource": "UniProt_GN_Name",
+                "input_id": "EGFR",
+                "string_protein_id": "9606.ENSP0002",
+                "alias": "EGFR",
+                "source": "UniProt_GN_Name",
             },
             {
-                "InputId": "P04637",
-                "StringId": "9606.ENSP0001",
-                "MapSource": "UniProt_AC",
+                "input_id": "P04637",
+                "string_protein_id": "9606.ENSP0001",
+                "alias": "P04637",
+                "source": "UniProt_AC",
             },
             {
-                "InputId": "P04637",
-                "StringId": "9606.ENSP9999",
-                "MapSource": "UniProt_GN_Synonyms",
+                "input_id": "P04637",
+                "string_protein_id": "9606.ENSP9999",
+                "alias": "P04637",
+                "source": "UniProt_GN_Synonyms",
             },
         ]
-        assert df_unmapped.to_dicts() == [{"InputId": "MISSING"}]
+        assert df_unmapped.to_dicts() == [{"input_id": "MISSING"}]
 
 
 def test_extract_core_outputs_handle_empty_input_set(tmp_path: Path) -> None:
@@ -295,16 +352,17 @@ def test_extract_core_outputs_handle_empty_input_set(tmp_path: Path) -> None:
     df_unmapped = selection.extract_unmatched_ids()
 
     assert df_edges.schema == {
-        "StringIdA": pl.String,
-        "StringIdB": pl.String,
-        "Score": pl.Int64,
+        "string_id_a": pl.String,
+        "string_id_b": pl.String,
+        "combined_score": pl.Int64,
     }
     assert df_mapping.schema == {
-        "InputId": pl.String,
-        "StringId": pl.String,
-        "MapSource": pl.String,
+        "input_id": pl.String,
+        "string_protein_id": pl.String,
+        "alias": pl.String,
+        "source": pl.String,
     }
-    assert df_unmapped.schema == {"InputId": pl.String}
+    assert df_unmapped.schema == {"input_id": pl.String}
 
 
 def test_extract_string_mapping_honors_custom_source_rank_map(tmp_path: Path) -> None:
@@ -348,16 +406,18 @@ def test_extract_string_mapping_honors_custom_source_rank_map(tmp_path: Path) ->
 
     assert df_default.to_dicts() == [
         {
-            "InputId": "TP53",
-            "StringId": "9606.ENSP0001",
-            "MapSource": "UniProt_GN_Name",
+            "input_id": "TP53",
+            "string_protein_id": "9606.ENSP0001",
+            "alias": "TP53",
+            "source": "UniProt_GN_Name",
         }
     ]
     assert df_custom.to_dicts() == [
         {
-            "InputId": "TP53",
-            "StringId": "9606.ENSP0001",
-            "MapSource": "CustomSource",
+            "input_id": "TP53",
+            "string_protein_id": "9606.ENSP0001",
+            "alias": "TP53",
+            "source": "CustomSource",
         }
     ]
 
@@ -403,17 +463,27 @@ def test_score_filter_reuses_map_cache_but_recomputes_edges(tmp_path: Path) -> N
     assert selection_high.extract_edges() is not selection_low_edges
     assert selection_low.extract_edges().to_dicts() == [
         {
-            "StringIdA": "9606.ENSP0001",
-            "StringIdB": "9606.ENSP0002",
-            "Score": 700,
-        }
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0001",
+            "combined_score": 999,
+        },
+        {
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0002",
+            "combined_score": 700,
+        },
     ]
     assert selection_high.extract_edges().to_dicts() == [
         {
-            "StringIdA": "9606.ENSP0001",
-            "StringIdB": "9606.ENSP0002",
-            "Score": 700,
-        }
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0001",
+            "combined_score": 999,
+        },
+        {
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0002",
+            "combined_score": 700,
+        },
     ]
 
 
@@ -518,14 +588,15 @@ def test_extract_string_mapping_works_without_links_file(tmp_path: Path) -> None
 
     assert selection.extract_string_mapping().to_dicts() == [
         {
-            "GroupId": "G1",
-            "InputId": "TP53",
-            "StringId": "9606.ENSP0001",
-            "MapSource": "UniProt_GN_Name",
+            "group_id": "G1",
+            "input_id": "TP53",
+            "string_protein_id": "9606.ENSP0001",
+            "alias": "TP53",
+            "source": "UniProt_GN_Name",
         }
     ]
     assert selection.extract_unmatched_ids().to_dicts() == [
-        {"GroupId": "G2", "InputId": "MISSING"}
+        {"group_id": "G2", "input_id": "MISSING"}
     ]
 
 
@@ -539,7 +610,7 @@ def test_extract_edges_rejects_missing_links_file(tmp_path: Path) -> None:
 
     selection = STRINGDatabase.from_files(aliases=file_aliases).select_ids(["TP53"])
 
-    with pytest.raises(ValueError, match="without links file"):
+    with pytest.raises(CapabilityError, match="without links file"):
         selection.extract_edges()
 
 
@@ -553,7 +624,7 @@ def test_extract_string_mapping_rejects_missing_aliases_file(tmp_path: Path) -> 
 
     selection = STRINGDatabase.from_files(links=file_links).select_ids(["TP53"])
 
-    with pytest.raises(ValueError, match="without aliases file"):
+    with pytest.raises(CapabilityError, match="without aliases file"):
         selection.extract_string_mapping()
 
 
@@ -578,69 +649,98 @@ def test_group_selection_extracts_flat_outputs(tmp_path: Path) -> None:
     df_group_unmapped = group_selection.extract_unmatched_ids()
     df_group_edges = group_selection.extract_edges()
 
-    assert df_group_mapping.columns == ["GroupId", "InputId", "StringId", "MapSource"]
-    assert df_group_unmapped.columns == ["GroupId", "InputId"]
-    assert df_group_edges.columns == ["GroupId", "StringIdA", "StringIdB", "Score"]
+    assert df_group_mapping.columns == [
+        "group_id",
+        "input_id",
+        "string_protein_id",
+        "alias",
+        "source",
+    ]
+    assert df_group_unmapped.columns == ["group_id", "input_id"]
+    assert df_group_edges.columns == [
+        "group_id",
+        "string_id_a",
+        "string_id_b",
+        "combined_score",
+    ]
 
     assert df_group_mapping.to_dicts() == [
         {
-            "GroupId": "G1",
-            "InputId": "EGFR",
-            "StringId": "9606.ENSP0002",
-            "MapSource": "UniProt_GN_Name",
+            "group_id": "G1",
+            "input_id": "EGFR",
+            "string_protein_id": "9606.ENSP0002",
+            "alias": "EGFR",
+            "source": "UniProt_GN_Name",
         },
         {
-            "GroupId": "G1",
-            "InputId": "P04637",
-            "StringId": "9606.ENSP0001",
-            "MapSource": "UniProt_AC",
+            "group_id": "G1",
+            "input_id": "P04637",
+            "string_protein_id": "9606.ENSP0001",
+            "alias": "P04637",
+            "source": "UniProt_AC",
         },
         {
-            "GroupId": "G1",
-            "InputId": "P04637",
-            "StringId": "9606.ENSP9999",
-            "MapSource": "UniProt_GN_Synonyms",
+            "group_id": "G1",
+            "input_id": "P04637",
+            "string_protein_id": "9606.ENSP9999",
+            "alias": "P04637",
+            "source": "UniProt_GN_Synonyms",
         },
         {
-            "GroupId": "G2",
-            "InputId": "CDK2",
-            "StringId": "9606.ENSP0003",
-            "MapSource": "UniProt_GN_Name",
+            "group_id": "G2",
+            "input_id": "CDK2",
+            "string_protein_id": "9606.ENSP0003",
+            "alias": "CDK2",
+            "source": "UniProt_GN_Name",
         },
         {
-            "GroupId": "G2",
-            "InputId": "P04637",
-            "StringId": "9606.ENSP0001",
-            "MapSource": "UniProt_AC",
+            "group_id": "G2",
+            "input_id": "P04637",
+            "string_protein_id": "9606.ENSP0001",
+            "alias": "P04637",
+            "source": "UniProt_AC",
         },
         {
-            "GroupId": "G2",
-            "InputId": "P04637",
-            "StringId": "9606.ENSP9999",
-            "MapSource": "UniProt_GN_Synonyms",
+            "group_id": "G2",
+            "input_id": "P04637",
+            "string_protein_id": "9606.ENSP9999",
+            "alias": "P04637",
+            "source": "UniProt_GN_Synonyms",
         },
     ]
     assert df_group_unmapped.to_dicts() == [
-        {"GroupId": "G1", "InputId": "MISSING"},
+        {"group_id": "G1", "input_id": "MISSING"},
     ]
     assert df_group_edges.to_dicts() == [
         {
-            "GroupId": "G1",
-            "StringIdA": "9606.ENSP0001",
-            "StringIdB": "9606.ENSP0002",
-            "Score": 700,
+            "group_id": "G1",
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0001",
+            "combined_score": 999,
         },
         {
-            "GroupId": "G1",
-            "StringIdA": "9606.ENSP0002",
-            "StringIdB": "9606.ENSP9999",
-            "Score": 800,
+            "group_id": "G1",
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0002",
+            "combined_score": 700,
         },
         {
-            "GroupId": "G2",
-            "StringIdA": "9606.ENSP0001",
-            "StringIdB": "9606.ENSP0003",
-            "Score": 450,
+            "group_id": "G1",
+            "string_id_a": "9606.ENSP0002",
+            "string_id_b": "9606.ENSP9999",
+            "combined_score": 800,
+        },
+        {
+            "group_id": "G2",
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0001",
+            "combined_score": 999,
+        },
+        {
+            "group_id": "G2",
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0003",
+            "combined_score": 450,
         },
     ]
 
@@ -671,36 +771,36 @@ def test_group_selection_matches_equivalent_single_query_results(
     df_single_mapping = pl.concat(
         [
             selection_g1.extract_string_mapping()
-            .with_columns(pl.lit("G1").alias("GroupId"))
-            .select(["GroupId", "InputId", "StringId", "MapSource"]),
+            .with_columns(pl.lit("G1").alias("group_id"))
+            .select(["group_id", "input_id", "string_protein_id", "alias", "source"]),
             selection_g2.extract_string_mapping()
-            .with_columns(pl.lit("G2").alias("GroupId"))
-            .select(["GroupId", "InputId", "StringId", "MapSource"]),
+            .with_columns(pl.lit("G2").alias("group_id"))
+            .select(["group_id", "input_id", "string_protein_id", "alias", "source"]),
         ]
-    ).sort(["GroupId", "InputId", "StringId", "MapSource"])
+    ).sort(["group_id", "input_id", "string_protein_id", "alias", "source"])
     df_single_unmapped = pl.concat(
         [
             selection_g1.extract_unmatched_ids()
-            .with_columns(pl.lit("G1").alias("GroupId"))
-            .select(["GroupId", "InputId"]),
+            .with_columns(pl.lit("G1").alias("group_id"))
+            .select(["group_id", "input_id"]),
             selection_g2.extract_unmatched_ids()
-            .with_columns(pl.lit("G2").alias("GroupId"))
-            .select(["GroupId", "InputId"]),
+            .with_columns(pl.lit("G2").alias("group_id"))
+            .select(["group_id", "input_id"]),
         ],
         how="vertical_relaxed",
-    ).sort(["GroupId", "InputId"])
+    ).sort(["group_id", "input_id"])
     df_single_edges = pl.concat(
         [
             selection_g1.extract_edges()
-            .with_columns(pl.lit("G1").alias("GroupId"))
-            .select(["GroupId", "StringIdA", "StringIdB", "Score"]),
+            .with_columns(pl.lit("G1").alias("group_id"))
+            .select(["group_id", "string_id_a", "string_id_b", "combined_score"]),
             selection_g2.extract_edges()
-            .with_columns(pl.lit("G2").alias("GroupId"))
-            .select(["GroupId", "StringIdA", "StringIdB", "Score"]),
+            .with_columns(pl.lit("G2").alias("group_id"))
+            .select(["group_id", "string_id_a", "string_id_b", "combined_score"]),
         ]
-    ).sort(["GroupId", "StringIdA", "StringIdB"])
+    ).sort(["group_id", "string_id_a", "string_id_b"])
 
-    assert df_group_mapping.filter(pl.col("GroupId").is_in(["G1", "G2"])).equals(
+    assert df_group_mapping.filter(pl.col("group_id").is_in(["G1", "G2"])).equals(
         df_single_mapping
     )
     assert df_group_unmapped.equals(df_single_unmapped)
@@ -731,16 +831,28 @@ def test_group_selection_reuses_cached_frames_and_recomputes_edges(
     assert selection_high.extract_edges() is not df_edges_low
     assert selection_high.extract_edges().to_dicts() == [
         {
-            "GroupId": "G1",
-            "StringIdA": "9606.ENSP0001",
-            "StringIdB": "9606.ENSP0002",
-            "Score": 700,
+            "group_id": "G1",
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0001",
+            "combined_score": 999,
         },
         {
-            "GroupId": "G1",
-            "StringIdA": "9606.ENSP0002",
-            "StringIdB": "9606.ENSP9999",
-            "Score": 800,
+            "group_id": "G1",
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0002",
+            "combined_score": 700,
+        },
+        {
+            "group_id": "G1",
+            "string_id_a": "9606.ENSP0002",
+            "string_id_b": "9606.ENSP9999",
+            "combined_score": 800,
+        },
+        {
+            "group_id": "G2",
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0001",
+            "combined_score": 999,
         },
     ]
 
@@ -763,37 +875,39 @@ def test_group_selection_resolves_normalized_ids_once_then_expands_membership(
     )
 
     assert selection._df_input_ids.to_dicts() == [  # pyright: ignore[reportPrivateUsage]
-        {"InputId": "CDK2"},
-        {"InputId": "EGFR"},
-        {"InputId": "MISSING"},
-        {"InputId": "P04637"},
+        {"input_id": "CDK2"},
+        {"input_id": "EGFR"},
+        {"input_id": "MISSING"},
+        {"input_id": "P04637"},
     ]
     group_membership = selection._df_group_membership  # pyright: ignore[reportPrivateUsage]
     assert group_membership is not None
     assert group_membership.filter(
-        pl.col("InputId").is_in(["MISSING", "P04637"])
+        pl.col("input_id").is_in(["MISSING", "P04637"])
     ).to_dicts() == [
-        {"GroupId": "G1", "InputId": "MISSING"},
-        {"GroupId": "G1", "InputId": "P04637"},
-        {"GroupId": "G2", "InputId": "MISSING"},
-        {"GroupId": "G2", "InputId": "P04637"},
+        {"group_id": "G1", "input_id": "MISSING"},
+        {"group_id": "G1", "input_id": "P04637"},
+        {"group_id": "G2", "input_id": "MISSING"},
+        {"group_id": "G2", "input_id": "P04637"},
     ]
 
     shared_mapping = selection.extract_string_mapping().filter(
-        pl.col("InputId") == "P04637"
+        pl.col("input_id") == "P04637"
     )
-    assert shared_mapping.group_by("GroupId").len().sort("GroupId").to_dicts() == [
-        {"GroupId": "G1", "len": 2},
-        {"GroupId": "G2", "len": 2},
+    assert shared_mapping.group_by("group_id").len().sort("group_id").to_dicts() == [
+        {"group_id": "G1", "len": 2},
+        {"group_id": "G2", "len": 2},
     ]
     assert selection.extract_unmatched_ids().to_dicts() == [
-        {"GroupId": "G1", "InputId": "MISSING"},
-        {"GroupId": "G2", "InputId": "MISSING"},
+        {"group_id": "G1", "input_id": "MISSING"},
+        {"group_id": "G2", "input_id": "MISSING"},
     ]
-    assert selection.extract_edges().select("GroupId", "StringIdB").to_dicts() == [
-        {"GroupId": "G1", "StringIdB": "9606.ENSP0002"},
-        {"GroupId": "G1", "StringIdB": "9606.ENSP9999"},
-        {"GroupId": "G2", "StringIdB": "9606.ENSP0003"},
+    assert selection.extract_edges().select("group_id", "string_id_b").to_dicts() == [
+        {"group_id": "G1", "string_id_b": "9606.ENSP0001"},
+        {"group_id": "G1", "string_id_b": "9606.ENSP0002"},
+        {"group_id": "G1", "string_id_b": "9606.ENSP9999"},
+        {"group_id": "G2", "string_id_b": "9606.ENSP0001"},
+        {"group_id": "G2", "string_id_b": "9606.ENSP0003"},
     ]
 
 
@@ -831,4 +945,82 @@ def test_group_selection_builds_one_data_scan_per_cached_source(
     assert selection.extract_string_mapping() is selection.extract_string_mapping()
     assert selection.extract_unmatched_ids() is selection.extract_unmatched_ids()
     assert selection.extract_edges() is selection.extract_edges()
-    assert scan_counts == {"aliases": 1, "links": 1}
+    # Taxon compatibility validation adds one bounded source scan, but the
+    # count remains independent of the number of groups.
+    assert scan_counts == {"aliases": 2, "links": 3}
+
+
+def test_direct_string_namespace_uses_links_without_aliases(tmp_path: Path) -> None:
+    file_links = tmp_path / "links.txt"
+    _write_text_or_gzip(
+        file_links,
+        "protein1 protein2 combined_score\n9606.ENSP0001 9606.ENSP0002 500\n",
+        should_gzip=False,
+    )
+
+    selection = STRINGDatabase.from_files(links=file_links).select_ids(
+        ["9606.ENSP0001", "9606.ENSP0002"], namespace="string"
+    )
+
+    assert selection.extract_edges().to_dicts() == [
+        {
+            "string_id_a": "9606.ENSP0001",
+            "string_id_b": "9606.ENSP0002",
+            "combined_score": 500,
+        }
+    ]
+    assert selection.extract_unmatched_ids().to_dicts() == []
+    with pytest.raises(CapabilityError, match="namespace='alias'"):
+        selection.extract_string_mapping()
+
+
+def test_canonical_edge_score_conflict_fails_before_threshold(tmp_path: Path) -> None:
+    file_aliases = tmp_path / "aliases.txt"
+    file_links = tmp_path / "links.txt"
+    _write_text_or_gzip(
+        file_aliases,
+        "string_protein_id\talias\tsource\n"
+        "9606.ENSP0001\tTP53\tUniProt_GN_Name\n"
+        "9606.ENSP0002\tEGFR\tUniProt_GN_Name\n",
+        should_gzip=False,
+    )
+    _write_text_or_gzip(
+        file_links,
+        "protein1 protein2 combined_score\n"
+        "9606.ENSP0001 9606.ENSP0002 400\n"
+        "9606.ENSP0002 9606.ENSP0001 700\n",
+        should_gzip=False,
+    )
+
+    selection = (
+        STRINGDatabase.from_files(aliases=file_aliases, links=file_links)
+        .select_ids(["TP53", "EGFR"])
+        .with_min_combined_score(700)
+    )
+    with pytest.raises(IntegrityError, match="conflicting combined_score"):
+        selection.extract_edges()
+
+
+def test_taxon_mismatch_is_rejected_and_gzip_inputs_warn(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    file_aliases = tmp_path / "aliases.txt.gz"
+    file_links = tmp_path / "links.txt.gz"
+    _write_text_or_gzip(
+        file_aliases,
+        "string_protein_id\talias\tsource\n9606.ENSP0001\tTP53\tUniProt_GN_Name\n",
+        should_gzip=True,
+    )
+    _write_text_or_gzip(
+        file_links,
+        "protein1 protein2 combined_score\n10090.ENSP0001 10090.ENSP0002 500\n",
+        should_gzip=True,
+    )
+
+    caplog.set_level("WARNING")
+    selection = STRINGDatabase.from_files(
+        aliases=file_aliases, links=file_links
+    ).select_ids(["TP53"])
+    assert "gzip-compressed" in caplog.text
+    with pytest.raises(IntegrityError, match="incompatible taxon"):
+        selection.extract_edges()

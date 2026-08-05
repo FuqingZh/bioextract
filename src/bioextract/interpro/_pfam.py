@@ -24,28 +24,28 @@ MEDIA_TYPE_XML_GZIP = "application/gzip+xml"
 
 SCHEMA_PROTEIN_TERM = pl.Schema(
     {
-        "UniProtId": pl.String,
-        "PfamId": pl.String,
+        "uniprot_id": pl.String,
+        "pfam_id": pl.String,
     }
 )
 SCHEMA_TERM = pl.Schema(
     {
-        "PfamId": pl.String,
-        "PfamName": pl.String,
+        "pfam_id": pl.String,
+        "pfam_name": pl.String,
     }
 )
 SCHEMA_TERM_XREF = pl.Schema(
     {
-        "PfamId": pl.String,
-        "InterProId": pl.String,
-        "InterProName": pl.String,
-        "InterProType": pl.String,
+        "pfam_id": pl.String,
+        "interpro_id": pl.String,
+        "interpro_name": pl.String,
+        "interpro_type": pl.String,
     }
 )
 _SCHEMA_XML_MAPPING = pl.Schema(
     {
         **SCHEMA_TERM_XREF,
-        "PfamName": pl.String,
+        "pfam_name": pl.String,
     }
 )
 
@@ -91,7 +91,7 @@ def build_pfam_tidy_dataset(
     Notes:
         Paths declare logical roles only and never carry release identity.
         This boundary intentionally builds directly from the two raw files.
-        Keep exact `InterProId + PfamId` validation here; deriving from a prior
+        Keep exact `interpro_id + pfam_id` validation here; deriving from a prior
         canonical parquet would add a publication prerequisite and could hide
         mismatched raw relationships. Pfam names come from XML member metadata,
         while InterPro entry names are retained only in `term_xref`.
@@ -101,26 +101,26 @@ def build_pfam_tidy_dataset(
 
     lf_raw_mapping = scan_protein2ipr_frame(file_protein2ipr)
     lf_raw_pfam = lf_raw_mapping.filter(
-        pl.col("MemberDbId").str.starts_with("PF")
+        pl.col("member_db_id").str.starts_with("PF")
     ).select(
-        pl.col("UniProtId").str.strip_chars().replace("", None),
-        pl.col("MemberDbId").str.strip_chars().replace("", None).alias("PfamId"),
-        pl.col("InterProId").str.strip_chars().replace("", None),
+        pl.col("uniprot_id").str.strip_chars().replace("", None),
+        pl.col("member_db_id").str.strip_chars().replace("", None).alias("pfam_id"),
+        pl.col("interpro_id").str.strip_chars().replace("", None),
     )
     df_used_pair_index = (
-        lf_raw_pfam.group_by("InterProId", "PfamId")
+        lf_raw_pfam.group_by("interpro_id", "pfam_id")
         .agg(
-            pl.col("UniProtId").is_null().any().alias("HasMissingUniProtId"),
+            pl.col("uniprot_id").is_null().any().alias("has_missing_uniprot_id"),
         )
         .collect(engine="streaming")
-        .sort("InterProId", "PfamId", nulls_last=True)
+        .sort("interpro_id", "pfam_id", nulls_last=True)
     )
     _validate_raw_pfam_ids(df_used_pair_index)
 
-    lf_used_pairs = df_used_pair_index.select("InterProId", "PfamId").lazy()
+    lf_used_pairs = df_used_pair_index.select("interpro_id", "pfam_id").lazy()
     lf_used_metadata = lf_used_pairs.join(
         df_xml_mapping.lazy(),
-        on=["InterProId", "PfamId"],
+        on=["interpro_id", "pfam_id"],
         how="left",
     )
     _validate_used_xml_mapping(lf_used_metadata)
@@ -128,22 +128,22 @@ def build_pfam_tidy_dataset(
     lf_term = (
         lf_used_metadata.select(SCHEMA_TERM.names())
         .unique(keep="any", maintain_order=False)
-        .sort("PfamId")
+        .sort("pfam_id")
     )
     lf_term_xref = (
         lf_used_metadata.select(SCHEMA_TERM_XREF.names())
         .unique(keep="any", maintain_order=False)
-        .sort("PfamId", "InterProId")
+        .sort("pfam_id", "interpro_id")
     )
     lf_protein_term = (
         lf_raw_pfam.join(
             lf_used_pairs,
-            on=["InterProId", "PfamId"],
+            on=["interpro_id", "pfam_id"],
             how="semi",
         )
         .select(
-            pl.col("UniProtId"),
-            pl.col("PfamId"),
+            pl.col("uniprot_id"),
+            pl.col("pfam_id"),
         )
         .unique(
             subset=SCHEMA_PROTEIN_TERM.names(),
@@ -223,11 +223,11 @@ def _read_pfam_xml_mapping(file_interpro_xml: Path) -> tuple[str, pl.DataFrame]:
                         continue
                     rows.append(
                         {
-                            "PfamId": _clean_text(db_xref.attrib.get("dbkey")),
-                            "PfamName": _clean_text(db_xref.attrib.get("name")),
-                            "InterProId": interpro_id,
-                            "InterProName": interpro_name,
-                            "InterProType": interpro_type,
+                            "pfam_id": _clean_text(db_xref.attrib.get("dbkey")),
+                            "pfam_name": _clean_text(db_xref.attrib.get("name")),
+                            "interpro_id": interpro_id,
+                            "interpro_name": interpro_name,
+                            "interpro_type": interpro_type,
                         }
                     )
             elem.clear()
@@ -264,7 +264,7 @@ def read_interpro_release_version(file_interpro_xml: Path) -> str | None:
 
 
 def _validate_xml_pfam_ids(df_xml_mapping: pl.DataFrame) -> None:
-    invalid_ids = _invalid_pfam_ids(df_xml_mapping.get_column("PfamId").to_list())
+    invalid_ids = _invalid_pfam_ids(df_xml_mapping.get_column("pfam_id").to_list())
     if invalid_ids:
         raise ValueError(
             f"InterPro XML contains invalid PFAM member IDs: {invalid_ids[:10]}"
@@ -275,24 +275,24 @@ def _validate_raw_pfam_ids(df_pfam_id_stats: pl.DataFrame) -> None:
     if df_pfam_id_stats.is_empty():
         raise ValueError("InterPro protein2ipr contains no PFAM member IDs")
 
-    invalid_ids = _invalid_pfam_ids(df_pfam_id_stats.get_column("PfamId").to_list())
+    invalid_ids = _invalid_pfam_ids(df_pfam_id_stats.get_column("pfam_id").to_list())
     if invalid_ids:
         raise ValueError(
             f"InterPro protein2ipr contains invalid PFAM member IDs: {invalid_ids[:10]}"
         )
-    missing_uniprot_ids = df_pfam_id_stats.filter("HasMissingUniProtId")
+    missing_uniprot_ids = df_pfam_id_stats.filter("has_missing_uniprot_id")
     if missing_uniprot_ids.height:
         raise ValueError(
             "InterPro PFAM rows contain missing UniProt IDs for: "
-            f"{missing_uniprot_ids.select('InterProId', 'PfamId').head(10).rows()}"
+            f"{missing_uniprot_ids.select('interpro_id', 'pfam_id').head(10).rows()}"
         )
 
 
 def _validate_used_xml_mapping(lf_used_metadata: pl.LazyFrame) -> None:
-    cols_required = SCHEMA_TERM_XREF.names() + ["PfamName"]
+    cols_required = SCHEMA_TERM_XREF.names() + ["pfam_name"]
     rows_incomplete = (
         lf_used_metadata.filter(pl.any_horizontal(pl.col(cols_required).is_null()))
-        .select("InterProId", "PfamId")
+        .select("interpro_id", "pfam_id")
         .unique(keep="any", maintain_order=False)
         .limit(10)
         .collect(engine="streaming")
@@ -304,18 +304,18 @@ def _validate_used_xml_mapping(lf_used_metadata: pl.LazyFrame) -> None:
         )
 
     name_conflicts = (
-        lf_used_metadata.group_by("PfamId")
-        .agg(pl.col("PfamName").n_unique().alias("NameCount"))
-        .filter(pl.col("NameCount") != 1)
-        .sort("PfamId")
-        .select("PfamId")
+        lf_used_metadata.group_by("pfam_id")
+        .agg(pl.col("pfam_name").n_unique().alias("name_count"))
+        .filter(pl.col("name_count") != 1)
+        .sort("pfam_id")
+        .select("pfam_id")
         .limit(10)
         .collect(engine="streaming")
     )
     if not name_conflicts.is_empty():
         raise ValueError(
             "InterPro XML assigns conflicting names to mapped PFAM IDs: "
-            f"{name_conflicts.get_column('PfamId').to_list()}"
+            f"{name_conflicts.get_column('pfam_id').to_list()}"
         )
 
 

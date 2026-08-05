@@ -73,21 +73,22 @@ R-MMU-000001	R-MMU-1257604
 ### Grouped Selection
 
 - `select_groups()` preserves group labels.
-- Grouped mapping prepends `GroupId`.
-- Grouped unmapped output includes `GroupId` and `InputId`.
+- Grouped mapping prepends `group_id`.
+- Grouped unmapped output includes `group_id` and `input_id`.
 - The same UniProt ID can appear in multiple groups without being collapsed
   across groups.
 
 ### Enrichment Input Frames
 
-- `extract_term2gene()` returns `ReactomePathwayId, UniProtId`.
+- `extract_term2gene()` returns `reactome_pathway_id, uniprot_id`.
 - `extract_term2gene()` is species-scoped.
-- `extract_term2name()` returns `ReactomePathwayId, PathwayName, Species`.
+- `extract_term2name()` returns `reactome_pathway_id, pathway_name, species`.
 - `extract_term2name()` is deduplicated by pathway ID.
 
 ### Relations
 
-- `extract_pathway_relations()` returns parent-child columns.
+- `extract_pathway_relations()` returns `parent_reactome_pathway_id` and
+  `child_reactome_pathway_id`.
 - Species-scoped relations keep only edges where both endpoints are in
   species-scoped pathway metadata.
 - Relations are stable when relation rows reference pathways absent from

@@ -58,34 +58,34 @@ def test_extract_mapping_uses_xml_metadata_when_available(tmp_path: Path) -> Non
 
     assert db.extract_mapping().to_dicts() == [
         {
-            "UniProtId": "P12345",
-            "InterProId": "IPR000001",
-            "InterProName": "Kringle",
-            "InterProType": "Domain",
-            "MemberDb": "PFAM",
-            "MemberDbId": "PF00051",
-            "Start": 10,
-            "End": 80,
+            "uniprot_id": "P12345",
+            "interpro_id": "IPR000001",
+            "interpro_name": "Kringle",
+            "interpro_type": "Domain",
+            "member_db": "PFAM",
+            "member_db_id": "PF00051",
+            "start": 10,
+            "end": 80,
         },
         {
-            "UniProtId": "P12345",
-            "InterProId": "IPR000001",
-            "InterProName": "Kringle",
-            "InterProType": "Domain",
-            "MemberDb": "SMART",
-            "MemberDbId": "SM00130",
-            "Start": 12,
-            "End": 76,
+            "uniprot_id": "P12345",
+            "interpro_id": "IPR000001",
+            "interpro_name": "Kringle",
+            "interpro_type": "Domain",
+            "member_db": "SMART",
+            "member_db_id": "SM00130",
+            "start": 12,
+            "end": 76,
         },
         {
-            "UniProtId": "Q9Y243",
-            "InterProId": "IPR000002",
-            "InterProName": "Protein kinase domain",
-            "InterProType": "Homologous_superfamily",
-            "MemberDb": "PFAM",
-            "MemberDbId": "PF00069",
-            "Start": 5,
-            "End": 220,
+            "uniprot_id": "Q9Y243",
+            "interpro_id": "IPR000002",
+            "interpro_name": "Protein kinase domain",
+            "interpro_type": "Homologous_superfamily",
+            "member_db": "PFAM",
+            "member_db_id": "PF00069",
+            "start": 5,
+            "end": 220,
         },
     ]
 
@@ -102,8 +102,8 @@ def test_xml_metadata_is_optional(tmp_path: Path) -> None:
         .row(0, named=True)
     )
 
-    assert row["InterProType"] is None
-    assert row["MemberDb"] is None
+    assert row["interpro_type"] is None
+    assert row["member_db"] is None
 
 
 def test_select_ids_streams_subset_and_reports_unmapped(tmp_path: Path) -> None:
@@ -118,28 +118,28 @@ def test_select_ids_streams_subset_and_reports_unmapped(tmp_path: Path) -> None:
     )
 
     assert selection.extract_mapping().select(
-        "InputId",
-        "InputNamespace",
-        "UniProtId",
-        "InterProId",
-        "MemberDb",
+        "input_id",
+        "input_namespace",
+        "uniprot_id",
+        "interpro_id",
+        "member_db",
     ).to_dicts() == [
         {
-            "InputId": "P12345",
-            "InputNamespace": "uniprot",
-            "UniProtId": "P12345",
-            "InterProId": "IPR000001",
-            "MemberDb": "PFAM",
+            "input_id": "P12345",
+            "input_namespace": "uniprot",
+            "uniprot_id": "P12345",
+            "interpro_id": "IPR000001",
+            "member_db": "PFAM",
         },
         {
-            "InputId": "P12345",
-            "InputNamespace": "uniprot",
-            "UniProtId": "P12345",
-            "InterProId": "IPR000001",
-            "MemberDb": "SMART",
+            "input_id": "P12345",
+            "input_namespace": "uniprot",
+            "uniprot_id": "P12345",
+            "interpro_id": "IPR000001",
+            "member_db": "SMART",
         },
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [{"InputId": "MISSING"}]
+    assert selection.extract_unmatched_ids().to_dicts() == [{"input_id": "MISSING"}]
 
 
 def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
@@ -156,18 +156,18 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     df_mapping = grouped.extract_mapping()
     assert grouped.extract_mapping() is df_mapping
     assert df_mapping.columns[:3] == [
-        "GroupId",
-        "InputId",
-        "InputNamespace",
+        "group_id",
+        "input_id",
+        "input_namespace",
     ]
-    assert df_mapping.select("GroupId", "MemberDb").to_dicts() == [
-        {"GroupId": "down", "MemberDb": "PFAM"},
-        {"GroupId": "down", "MemberDb": "SMART"},
-        {"GroupId": "up", "MemberDb": "PFAM"},
-        {"GroupId": "up", "MemberDb": "SMART"},
+    assert df_mapping.select("group_id", "member_db").to_dicts() == [
+        {"group_id": "down", "member_db": "PFAM"},
+        {"group_id": "down", "member_db": "SMART"},
+        {"group_id": "up", "member_db": "PFAM"},
+        {"group_id": "up", "member_db": "SMART"},
     ]
     assert grouped.extract_unmatched_ids().to_dicts() == [
-        {"GroupId": "down", "InputId": "MISSING"}
+        {"group_id": "down", "input_id": "MISSING"}
     ]
 
 
@@ -187,7 +187,7 @@ def test_mapping_only_duckdb_round_trip_preserves_domain_selection(
     assert result.tables == ("mapping",)
     selection = reopened.select_ids(["P12345", "MISSING"])
     assert selection.extract_mapping().height == 2
-    assert selection.extract_unmatched_ids().to_dicts() == [{"InputId": "MISSING"}]
+    assert selection.extract_unmatched_ids().to_dicts() == [{"input_id": "MISSING"}]
 
 
 @pytest.mark.parametrize(

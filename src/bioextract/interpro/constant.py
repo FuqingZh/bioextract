@@ -13,43 +13,43 @@ NAMESPACE_VALUES = ("uniprot",)
 InterProNamespace = Literal["uniprot"]
 
 COLS_MAPPING = [
-    "UniProtId",
-    "InterProId",
-    "InterProName",
-    "InterProType",
-    "MemberDb",
-    "MemberDbId",
-    "Start",
-    "End",
+    "uniprot_id",
+    "interpro_id",
+    "interpro_name",
+    "interpro_type",
+    "member_db",
+    "member_db_id",
+    "start",
+    "end",
 ]
 
 SCHEMA_MAPPING: SchemaDict = {
-    "UniProtId": pl.String,
-    "InterProId": pl.String,
-    "InterProName": pl.String,
-    "InterProType": pl.String,
-    "MemberDb": pl.String,
-    "MemberDbId": pl.String,
-    "Start": pl.Int64,
-    "End": pl.Int64,
+    "uniprot_id": pl.String,
+    "interpro_id": pl.String,
+    "interpro_name": pl.String,
+    "interpro_type": pl.String,
+    "member_db": pl.String,
+    "member_db_id": pl.String,
+    "start": pl.Int64,
+    "end": pl.Int64,
 }
 
 SCHEMA_INTERPRO_ENTRY: SchemaDict = {
-    "InterProId": pl.String,
-    "InterProType": pl.String,
+    "interpro_id": pl.String,
+    "interpro_type": pl.String,
 }
 
 SCHEMA_INTERPRO_MEMBER: SchemaDict = {
-    "InterProId": pl.String,
-    "MemberDbId": pl.String,
-    "MemberDb": pl.String,
+    "interpro_id": pl.String,
+    "member_db_id": pl.String,
+    "member_db": pl.String,
 }
 
-SCHEMA_UNMAPPED: SchemaDict = {"InputId": pl.String}
-SCHEMA_GROUPS: SchemaDict = {"GroupId": pl.String}
+SCHEMA_UNMAPPED: SchemaDict = {"input_id": pl.String}
+SCHEMA_GROUPS: SchemaDict = {"group_id": pl.String}
 SCHEMA_GROUP_INPUT_IDS: SchemaDict = {
-    "GroupId": pl.String,
-    "InputId": pl.String,
+    "group_id": pl.String,
+    "input_id": pl.String,
 }
 
 ASSET_SPECS = (("mapping", "canonical", "mapping"),)

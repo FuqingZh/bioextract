@@ -313,70 +313,70 @@ def test_from_duckdb_selects_exact_reactions_and_domain_relations(
     selection = database.select_reactions(["CHEBI:1"], namespace="chebi")
 
     assert selection.extract_matches().select(
-        "InputId", "InputNamespace", "RheaId", "Direction"
+        "input_id", "input_namespace", "rhea_id", "direction"
     ).to_dicts() == [
         {
-            "InputId": "CHEBI:1",
-            "InputNamespace": "chebi",
-            "RheaId": 10000,
-            "Direction": "UN",
+            "input_id": "CHEBI:1",
+            "input_namespace": "chebi",
+            "rhea_id": 10000,
+            "direction": "UN",
         },
         {
-            "InputId": "CHEBI:1",
-            "InputNamespace": "chebi",
-            "RheaId": 10001,
-            "Direction": "LR",
+            "input_id": "CHEBI:1",
+            "input_namespace": "chebi",
+            "rhea_id": 10001,
+            "direction": "LR",
         },
         {
-            "InputId": "CHEBI:1",
-            "InputNamespace": "chebi",
-            "RheaId": 10002,
-            "Direction": "RL",
+            "input_id": "CHEBI:1",
+            "input_namespace": "chebi",
+            "rhea_id": 10002,
+            "direction": "RL",
         },
         {
-            "InputId": "CHEBI:1",
-            "InputNamespace": "chebi",
-            "RheaId": 10003,
-            "Direction": "BI",
+            "input_id": "CHEBI:1",
+            "input_namespace": "chebi",
+            "rhea_id": 10003,
+            "direction": "BI",
         },
     ]
     participant_roles = (
         selection.extract_participants()
-        .filter(pl.col("ParticipantId") == "Participant_A")
-        .select("RheaId", "Side", "DirectionalRole", "ChEBIId")
+        .filter(pl.col("participant_id") == "Participant_A")
+        .select("rhea_id", "side", "directional_role", "chebi_id")
         .to_dicts()
     )
     assert participant_roles == [
         {
-            "RheaId": 10000,
-            "Side": "L",
-            "DirectionalRole": None,
-            "ChEBIId": "CHEBI:1",
+            "rhea_id": 10000,
+            "side": "L",
+            "directional_role": None,
+            "chebi_id": "CHEBI:1",
         },
         {
-            "RheaId": 10001,
-            "Side": "L",
-            "DirectionalRole": "substrate",
-            "ChEBIId": "CHEBI:1",
+            "rhea_id": 10001,
+            "side": "L",
+            "directional_role": "substrate",
+            "chebi_id": "CHEBI:1",
         },
         {
-            "RheaId": 10002,
-            "Side": "L",
-            "DirectionalRole": "product",
-            "ChEBIId": "CHEBI:1",
+            "rhea_id": 10002,
+            "side": "L",
+            "directional_role": "product",
+            "chebi_id": "CHEBI:1",
         },
         {
-            "RheaId": 10003,
-            "Side": "L",
-            "DirectionalRole": None,
-            "ChEBIId": "CHEBI:1",
+            "rhea_id": 10003,
+            "side": "L",
+            "directional_role": None,
+            "chebi_id": "CHEBI:1",
         },
     ]
-    assert selection.extract_reactions().filter(pl.col("RheaId") == 10000)[
-        "ReactionSmiles"
+    assert selection.extract_reactions().filter(pl.col("rhea_id") == 10000)[
+        "reaction_smiles"
     ].to_list() == ["A>>B"]
-    assert selection.extract_publications()["PubMedId"].to_list() == ["12345"]
-    assert selection.extract_relationships()["RelationType"].unique().to_list() == [
+    assert selection.extract_publications()["pubmed_id"].to_list() == ["12345"]
+    assert selection.extract_relationships()["relation_type"].unique().to_list() == [
         "is_a"
     ]
 
@@ -397,16 +397,16 @@ def test_grouped_selection_preserves_lineage_and_unmatched_ids(
     )
 
     assert selection.extract_matches().select(
-        "GroupId", "InputId", "RheaId"
+        "group_id", "input_id", "rhea_id"
     ).to_dicts() == [
-        {"GroupId": "known", "InputId": "1.1.1.1", "RheaId": 10000},
-        {"GroupId": "mixed", "InputId": "1.1.1.1", "RheaId": 10000},
+        {"group_id": "known", "input_id": "1.1.1.1", "rhea_id": 10000},
+        {"group_id": "mixed", "input_id": "1.1.1.1", "rhea_id": 10000},
     ]
     assert selection.extract_unmatched_ids().to_dicts() == [
         {
-            "GroupId": "mixed",
-            "InputId": "9.9.9.9",
-            "InputNamespace": "ec",
+            "group_id": "mixed",
+            "input_id": "9.9.9.9",
+            "input_namespace": "ec",
         }
     ]
 
@@ -450,18 +450,18 @@ def test_grouped_selection_resolves_unique_ids_once_and_reuses_mapping(
         "empty",
     )
     assert selection.extract_matches().select(
-        "GroupId", "InputId", "RheaId"
+        "group_id", "input_id", "rhea_id"
     ).to_dicts() == [
-        {"GroupId": "case", "InputId": "RHEA:10000", "RheaId": 10000},
-        {"GroupId": "control", "InputId": "RHEA:10000", "RheaId": 10000},
+        {"group_id": "case", "input_id": "RHEA:10000", "rhea_id": 10000},
+        {"group_id": "control", "input_id": "RHEA:10000", "rhea_id": 10000},
     ]
     selection.extract_reactions()
     selection.extract_matches()
     assert selection.extract_unmatched_ids().select(
-        "GroupId", "InputId"
+        "group_id", "input_id"
     ).to_dicts() == [
-        {"GroupId": "case", "InputId": "RHEA:99999"},
-        {"GroupId": "control", "InputId": "RHEA:99999"},
+        {"group_id": "case", "input_id": "RHEA:99999"},
+        {"group_id": "control", "input_id": "RHEA:99999"},
     ]
     assert input_table_calls == [
         (
@@ -504,7 +504,7 @@ def test_supported_namespaces_resolve_official_mappings(
         .extract_matches()
     )
 
-    assert 10000 in matches["RheaId"].to_list()
+    assert 10000 in matches["rhea_id"].to_list()
 
 
 def test_obsolete_policy_is_explicit(tmp_path: Path) -> None:
@@ -521,5 +521,5 @@ def test_obsolete_policy_is_explicit(tmp_path: Path) -> None:
     )
 
     assert excluded.extract_matches().is_empty()
-    assert excluded.extract_unmatched_ids()["InputId"].to_list() == ["RHEA:10004"]
-    assert included.extract_matches()["RheaId"].to_list() == [10004]
+    assert excluded.extract_unmatched_ids()["input_id"].to_list() == ["RHEA:10004"]
+    assert included.extract_matches()["rhea_id"].to_list() == [10004]

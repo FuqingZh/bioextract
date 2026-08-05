@@ -309,7 +309,7 @@ class RheaDatabase:
             include_obsolete: Include obsolete reaction records when available.
 
         Returns:
-            An immutable grouped query plan with ``GroupId`` lineage.
+            An immutable grouped query plan with ``group_id`` lineage.
 
         Examples:
             Retain group identity while selecting by EC number:
@@ -319,7 +319,7 @@ class RheaDatabase:
             ...     namespace="ec",
             ... )
             >>> selection.extract_matches().columns[:2]  # doctest: +SKIP
-            ['GroupId', 'InputId']
+            ['group_id', 'input_id']
         """
         return create_group_selection(
             self,

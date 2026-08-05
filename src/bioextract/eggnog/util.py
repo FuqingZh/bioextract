@@ -20,34 +20,36 @@ from .constant import (
 
 def read_cog_fun_frame(file_cog_fun: Path | None) -> pl.DataFrame:
     schema = {
-        "CogCategory": pl.String,
-        "CogClass": pl.String,
-        "_Color": pl.String,
-        "CogName": pl.String,
+        "cog_category": pl.String,
+        "cog_class": pl.String,
+        "_color": pl.String,
+        "cog_name": pl.String,
     }
     if file_cog_fun is None:
         return pl.DataFrame(
             schema={
-                "CogCategory": pl.String,
-                "CogClass": pl.String,
-                "CogName": pl.String,
+                "cog_category": pl.String,
+                "cog_class": pl.String,
+                "cog_name": pl.String,
             }
         )
     if file_cog_fun.stat().st_size == 0:
-        return pl.DataFrame(schema=schema).select("CogCategory", "CogClass", "CogName")
+        return pl.DataFrame(schema=schema).select(
+            "cog_category", "cog_class", "cog_name"
+        )
     df = pl.scan_csv(
         file_cog_fun,
         separator="\t",
         has_header=False,
-        new_columns=["CogCategory", "CogClass", "_Color", "CogName"],
+        new_columns=["cog_category", "cog_class", "_color", "cog_name"],
         schema_overrides=schema,
         truncate_ragged_lines=True,
     ).collect()
     return (
-        df.filter(pl.col("CogCategory").str.len_chars() == 1)
-        .select("CogCategory", "CogClass", "CogName")
+        df.filter(pl.col("cog_category").str.len_chars() == 1)
+        .select("cog_category", "cog_class", "cog_name")
         .unique()
-        .sort("CogCategory")
+        .sort("cog_category")
     )
 
 
@@ -62,11 +64,11 @@ def select_mapping_frame(
 ) -> pl.DataFrame:
     validate_namespace(namespace)
     if df_input_ids.height == 0:
-        cols_group = ["GroupId"] if df_group_membership is not None else []
-        cols_out = cols_group + ["InputId", "InputNamespace"] + COLS_MAPPING
+        cols_group = ["group_id"] if df_group_membership is not None else []
+        cols_out = cols_group + ["input_id", "input_namespace"] + COLS_MAPPING
         return pl.DataFrame(schema=dict.fromkeys(cols_out, pl.String))
 
-    input_ids = df_input_ids.get_column("InputId").unique().sort().to_list()
+    input_ids = df_input_ids.get_column("input_id").unique().sort().to_list()
     with open_sqlite_path(file_eggnog_db, dir_tmp=dir_tmp) as file_sqlite:
         df_mapping = read_mapping_frame_from_sqlite(
             file_sqlite,
@@ -94,9 +96,9 @@ def read_mapping_frame_from_sqlite(
             for og_id, og_level in parse_ogs(ogs_text):
                 rows.append(
                     {
-                        "EggnogProteinId": protein_id,
-                        "EggnogOgId": og_id,
-                        "EggnogLevel": og_level,
+                        "name": protein_id,
+                        "og": og_id,
+                        "level": og_level,
                     }
                 )
 
@@ -105,16 +107,12 @@ def read_mapping_frame_from_sqlite(
 
         df_protein_og = pl.DataFrame(
             rows,
-            schema={
-                "EggnogProteinId": pl.String,
-                "EggnogOgId": pl.String,
-                "EggnogLevel": pl.String,
-            },
+            schema={"name": pl.String, "og": pl.String, "level": pl.String},
         ).unique()
 
         og_rows = read_og_rows(
             conn,
-            df_protein_og.select("EggnogOgId", "EggnogLevel").unique().iter_rows(),
+            df_protein_og.select("og", "level").unique().iter_rows(),
         )
 
     if not og_rows:
@@ -123,10 +121,10 @@ def read_mapping_frame_from_sqlite(
     df_og = pl.DataFrame(
         og_rows,
         schema={
-            "EggnogOgId": pl.String,
-            "EggnogLevel": pl.String,
-            "OgDescription": pl.String,
-            "CogCategories": pl.String,
+            "og": pl.String,
+            "level": pl.String,
+            "description": pl.String,
+            "COG_categories": pl.String,
         },
     )
     df_categories = expand_cog_categories(df_og)
@@ -136,10 +134,10 @@ def read_mapping_frame_from_sqlite(
     return (
         df_protein_og.join(
             df_categories,
-            on=["EggnogOgId", "EggnogLevel"],
+            on=["og", "level"],
             how="inner",
         )
-        .join(df_cog_fun, on="CogCategory", how="left")
+        .join(df_cog_fun, on="cog_category", how="left")
         .select(COLS_MAPPING)
         .unique()
         .sort(COLS_MAPPING)
@@ -206,10 +204,10 @@ def format_og_query_rows(
 ) -> list[dict[str, str | None]]:
     return [
         {
-            "EggnogOgId": str(og_id),
-            "EggnogLevel": str(level) if level is not None else None,
-            "OgDescription": str(description) if description is not None else None,
-            "CogCategories": str(categories) if categories is not None else None,
+            "og": str(og_id),
+            "level": str(level) if level is not None else None,
+            "description": str(description) if description is not None else None,
+            "COG_categories": str(categories) if categories is not None else None,
         }
         for og_id, level, description, categories in cursor
     ]
@@ -234,22 +232,24 @@ def parse_ogs(value: str | None) -> list[tuple[str, str | None]]:
 def expand_cog_categories(df_og: pl.DataFrame) -> pl.DataFrame:
     rows: list[dict[str, str | None]] = []
     for row in df_og.iter_rows(named=True):
-        for category in parse_cog_categories(row["CogCategories"]):
+        for category in parse_cog_categories(row["COG_categories"]):
             rows.append(
                 {
-                    "EggnogOgId": row["EggnogOgId"],
-                    "EggnogLevel": row["EggnogLevel"],
-                    "OgDescription": row["OgDescription"],
-                    "CogCategory": category,
+                    "og": row["og"],
+                    "level": row["level"],
+                    "description": row["description"],
+                    "COG_categories": row["COG_categories"],
+                    "cog_category": category,
                 }
             )
     if not rows:
         return pl.DataFrame(
             schema={
-                "EggnogOgId": pl.String,
-                "EggnogLevel": pl.String,
-                "OgDescription": pl.String,
-                "CogCategory": pl.String,
+                "og": pl.String,
+                "level": pl.String,
+                "description": pl.String,
+                "COG_categories": pl.String,
+                "cog_category": pl.String,
             }
         )
     return pl.DataFrame(rows).unique()
@@ -272,17 +272,17 @@ def extract_mapping_frame(
     namespace: EggnogNamespace,
 ) -> pl.DataFrame:
     validate_namespace(namespace)
-    cols_out = ["InputId", "InputNamespace"] + COLS_MAPPING
+    cols_out = ["input_id", "input_namespace"] + COLS_MAPPING
     return (
         df_input_ids.join(
             df_mapping,
-            left_on="InputId",
-            right_on="EggnogProteinId",
+            left_on="input_id",
+            right_on="name",
             how="inner",
         )
         .with_columns(
-            pl.col("InputId").alias("EggnogProteinId"),
-            pl.lit(namespace).alias("InputNamespace"),
+            pl.col("input_id").alias("name"),
+            pl.lit(namespace).alias("input_namespace"),
         )
         .select(cols_out)
         .unique()
@@ -296,18 +296,18 @@ def extract_unmatched_ids_frame(
     *,
     df_group_membership: pl.DataFrame | None,
 ) -> pl.DataFrame:
-    df_mapped_input_ids = df_mapping.select("InputId").unique().sort("InputId")
+    df_mapped_input_ids = df_mapping.select("input_id").unique().sort("input_id")
     df_unmatched = (
-        df_input_ids.join(df_mapped_input_ids, on="InputId", how="anti")
-        .select("InputId")
-        .sort("InputId")
+        df_input_ids.join(df_mapped_input_ids, on="input_id", how="anti")
+        .select("input_id")
+        .sort("input_id")
     )
     if df_group_membership is None:
         return df_unmatched
     return (
-        df_group_membership.join(df_unmatched, on="InputId", how="inner")
-        .select("GroupId", "InputId")
-        .sort("GroupId", "InputId")
+        df_group_membership.join(df_unmatched, on="input_id", how="inner")
+        .select("group_id", "input_id")
+        .sort("group_id", "input_id")
     )
 
 
@@ -317,9 +317,9 @@ def _expand_group_membership(
 ) -> pl.DataFrame:
     if df_group_membership is None:
         return df_mapping
-    cols_out = ["GroupId", *df_mapping.columns]
+    cols_out = ["group_id", *df_mapping.columns]
     return (
-        df_group_membership.join(df_mapping, on="InputId", how="inner")
+        df_group_membership.join(df_mapping, on="input_id", how="inner")
         .select(cols_out)
         .unique()
         .sort(cols_out)

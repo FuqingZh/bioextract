@@ -1,0 +1,107 @@
+# AO And Repository Delivery Norms
+
+Version: v1.0
+Date: 2026-08-04
+Status: current
+
+This document is the repository-specific companion to the calibration AO
+runbook. It defines what a bioextract worker may assume and what must be read
+back before a pull-request or publication handoff. Host-owned AO configuration
+and credentials are not stored in this repository.
+
+## Scope And Ownership
+
+`bioextract` is a local-snapshot library. AO coordinates engineering work; it
+does not download biological releases, publish CephFS data, or discover
+catalogs. The repository remains authoritative for source code, contracts,
+tests, and implementation plans. AO daemon, project, session, identity, and
+worker containment state remain host-owned.
+
+The project configuration must reference the repository `AGENTS.md` as its
+worker standing instructions. It must not enable AO project `autoMerge`, add
+credentials, or make a dashboard or external tracker a prerequisite for local
+implementation.
+
+## Intake And State Readback
+
+For PR-bound implementation, read back:
+
+```console
+ao status --json
+ao doctor --json
+ao project get bioextract --json
+ao session ls -p bioextract --json
+```
+
+If the sandbox disagrees with these results, classify the observation by its
+owner. A sandbox-only path, PID, or read-only failure is `indeterminate`; use
+host-authoritative service and AO health/readiness evidence before changing
+persistent host state. Do not call the repository continuation-proven until a
+real anchored review or CI correction has returned to its owning worker.
+
+When continuation is not proven, new unowned PR work uses the isolated-worktree
+fallback. An existing AO-owned branch, worktree, or PR is preserved until its
+owner is restored or authoritative containment and write-authority revocation
+are proven. The controller never patches, stages, commits, or pushes an
+owner's sibling worktree.
+
+## Worker And Branch Norms
+
+- One worker owns one implementation branch/worktree at a time.
+- Branches use `codex/<scope>` and each PR contains one independently testable
+  contract or resource slice.
+- The owner performs code edits, commits, pushes, CI/review observation, and
+  same-scope mechanical fixes.
+- Retry only bounded, idempotent transient operations; read back unknown
+  external writes before retrying. Stop on head/scope changes, cancellation,
+  permission or authentication failures, or retry-budget exhaustion.
+- Keep dirty worktrees observable. Never force-delete a dirty worktree or claim
+  descendant-process release without an empty OS-owned containment boundary.
+
+## Verification And Handoff
+
+The canonical repository gate is:
+
+```console
+pdm run check
+```
+
+Use focused layer commands while iterating:
+
+```console
+pdm run test-unit
+pdm run test-contract
+pdm run test-integration
+```
+
+Keep shared-host execution bounded with `BIOEXTRACT_TEST_THREADS=1` or `4`.
+External snapshot smoke is opt-in through `pdm run test-smoke` and explicit
+publication paths; it is never a reason to weaken the hermetic gate.
+
+Before handoff, record the exact current head, focused checks, complete gate,
+and any unavailable host-side check. For a low-risk PR, native GitHub
+per-PR auto-merge is considered only after exact-head required CI passes,
+current-head review is clean, and no actionable review threads remain. This
+does not authorize AO project `autoMerge`.
+
+## Publication And Shared-Storage Safety
+
+Formal DuckDB publication builds use staging, integrity validation, connection
+close, and atomic replacement. A code PR does not silently write to CephFS or
+delete a prior release. Any real snapshot build or delivery names its exact
+input subtree and output target; `/cephfs_data` is never recursively scanned.
+
+## Configuration Boundary
+
+The following are repository-owned and reviewable:
+
+- `AGENTS.md`;
+- `docs/README.md`, architecture, testing, and implementation-plan documents;
+- `pyproject.toml` and `.github/workflows/` gates.
+
+The following are host-owned and must be changed only through AO or the host
+runbook:
+
+- AO daemon, project database, session records, and worker runtime;
+- credentials, `CODEX_HOME`, service units, and containment;
+- GitHub permissions, repository settings, and external publication mounts.

@@ -105,10 +105,10 @@ class _ReopenedGoTidyDataset(TidyDataset):
         *,
         table_names: Mapping[str, str] | None = None,
         if_exists: str = "fail",
-        preserve_source_headers: Collection[str] = (),
+        source_columns: Mapping[str, Collection[str]] | None = None,
         include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
-        del path, table_names, if_exists, preserve_source_headers, include_source_hashes
+        del path, table_names, if_exists, source_columns, include_source_hashes
         raise CapabilityError(
             "write_duckdb() requires a GO OBO source handle, not a reopened dataset"
         )

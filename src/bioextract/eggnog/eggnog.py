@@ -43,8 +43,8 @@ class EggNOGDatabase:
     """Access one local eggNOG mapper resource snapshot.
 
     Construction validates paths without expanding the SQLite mapping. The
-    optional COG function table enriches `CogClass` and
-    `CogName`; those columns remain null when the table is omitted. Materialized
+    optional COG function table enriches `cog_class` and
+    `cog_name`; those columns remain null when the table is omitted. Materialized
     selected mapping frames are cached on their selection handles.
 
     Examples:
@@ -55,7 +55,7 @@ class EggNOGDatabase:
         ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
         ... )
         >>> db.select_ids(["9606.ENSP1"]).extract_mapping().select(
-        ...     "EggnogProteinId", "CogCategory", "CogName"
+        ...     "name", "cog_category", "cog_name"
         ... ).head(1).rows()
         [('9606.ENSP1', 'E', 'Amino acid transport and metabolism')]
     """
@@ -95,7 +95,7 @@ class EggNOGDatabase:
             ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
             ... )
             >>> db.select_ids(["9606.ENSP1"]).extract_mapping().select(
-            ...     "CogCategory", "CogName"
+            ...     "cog_category", "cog_name"
             ... ).head(1).rows()
             [('E', 'Amino acid transport and metabolism')]
         """
@@ -140,8 +140,8 @@ class EggNOGDatabase:
             ids: eggNOG protein IDs. Empty values are discarded and duplicate
                 normalized IDs collapse to one input row.
         Returns:
-            A selection handle whose outputs include `InputId` and
-            `InputNamespace` provenance columns.
+            A selection handle whose outputs include `input_id` and
+            `input_namespace` provenance columns.
 
         Examples:
             Return annotations only for the selected protein ID:
@@ -151,7 +151,7 @@ class EggNOGDatabase:
             ... )
             >>> selection = db.select_ids(["9606.ENSP1"])
             >>> selection.extract_mapping().select(
-            ...     "InputId", "EggnogOgId", "CogCategory"
+            ...     "input_id", "og", "cog_category"
             ... ).rows()
             [('9606.ENSP1', 'OG0001', 'E'), ('9606.ENSP1', 'OG0001', 'G'), ('9606.ENSP1', 'OG0002', 'S')]
         """
@@ -174,7 +174,7 @@ class EggNOGDatabase:
                 protein IDs.
         Returns:
             A selection handle whose mapping and unmapped outputs retain
-            `GroupId`.
+            `group_id`.
 
         Raises:
             ValueError: If group IDs are invalid.
@@ -189,7 +189,7 @@ class EggNOGDatabase:
             ...     {"up": ["9606.ENSP1"], "down": ["9606.MISSING"]},
             ... )
             >>> selection.extract_mapping().select(
-            ...     "GroupId", "CogCategory"
+            ...     "group_id", "cog_category"
             ... ).rows()
             [('up', 'E'), ('up', 'G'), ('up', 'S')]
         """
@@ -209,7 +209,7 @@ class EggNOGDatabase:
         """Read and cache the optional COG function lookup.
 
         Returns:
-            A frame keyed by `CogCategory`. If no lookup file was configured,
+            A frame keyed by `cog_category`. If no lookup file was configured,
             the frame is empty but retains the expected lookup schema.
 
         Examples:
@@ -220,7 +220,7 @@ class EggNOGDatabase:
             ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
             ... )
             >>> db.read_cog_fun().select(
-            ...     "CogCategory", "CogName"
+            ...     "cog_category", "cog_name"
             ... ).head(1).rows()
             [('E', 'Amino acid transport and metabolism')]
         """
@@ -244,7 +244,7 @@ class EggnogSelection:
         ...     "fixtures/eggnog/eggnog.db"
         ... )
         >>> selection = db.select_ids(["9606.ENSP1"])
-        >>> selection.extract_mapping().get_column("CogCategory").to_list()
+        >>> selection.extract_mapping().get_column("cog_category").to_list()
         ['E', 'G', 'S']
     """
 
@@ -261,7 +261,7 @@ class EggnogSelection:
 
     @property
     def is_grouped(self) -> bool:
-        """Report whether this selection carries `GroupId` through outputs.
+        """Report whether this selection carries `group_id` through outputs.
 
         Examples:
             >>> db = EggNOGDatabase.from_sqlite(
@@ -276,8 +276,8 @@ class EggnogSelection:
         """Extract mapping rows for the normalized selection.
 
         Returns:
-            A frame prefixed by `InputId` and `InputNamespace`; grouped selections
-            additionally begin with `GroupId`. Many-to-many annotations remain
+            A frame prefixed by `input_id` and `input_namespace`; grouped selections
+            additionally begin with `group_id`. Many-to-many annotations remain
             expanded.
 
         Examples:
@@ -288,7 +288,7 @@ class EggnogSelection:
             ... )
             >>> selection = db.select_ids(["9606.ENSP1"])
             >>> selection.extract_mapping().select(
-            ...     "InputId", "CogCategory"
+            ...     "input_id", "cog_category"
             ... ).rows()
             [('9606.ENSP1', 'E'), ('9606.ENSP1', 'G'), ('9606.ENSP1', 'S')]
         """
@@ -307,7 +307,7 @@ class EggnogSelection:
         """Extract normalized input IDs with no eggNOG mapping row.
 
         Returns:
-            `InputId` for a single selection, or `GroupId, InputId` for a
+            `input_id` for a single selection, or `group_id, input_id` for a
             grouped selection.
 
         Examples:
@@ -318,7 +318,7 @@ class EggnogSelection:
             ... )
             >>> selection = db.select_ids(["9606.MISSING"])
             >>> selection.extract_unmatched_ids().to_dicts()
-            [{'InputId': '9606.MISSING'}]
+            [{'input_id': '9606.MISSING'}]
         """
         if self._df_unmapped is None:
             self._df_unmapped = extract_unmatched_ids_frame(

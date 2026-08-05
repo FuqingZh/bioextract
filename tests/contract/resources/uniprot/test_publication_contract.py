@@ -67,7 +67,7 @@ def _write_idmapping(path: Path) -> Path:
 
 def test_idmapping_schema_and_path_validation(tmp_path: Path) -> None:
     bad = tmp_path / "bad.parquet"
-    pl.DataFrame({"UniProtId": ["P12345"]}).write_parquet(bad)
+    pl.DataFrame({"uniprot_id": ["P12345"]}).write_parquet(bad)
     with pytest.raises(ValueError, match="schema mismatch"):
         UniProtDatabase.from_idmapping(bad).scan_mapping()
     with pytest.raises(FileNotFoundError):
@@ -105,16 +105,16 @@ def test_idmapping_parquet_schema_requires_all_string_columns(
         UniProtDatabase.from_idmapping(raw)
         .scan_mapping()
         .collect()
-        .with_columns(pl.col("GeneId").cast(pl.Int64))
+        .with_columns(pl.col("gene_id").cast(pl.Int64))
     )
     if container == "parquet":
         source = tmp_path / "wrong-type.parquet"
         frame.write_parquet(source)
     else:
         source = tmp_path / "wrong-type-hive"
-        partition = source / "TaxId=9606"
+        partition = source / "tax_id=9606"
         partition.mkdir(parents=True)
-        frame.drop("TaxId").write_parquet(partition / "part.parquet")
+        frame.drop("tax_id").write_parquet(partition / "part.parquet")
 
     with pytest.raises(ValueError, match="schema mismatch"):
         UniProtDatabase.from_idmapping(source).scan_mapping()
@@ -252,7 +252,7 @@ def test_idmapping_reopen_rejects_fabricated_column_provenance(
     with duckdb.connect(str(path)) as connection:
         connection.execute(
             "INSERT INTO _bioextract.column_mapping VALUES "
-            "('mapping', 'UniProtId', 'fabricated', 'forged')"
+            "('mapping', 'uniprot_id', 'fabricated', 'forged')"
         )
     with pytest.raises(IntegrityError, match="column provenance"):
         UniProtDatabase.from_duckdb(path)

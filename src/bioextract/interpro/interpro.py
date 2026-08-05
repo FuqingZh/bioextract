@@ -66,7 +66,7 @@ class InterProDatabase:
     `protein2ipr.dat.gz` supplies the canonical mapping. Optional InterPro XML
     enriches mapping rows with entry type and member-database metadata; without
     XML those fields remain null. The compact Pfam tidy configuration validates
-    exact `InterProId + PfamId` relationships against the supplied XML.
+    exact `interpro_id + pfam_id` relationships against the supplied XML.
 
     Examples:
         Read the first domain annotation from a versioned snapshot:
@@ -76,7 +76,7 @@ class InterProDatabase:
         ...     interpro_xml="fixtures/interpro/108.0/raw/interpro.xml.gz",
         ... )
         >>> db.extract_mapping().select(
-        ...     "UniProtId", "InterProId", "MemberDb"
+        ...     "uniprot_id", "interpro_id", "member_db"
         ... ).head(1).rows()
         [('P12345', 'IPR000001', 'PFAM')]
     """
@@ -126,7 +126,7 @@ class InterProDatabase:
             ...     interpro_xml="fixtures/interpro/108.0/raw/interpro.xml.gz",
             ... )
             >>> db.extract_mapping().select(
-            ...     "InterProId", "InterProType", "MemberDb"
+            ...     "interpro_id", "interpro_type", "member_db"
             ... ).head(1).rows()
             [('IPR000001', 'Domain', 'PFAM')]
         """
@@ -210,8 +210,8 @@ class InterProDatabase:
             ids: UniProt accessions. Empty values are discarded and duplicate
                 normalized IDs collapse to one input row.
         Returns:
-            A selection handle whose mapping output includes `InputId` and
-            `InputNamespace` provenance columns.
+            A selection handle whose mapping output includes `input_id` and
+            `input_namespace` provenance columns.
 
         Examples:
             Normalize a UniProt entry label before selecting its mapping rows:
@@ -221,7 +221,7 @@ class InterProDatabase:
             ... )
             >>> selection = db.select_ids(["sp|P12345|TEST_HUMAN"])
             >>> selection.extract_mapping().select(
-            ...     "InputId", "InterProId", "MemberDbId"
+            ...     "input_id", "interpro_id", "member_db_id"
             ... ).rows()
             [('P12345', 'IPR000001', 'PF00051'), ('P12345', 'IPR000001', 'SM00130')]
         """
@@ -244,7 +244,7 @@ class InterProDatabase:
                 accessions.
         Returns:
             A selection handle whose mapping and unmapped outputs retain
-            `GroupId`.
+            `group_id`.
 
         Raises:
             ValueError: If group IDs are invalid.
@@ -259,8 +259,8 @@ class InterProDatabase:
             ...     {"up": ["P12345"], "down": ["Q9Y243"]},
             ... )
             >>> selection.extract_mapping().select(
-            ...     "GroupId", "UniProtId"
-            ... ).unique().sort("GroupId").rows()
+            ...     "group_id", "uniprot_id"
+            ... ).unique().sort("group_id").rows()
             [('down', 'Q9Y243'), ('up', 'P12345')]
         """
         grp_in_frames = create_group_input_frames(
@@ -280,7 +280,7 @@ class InterProDatabase:
 
         Returns:
             A cached frame that preserves member-database rows and positional
-            coordinates. `InterProType` and `MemberDb` remain null when no XML
+            coordinates. `interpro_type` and `member_db` remain null when no XML
             source was configured.
 
         Examples:
@@ -290,7 +290,7 @@ class InterProDatabase:
             ...     protein_to_interpro="fixtures/interpro/108.0/raw/protein2ipr.dat.gz"
             ... )
             >>> db.extract_mapping().select(
-            ...     "UniProtId", "MemberDbId", "Start", "End"
+            ...     "uniprot_id", "member_db_id", "start", "end"
             ... ).head(2).rows()
             [('P12345', 'PF00051', 10, 80), ('P12345', 'SM00130', 12, 76)]
         """
@@ -300,9 +300,6 @@ class InterProDatabase:
                     self._df_mapping = (
                         pl.read_database(  # pyright: ignore[reportUnknownMemberType]  # Polars-DuckDB boundary
                             "SELECT * FROM mapping", connection
-                        )
-                        .rename(
-                            {name: source for source, name in _MAPPING_COLUMNS.items()}
                         )
                         .unique()
                         .sort(COLS_MAPPING)
@@ -545,7 +542,7 @@ class InterProSelection:
         ...     protein_to_interpro="fixtures/interpro/108.0/raw/protein2ipr.dat.gz"
         ... )
         >>> selection = db.select_ids(["P12345"])
-        >>> selection.extract_mapping().get_column("InterProId").unique().to_list()
+        >>> selection.extract_mapping().get_column("interpro_id").unique().to_list()
         ['IPR000001']
     """
 
@@ -559,7 +556,7 @@ class InterProSelection:
 
     @property
     def is_grouped(self) -> bool:
-        """Report whether this selection carries `GroupId` through outputs.
+        """Report whether this selection carries `group_id` through outputs.
 
         Examples:
             >>> db = InterProDatabase.from_mapping_files(
@@ -576,8 +573,8 @@ class InterProSelection:
         """Extract mapping rows for the normalized selection.
 
         Returns:
-            A frame prefixed by `InputId` and `InputNamespace`; grouped selections
-            additionally begin with `GroupId`. Member and positional rows stay
+            A frame prefixed by `input_id` and `input_namespace`; grouped selections
+            additionally begin with `group_id`. Member and positional rows stay
             expanded.
 
         Examples:
@@ -588,7 +585,7 @@ class InterProSelection:
             ... )
             >>> selection = db.select_ids(["P12345"])
             >>> selection.extract_mapping().select(
-            ...     "InputId", "MemberDbId"
+            ...     "input_id", "member_db_id"
             ... ).rows()
             [('P12345', 'PF00051'), ('P12345', 'SM00130')]
         """
@@ -599,7 +596,7 @@ class InterProSelection:
                     with self.dataset.connect() as connection:
                         connection.execute(
                             "CREATE TEMP TABLE _interpro_input_id("
-                            "InputId VARCHAR PRIMARY KEY)"
+                            "input_id VARCHAR PRIMARY KEY)"
                         )
                         connection.executemany(
                             "INSERT INTO _interpro_input_id VALUES (?)",
@@ -608,7 +605,7 @@ class InterProSelection:
                         rows = connection.execute(
                             "SELECT mapping.* FROM mapping INNER JOIN "
                             "_interpro_input_id AS input "
-                            'ON mapping.uniprot_id=input."InputId"'
+                            'ON mapping.uniprot_id=input."input_id"'
                         ).fetchall()
                     selected_mapping = (
                         (
@@ -625,10 +622,10 @@ class InterProSelection:
                 if self._df_group_membership is None:
                     self._df_mapping = selected
                 else:
-                    columns = ["GroupId", *selected.columns]
+                    columns = ["group_id", *selected.columns]
                     self._df_mapping = (
                         self._df_group_membership.join(
-                            selected, on="InputId", how="inner"
+                            selected, on="input_id", how="inner"
                         )
                         .select(columns)
                         .unique()
@@ -651,7 +648,7 @@ class InterProSelection:
         """Extract normalized input IDs with no InterPro mapping row.
 
         Returns:
-            `InputId` for a single selection, or `GroupId, InputId` for a
+            `input_id` for a single selection, or `group_id, input_id` for a
             grouped selection.
 
         Examples:
@@ -662,7 +659,7 @@ class InterProSelection:
             ... )
             >>> selection = db.select_ids(["MISSING"])
             >>> selection.extract_unmatched_ids().to_dicts()
-            [{'InputId': 'MISSING'}]
+            [{'input_id': 'MISSING'}]
         """
         if self._df_unmapped is None:
             self._df_unmapped = extract_unmatched_ids_frame(
@@ -684,22 +681,12 @@ def _validate_file(
     return file_path
 
 
-_MAPPING_COLUMNS = {
-    "UniProtId": "uniprot_id",
-    "InterProId": "interpro_id",
-    "InterProName": "interpro_name",
-    "InterProType": "interpro_type",
-    "MemberDb": "member_db",
-    "MemberDbId": "member_db_id",
-    "Start": "start",
-    "End": "end",
-}
 _TABLE_CONTRACTS = {
     "mapping": (
         "canonical",
         [
             (name, "BIGINT" if name in {"start", "end"} else "VARCHAR")
-            for name in _MAPPING_COLUMNS.values()
+            for name in SCHEMA_MAPPING
         ],
     ),
     "protein_term": (
@@ -931,28 +918,11 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
                 raise ValueError(
                     "InterPro publication has duplicate column-provenance keys"
                 )
-            expected_mappings = {
-                (table, source, output, "generated_snake_case")
-                for table in expected_tables
-                for source, output in _source_output_columns(table)
-                if source != output
-            }
-            if observed_mappings != expected_mappings:
+            if observed_mappings:
                 raise ValueError("InterPro column provenance inventory is unsupported")
             return capabilities, release_version
     except duckdb.Error as error:
         raise ValueError(f"Cannot open InterPro DuckDB publication: {path}") from error
-
-
-def _source_output_columns(table: str) -> list[tuple[str, str]]:
-    sources = {
-        "mapping": list(_MAPPING_COLUMNS),
-        "protein_term": ["UniProtId", "PfamId"],
-        "term": ["PfamId", "PfamName"],
-        "term_xref": ["PfamId", "InterProId", "InterProName", "InterProType"],
-    }[table]
-    outputs = [name for name, _type in _TABLE_CONTRACTS[table][1]]
-    return list(zip(sources, outputs, strict=True))
 
 
 def _file_identity(path: Path) -> tuple[int, int, int, int, int]:

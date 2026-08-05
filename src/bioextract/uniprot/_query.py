@@ -44,7 +44,7 @@ class UniProtSelection:
         ...     ["P04637"], namespace="uniprot", taxon_ids=["9606"]
         ... )
         >>> selection.extract_accessions().select(  # doctest: +SKIP
-        ...     "UniProtId", "Accession", "IsPrimaryAccession"
+        ...     "primary_accession", "accession", "is_primary"
         ... )
         shape: (...)
     """
@@ -65,18 +65,18 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_proteins().select(  # doctest: +SKIP
-            ...     "UniProtId", "EntryName", "TaxonId"
+            ...     "primary_accession", "entry_name", "taxon_id"
             ... ).columns
-            ['UniProtId', 'EntryName', 'TaxonId']
+            ['primary_accession', 'entry_name', 'taxon_id']
         """
         return self._extract(
             "protein",
-            "p.entry_name AS EntryName, p.is_reviewed AS IsReviewed, "
-            "p.taxon_id AS TaxonId, p.protein_existence AS ProteinExistence, "
-            "p.sequence_length AS SequenceLength, "
-            "p.molecular_weight AS MolecularWeight, "
-            "p.sequence_version AS SequenceVersion, "
-            "p.entry_version AS EntryVersion",
+            "p.entry_name AS entry_name, p.is_reviewed AS is_reviewed, "
+            "p.taxon_id AS taxon_id, p.protein_existence AS protein_existence, "
+            "p.sequence_length AS sequence_length, "
+            "p.molecular_weight AS molecular_weight, "
+            "p.sequence_version AS sequence_version, "
+            "p.entry_version AS entry_version",
             "JOIN protein p USING (primary_accession)",
             order_by="p.primary_accession",
         )
@@ -86,14 +86,14 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_accessions().select(  # doctest: +SKIP
-            ...     "Accession", "IsPrimaryAccession"
+            ...     "accession", "is_primary"
             ... ).columns
-            ['Accession', 'IsPrimaryAccession']
+            ['accession', 'is_primary']
         """
         return self._extract(
             "protein_accession",
-            "r.accession AS Accession, r.accession_order AS AccessionOrder, "
-            "r.is_primary AS IsPrimaryAccession",
+            "r.accession AS accession, r.accession_order AS accession_order, "
+            "r.is_primary AS is_primary",
             "JOIN protein_accession r USING (primary_accession)",
             order_by="r.accession_order, r.accession",
         )
@@ -103,13 +103,13 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_protein_names().select(  # doctest: +SKIP
-            ...     "NameType", "ProteinName"
+            ...     "name_type", "name"
             ... ).columns
-            ['NameType', 'ProteinName']
+            ['name_type', 'name']
         """
         return self._extract(
             "protein_name",
-            "r.name_type AS NameType, r.name AS ProteinName, r.name_order AS NameOrder",
+            "r.name_type AS name_type, r.name AS name, r.name_order AS name_order",
             "JOIN protein_name r USING (primary_accession)",
             order_by="r.name_order, r.name",
         )
@@ -119,13 +119,13 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_gene_names().select(  # doctest: +SKIP
-            ...     "NameType", "GeneName"
+            ...     "name_type", "name"
             ... ).columns
-            ['NameType', 'GeneName']
+            ['name_type', 'name']
         """
         return self._extract(
             "gene_name",
-            "r.name_type AS NameType, r.name AS GeneName, r.name_order AS NameOrder",
+            "r.name_type AS name_type, r.name AS name, r.name_order AS name_order",
             "JOIN gene_name r USING (primary_accession)",
             order_by="r.name_order, r.name",
         )
@@ -134,12 +134,12 @@ class UniProtSelection:
         """Return distinct EC annotations ordered by EC number.
 
         Examples:
-            >>> selection.extract_ec_numbers().select("EcNumber").columns  # doctest: +SKIP
-            ['EcNumber']
+            >>> selection.extract_ec_numbers().select("ec_number").columns  # doctest: +SKIP
+            ['ec_number']
         """
         return self._extract(
             "protein_ec_number",
-            "r.ec_number AS ECNumber",
+            "r.ec_number AS ec_number",
             "JOIN protein_ec_number r USING (primary_accession)",
             order_by="r.ec_number",
         )
@@ -149,14 +149,14 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_go_annotations().select(  # doctest: +SKIP
-            ...     "GOId", "Aspect", "EvidenceCode"
+            ...     "go_id", "aspect", "evidence_code"
             ... ).columns
-            ['GOId', 'Aspect', 'EvidenceCode']
+            ['go_id', 'aspect', 'evidence_code']
         """
         return self._extract(
             "protein_go_annotation",
-            "r.go_id AS GOId, r.aspect AS Aspect, r.term_name AS TermName, "
-            "r.evidence_code AS EvidenceCode, r.evidence_source AS EvidenceSource",
+            "r.go_id AS go_id, r.aspect AS aspect, r.term_name AS term_name, "
+            "r.evidence_code AS evidence_code, r.evidence_source AS evidence_source",
             "JOIN protein_go_annotation r USING (primary_accession)",
             order_by="r.go_id, r.aspect",
         )
@@ -168,9 +168,9 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_cross_references(["PDB"]).select(  # doctest: +SKIP
-            ...     "Database", "ExternalId"
+            ...     "database", "external_id"
             ... ).columns
-            ['Database', 'ExternalId']
+            ['database', 'external_id']
         """
         values = tuple(dict.fromkeys(databases or ()))
         condition = ""
@@ -180,8 +180,8 @@ class UniProtSelection:
             parameters.extend(values)
         return self._extract(
             "protein_cross_reference",
-            "r.database AS Database, r.external_id AS ExternalId, "
-            "r.properties AS Properties, r.isoform_id AS IsoformId",
+            "r.database AS database, r.external_id AS external_id, "
+            "r.properties AS properties, r.isoform_id AS isoform_id",
             "JOIN protein_cross_reference r USING (primary_accession)",
             condition=condition,
             parameters=parameters,
@@ -195,9 +195,9 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_comments(["FUNCTION"]).select(  # doctest: +SKIP
-            ...     "CommentType", "CommentText"
+            ...     "comment_type", "comment_text"
             ... ).columns
-            ['CommentType', 'CommentText']
+            ['comment_type', 'comment_text']
         """
         values = tuple(dict.fromkeys(comment_types or ()))
         condition = ""
@@ -207,8 +207,8 @@ class UniProtSelection:
             parameters.extend(values)
         return self._extract(
             "protein_comment",
-            "r.comment_id AS CommentId, r.comment_type AS CommentType, "
-            "r.comment_text AS CommentText",
+            "r.comment_id AS comment_id, r.comment_type AS comment_type, "
+            "r.comment_text AS comment_text",
             "JOIN protein_comment r USING (primary_accession)",
             condition=condition,
             parameters=parameters,
@@ -220,13 +220,13 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_subcellular_locations().select(  # doctest: +SKIP
-            ...     "SubcellularLocation", "SubcellularLocationNote"
+            ...     "location", "note"
             ... ).columns
-            ['SubcellularLocation', 'SubcellularLocationNote']
+            ['location', 'note']
         """
         return self._extract(
             "protein_subcellular_location",
-            "r.location AS SubcellularLocation, r.note AS SubcellularLocationNote",
+            "r.location AS location, r.note AS note",
             "JOIN protein_subcellular_location r USING (primary_accession)",
             order_by="r.comment_id, r.location",
         )
@@ -236,13 +236,13 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_keywords().select(  # doctest: +SKIP
-            ...     "Keyword", "KeywordOrder"
+            ...     "keyword", "keyword_order"
             ... ).columns
-            ['Keyword', 'KeywordOrder']
+            ['keyword', 'keyword_order']
         """
         return self._extract(
             "protein_keyword",
-            "r.keyword AS Keyword, r.keyword_order AS KeywordOrder",
+            "r.keyword AS keyword, r.keyword_order AS keyword_order",
             "JOIN protein_keyword r USING (primary_accession)",
             order_by="r.keyword_order, r.keyword",
         )
@@ -252,9 +252,9 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_sequences("all").select(  # doctest: +SKIP
-            ...     "SequenceId", "SequenceType", "SHA256"
+            ...     "sequence_id", "sequence_type", "sha256"
             ... ).columns
-            ['SequenceId', 'SequenceType', 'SHA256']
+            ['sequence_id', 'sequence_type', 'sha256']
         """
         if sequence_type not in {"canonical", "isoform", "all"}:
             raise ValueError("sequence_type must be canonical, isoform, or all")
@@ -262,9 +262,9 @@ class UniProtSelection:
         parameters: list[object] = [] if sequence_type == "all" else [sequence_type]
         return self._extract(
             "protein_sequence",
-            "r.sequence_id AS SequenceId, r.sequence_type AS SequenceType, "
-            "r.sequence AS Sequence, r.length AS Length, r.crc64 AS CRC64, "
-            "r.sha256 AS SHA256",
+            "r.sequence_id AS sequence_id, r.sequence_type AS sequence_type, "
+            "r.sequence AS sequence, r.length AS length, r.crc64 AS crc64, "
+            "r.sha256 AS sha256",
             "JOIN protein_sequence r USING (primary_accession)",
             condition=condition,
             parameters=parameters,
@@ -278,15 +278,15 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_isoforms().select(  # doctest: +SKIP
-            ...     "IsoformId", "SequenceStatus", "SequenceId"
+            ...     "isoform_id", "sequence_status", "sequence_id"
             ... ).columns
-            ['IsoformId', 'SequenceStatus', 'SequenceId']
+            ['isoform_id', 'sequence_status', 'sequence_id']
         """
         return self._extract(
             "protein_isoform",
-            "r.isoform_id AS IsoformId, r.name AS IsoformName, "
-            "r.isoform_order AS IsoformOrder, "
-            "r.sequence_status AS SequenceStatus, r.sequence_id AS SequenceId",
+            "r.isoform_id AS isoform_id, r.name AS name, "
+            "r.isoform_order AS isoform_order, "
+            "r.sequence_status AS sequence_status, r.sequence_id AS sequence_id",
             "JOIN protein_isoform r USING (primary_accession)",
             order_by="r.isoform_order, r.isoform_id",
         )
@@ -296,14 +296,14 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_isoform_identifiers().select(  # doctest: +SKIP
-            ...     "IsoformId", "Identifier", "IsMain"
+            ...     "isoform_id", "identifier", "is_main"
             ... ).columns
-            ['IsoformId', 'Identifier', 'IsMain']
+            ['isoform_id', 'identifier', 'is_main']
         """
         return self._extract(
             "protein_isoform_identifier",
-            "r.isoform_id AS IsoformId, r.identifier AS Identifier, "
-            "r.identifier_order AS IdentifierOrder, r.is_main AS IsMain",
+            "r.isoform_id AS isoform_id, r.identifier AS identifier, "
+            "r.identifier_order AS identifier_order, r.is_main AS is_main",
             "JOIN protein_isoform_identifier r USING (primary_accession)",
             order_by="r.isoform_id, r.identifier_order",
         )
@@ -313,14 +313,14 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_sequence_variations().select(  # doctest: +SKIP
-            ...     "VariationId", "StartPosition", "EndPosition"
+            ...     "variation_id", "start_position", "end_position"
             ... ).columns
-            ['VariationId', 'StartPosition', 'EndPosition']
+            ['variation_id', 'start_position', 'end_position']
         """
         return self._extract(
             "protein_sequence_variation",
-            "r.variation_id AS VariationId, r.start_position AS StartPosition, "
-            "r.end_position AS EndPosition, r.note AS Note",
+            "r.variation_id AS variation_id, r.start_position AS start_position, "
+            "r.end_position AS end_position, r.note AS note",
             "JOIN protein_sequence_variation r USING (primary_accession)",
             order_by="r.start_position, r.end_position, r.variation_id",
         )
@@ -330,14 +330,14 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_isoform_variations().select(  # doctest: +SKIP
-            ...     "IsoformId", "VariationId", "VariationOrder"
+            ...     "isoform_id", "variation_id", "variation_order"
             ... ).columns
-            ['IsoformId', 'VariationId', 'VariationOrder']
+            ['isoform_id', 'variation_id', 'variation_order']
         """
         return self._extract(
             "protein_isoform_variation",
-            "r.isoform_id AS IsoformId, r.variation_id AS VariationId, "
-            "r.variation_order AS VariationOrder",
+            "r.isoform_id AS isoform_id, r.variation_id AS variation_id, "
+            "r.variation_order AS variation_order",
             "JOIN protein_isoform_variation r USING (primary_accession)",
             order_by="r.isoform_id, r.variation_order, r.variation_id",
         )
@@ -347,20 +347,20 @@ class UniProtSelection:
 
         Examples:
             >>> selection.extract_unmatched_ids().select(  # doctest: +SKIP
-            ...     "InputId", "InputNamespace", "Reason"
+            ...     "input_id", "input_namespace", "reason"
             ... ).columns
-            ['InputId', 'InputNamespace', 'Reason']
+            ['input_id', 'input_namespace', 'reason']
         """
         frame = self._identifier_matches()
         matched: set[str] = (
-            set(frame["InputId"].cast(pl.String).to_list()) if frame.height else set()
+            set(frame["input_id"].cast(pl.String).to_list()) if frame.height else set()
         )
         rows = [
             {
-                "GroupId": group,
-                "InputId": input_id,
-                "InputNamespace": self.namespace,
-                "Reason": "not_found",
+                "group_id": group,
+                "input_id": input_id,
+                "input_namespace": self.namespace,
+                "reason": "not_found",
             }
             for group, input_id in self.group_membership
             if input_id not in matched
@@ -368,13 +368,13 @@ class UniProtSelection:
         frame = pl.DataFrame(
             rows,
             schema={
-                "GroupId": pl.String,
-                "InputId": pl.String,
-                "InputNamespace": pl.String,
-                "Reason": pl.String,
+                "group_id": pl.String,
+                "input_id": pl.String,
+                "input_namespace": pl.String,
+                "reason": pl.String,
             },
         )
-        return frame if self._is_grouped else frame.drop("GroupId")
+        return frame if self._is_grouped else frame.drop("group_id")
 
     def _extract(
         self,
@@ -391,7 +391,7 @@ class UniProtSelection:
         with self.database.connect() as connection:
             connection.execute(
                 "CREATE TEMP TABLE _selection("
-                "GroupId VARCHAR, InputId VARCHAR, InputNamespace VARCHAR, "
+                "group_id VARCHAR, input_id VARCHAR, input_namespace VARCHAR, "
                 "primary_accession VARCHAR)"
             )
             if matches.height:
@@ -399,36 +399,36 @@ class UniProtSelection:
                     "INSERT INTO _selection VALUES (?, ?, ?, ?)", matches.rows()
                 )
             cursor = connection.execute(
-                "SELECT DISTINCT s.GroupId, s.InputId, s.InputNamespace, "
-                "s.primary_accession AS UniProtId, "
+                "SELECT DISTINCT s.group_id, s.input_id, s.input_namespace, "
+                "s.primary_accession AS primary_accession, "
                 f"{columns} FROM _selection s {join}{condition} "
-                "ORDER BY s.GroupId, s.InputId, s.primary_accession, "
+                "ORDER BY s.group_id, s.input_id, s.primary_accession, "
                 f"{order_by}",
                 parameters or [],
             )
             frame = _cursor_frame(cursor)
-        return frame if self._is_grouped else frame.drop("GroupId")
+        return frame if self._is_grouped else frame.drop("group_id")
 
     def _matches(self) -> pl.DataFrame:
         matches = self._identifier_matches()
         membership = pl.DataFrame(
             self.group_membership,
-            schema={"GroupId": pl.String, "InputId": pl.String},
+            schema={"group_id": pl.String, "input_id": pl.String},
             orient="row",
         )
         if membership.is_empty() or matches.is_empty():
             return pl.DataFrame(
                 schema={
-                    "GroupId": pl.String,
-                    "InputId": pl.String,
-                    "InputNamespace": pl.String,
+                    "group_id": pl.String,
+                    "input_id": pl.String,
+                    "input_namespace": pl.String,
                     "primary_accession": pl.String,
                 }
             )
         return (
-            membership.join(matches, on="InputId", how="inner")
-            .select("GroupId", "InputId", "InputNamespace", "primary_accession")
-            .sort("GroupId", "InputId", "primary_accession")
+            membership.join(matches, on="input_id", how="inner")
+            .select("group_id", "input_id", "input_namespace", "primary_accession")
+            .sort("group_id", "input_id", "primary_accession")
         )
 
     def _identifier_matches(self) -> pl.DataFrame:
@@ -441,11 +441,11 @@ class UniProtSelection:
 
     def _query_identifier_matches(self) -> pl.DataFrame:
         inputs = pl.DataFrame(
-            {"InputId": self.input_ids},
-            schema={"InputId": pl.String},
+            {"input_id": self.input_ids},
+            schema={"input_id": pl.String},
         )
         with self.database.connect() as connection:
-            connection.execute("CREATE TEMP TABLE _inputs(InputId VARCHAR)")
+            connection.execute("CREATE TEMP TABLE _inputs(input_id VARCHAR)")
             if inputs.height:
                 connection.executemany("INSERT INTO _inputs VALUES (?)", inputs.rows())
             taxon_filter = ""
@@ -457,14 +457,14 @@ class UniProtSelection:
                 parameters.extend(self.taxon_ids)
             cursor = connection.execute(
                 f"""
-                SELECT DISTINCT i.InputId, ? AS InputNamespace,
+                SELECT DISTINCT i.input_id, ? AS input_namespace,
                        p.primary_accession
                 FROM _inputs i
                 JOIN protein_identifier p
-                  ON p.identifier = i.InputId AND p.namespace = ?
+                  ON p.identifier = i.input_id AND p.namespace = ?
                 JOIN protein pr USING (primary_accession)
                 {taxon_filter}
-                ORDER BY i.InputId, p.primary_accession
+                ORDER BY i.input_id, p.primary_accession
                 """,
                 parameters,
             )

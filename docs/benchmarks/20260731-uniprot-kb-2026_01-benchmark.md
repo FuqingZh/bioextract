@@ -10,10 +10,13 @@ benchmark remains pending.
 
 ## Artifact
 
-The reviewed UniProtKB/Swiss-Prot 2026_01 snapshot was published to:
+The reviewed pre-convergence UniProtKB/Swiss-Prot 2026_01 snapshot was
+originally published to the path below. That legacy file was retired during
+the explicit publication cleanup; the current metadata-v1 publication is at
+`.../tidy/data.duckdb`.
 
 ```text
-/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/uniprot/kb/2026_01/tidy/uniprot.duckdb
+/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/uniprot/kb/2026_01/tidy/uniprot.duckdb (retired)
 ```
 
 The artifact was built from `bioextract` main commit

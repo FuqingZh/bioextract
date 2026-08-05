@@ -98,22 +98,22 @@ def _extract_edges_repeated_single_queries(
             db.select_ids(input_ids)
             .with_min_combined_score(thr_score_min)
             .extract_edges()
-            .with_columns(pl.lit(group_id).alias("GroupId"))
-            .select(["GroupId", "StringIdA", "StringIdB", "Score"])
+            .with_columns(pl.lit(group_id).alias("group_id"))
+            .select(["group_id", "string_id_a", "string_id_b", "combined_score"])
         )
         df_edges_grouped.append(df_edges_group)
 
     if not df_edges_grouped:
         return pl.DataFrame(
             schema={
-                "GroupId": pl.String,
-                "StringIdA": pl.String,
-                "StringIdB": pl.String,
-                "Score": pl.Int64,
+                "group_id": pl.String,
+                "string_id_a": pl.String,
+                "string_id_b": pl.String,
+                "combined_score": pl.Int64,
             }
         )
 
-    return pl.concat(df_edges_grouped).sort(["GroupId", "StringIdA", "StringIdB"])
+    return pl.concat(df_edges_grouped).sort(["group_id", "string_id_a", "string_id_b"])
 
 
 def _run_case(label: str, fn_case: Callable[[], pl.DataFrame]) -> dict[str, object]:

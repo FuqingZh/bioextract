@@ -53,10 +53,10 @@ class _ReopenedWikiPathwaysTidyDataset(TidyDataset):
         *,
         table_names: Mapping[str, str] | None = None,
         if_exists: str = "fail",
-        preserve_source_headers: Collection[str] = (),
+        source_columns: Mapping[str, Collection[str]] | None = None,
         include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
-        del path, table_names, if_exists, preserve_source_headers, include_source_hashes
+        del path, table_names, if_exists, source_columns, include_source_hashes
         raise CapabilityError(
             "write_duckdb() requires a WikiPathways GMT source handle"
         )
@@ -85,12 +85,12 @@ class WikiPathwaysDatabase:
         >>> selection = db.select_ids(["2687", "MISSING"])
         >>> (
         ...     selection.extract_mapping()
-        ...     .select("InputId", "WikiPathwaysId")
+        ...     .select("input_id", "wiki_pathways_id")
         ...     .to_dicts()
         ... )
-        [{'InputId': '2687', 'WikiPathwaysId': 'WP100'}]
+        [{'input_id': '2687', 'wiki_pathways_id': 'WP100'}]
         >>> selection.extract_unmatched_ids().to_dicts()
-        [{'InputId': 'MISSING'}]
+        [{'input_id': 'MISSING'}]
     """
 
     snapshot: _WikiPathwaysSnapshot
@@ -144,11 +144,11 @@ class WikiPathwaysDatabase:
             ... )
             >>> (
             ...     db.extract_pathway()
-            ...     .select("WikiPathwaysId", "PathwayName")
+            ...     .select("wiki_pathways_id", "pathway_name")
             ...     .head(1)
             ...     .to_dicts()
             ... )
-            [{'WikiPathwaysId': 'WP100', 'PathwayName': 'Glutathione metabolism'}]
+            [{'wiki_pathways_id': 'WP100', 'pathway_name': 'Glutathione metabolism'}]
         """
         files_gmt = resolve_gmt_sources(source, glob=glob)
         species_normalized = None if species is None else str(species).strip()
@@ -267,10 +267,10 @@ class WikiPathwaysDatabase:
             >>> (
             ...     db.select_ids(["2687"])
             ...     .extract_mapping()
-            ...     .select("InputId", "WikiPathwaysId")
+            ...     .select("input_id", "wiki_pathways_id")
             ...     .to_dicts()
             ... )
-            [{'InputId': '2687', 'WikiPathwaysId': 'WP100'}]
+            [{'input_id': '2687', 'wiki_pathways_id': 'WP100'}]
         """
         self._assert_publication_current()
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
@@ -291,7 +291,7 @@ class WikiPathwaysDatabase:
             ids_by_group: Mapping from group label to input Entrez Gene IDs.
 
         Returns:
-            A grouped selection that carries `GroupId` through outputs.
+            A grouped selection that carries `group_id` through outputs.
 
         Raises:
             ValueError: If group IDs are invalid after normalization.
@@ -305,10 +305,10 @@ class WikiPathwaysDatabase:
             >>> (
             ...     db.select_groups({"case": ["2687"], "control": ["435"]})
             ...     .extract_mapping()
-            ...     .select("GroupId", "InputId", "WikiPathwaysId")
+            ...     .select("group_id", "input_id", "wiki_pathways_id")
             ...     .to_dicts()
             ... )
-            [{'GroupId': 'case', 'InputId': '2687', 'WikiPathwaysId': 'WP100'}, {'GroupId': 'control', 'InputId': '435', 'WikiPathwaysId': 'WP106'}]
+            [{'group_id': 'case', 'input_id': '2687', 'wiki_pathways_id': 'WP100'}, {'group_id': 'control', 'input_id': '435', 'wiki_pathways_id': 'WP106'}]
         """
         self._assert_publication_current()
         grp_in_frames = create_group_input_frames(
@@ -326,7 +326,7 @@ class WikiPathwaysDatabase:
     def extract_pathway(self) -> pl.DataFrame:
         """Extract one metadata row per pathway in the current species scope.
 
-        ``GeneCount`` counts distinct, non-empty Entrez Gene IDs in the GMT row.
+        ``gene_count`` counts distinct, non-empty Entrez Gene IDs in the GMT row.
 
         Examples:
             List pathway IDs in the compact human fixture:
@@ -335,7 +335,7 @@ class WikiPathwaysDatabase:
             ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt",
             ...     species="Homo sapiens",
             ... )
-            >>> db.extract_pathway()["WikiPathwaysId"].to_list()
+            >>> db.extract_pathway()["wiki_pathways_id"].to_list()
             ['WP100', 'WP106']
         """
         return self._lazy_frame("pathway").collect()
@@ -351,7 +351,7 @@ class WikiPathwaysDatabase:
             ...     species="Homo sapiens",
             ... )
             >>> db.extract_term2gene().head(2).to_dicts()
-            [{'WikiPathwaysId': 'WP100', 'GeneId': '2678'}, {'WikiPathwaysId': 'WP100', 'GeneId': '2687'}]
+            [{'wiki_pathways_id': 'WP100', 'gene_id': '2678'}, {'wiki_pathways_id': 'WP100', 'gene_id': '2687'}]
         """
         return self._lazy_frame("term2gene").collect()
 
@@ -366,11 +366,11 @@ class WikiPathwaysDatabase:
             ... )
             >>> (
             ...     db.extract_term2name()
-            ...     .select("WikiPathwaysId", "PathwayName")
+            ...     .select("wiki_pathways_id", "pathway_name")
             ...     .head(1)
             ...     .to_dicts()
             ... )
-            [{'WikiPathwaysId': 'WP100', 'PathwayName': 'Glutathione metabolism'}]
+            [{'wiki_pathways_id': 'WP100', 'pathway_name': 'Glutathione metabolism'}]
         """
         return self._lazy_frame("term2name").collect()
 
@@ -505,16 +505,16 @@ class WikiPathwaysDatabase:
                     frames["pathway"],
                     self.snapshot.species,
                 )
-                lf_pathway_ids = lf_pathway.select("WikiPathwaysId").unique()
+                lf_pathway_ids = lf_pathway.select("wiki_pathways_id").unique()
                 frames = {
                     "pathway": lf_pathway,
                     "term2gene": frames["term2gene"]
                     .join(
                         lf_pathway_ids,
-                        on="WikiPathwaysId",
+                        on="wiki_pathways_id",
                         how="inner",
                     )
-                    .sort("WikiPathwaysId", "GeneId"),
+                    .sort("wiki_pathways_id", "gene_id"),
                     "term2name": _filter_species_frame(
                         frames["term2name"],
                         self.snapshot.species,
@@ -527,26 +527,11 @@ class WikiPathwaysDatabase:
         with self.connect() as connection:
             pathway = pl.read_database(  # pyright: ignore[reportUnknownMemberType]
                 "SELECT * FROM pathway", connection
-            ).rename(
-                {
-                    "wiki_pathways_id": "WikiPathwaysId",
-                    "pathway_name": "PathwayName",
-                    "species": "Species",
-                    "collection": "Collection",
-                    "version": "Version",
-                    "url": "Url",
-                    "gene_count": "GeneCount",
-                }
             )
             term2gene = pl.read_database(  # pyright: ignore[reportUnknownMemberType]
                 "SELECT * FROM pathway_gene", connection
-            ).rename(
-                {
-                    "wiki_pathways_id": "WikiPathwaysId",
-                    "gene_id": "GeneId",
-                }
             )
-        term2name = pathway.drop("GeneCount")
+        term2name = pathway.drop("gene_count")
         return {
             "pathway": pathway.lazy(),
             "term2gene": term2gene.lazy(),
@@ -575,7 +560,7 @@ class WikiPathwaysSelection:
 
     Selections are created by :meth:`WikiPathwaysDatabase.select_ids` or
     :meth:`WikiPathwaysDatabase.select_groups`. Single selections return tables keyed
-    by `InputId`; grouped selections prepend `GroupId`.
+    by `input_id`; grouped selections prepend `group_id`.
 
     Examples:
         Use a returned selection to materialize matched pathways:
@@ -586,10 +571,10 @@ class WikiPathwaysSelection:
         >>> selection = db.select_ids(["2687"])
         >>> (
         ...     selection.extract_mapping()
-        ...     .select("InputId", "WikiPathwaysId")
+        ...     .select("input_id", "wiki_pathways_id")
         ...     .to_dicts()
         ... )
-        [{'InputId': '2687', 'WikiPathwaysId': 'WP100'}]
+        [{'input_id': '2687', 'wiki_pathways_id': 'WP100'}]
     """
 
     dataset: WikiPathwaysDatabase
@@ -601,7 +586,7 @@ class WikiPathwaysSelection:
 
     @property
     def is_grouped(self) -> bool:
-        """Report whether this selection carries `GroupId` through outputs.
+        """Report whether this selection carries `group_id` through outputs.
 
         Examples:
             Inspect a grouped selection:
@@ -626,7 +611,7 @@ class WikiPathwaysSelection:
             ...     species="Homo sapiens",
             ... )
             >>> selection = db.select_ids(["2687"])
-            >>> selection.extract_mapping()["WikiPathwaysId"].to_list()
+            >>> selection.extract_mapping()["wiki_pathways_id"].to_list()
             ['WP100']
         """
         self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
@@ -643,7 +628,7 @@ class WikiPathwaysSelection:
         """Extract normalized input IDs with no WikiPathways mapping.
 
         Grouped selections report an ID as unmapped independently within each
-        group and include ``GroupId`` in the result.
+        group and include ``group_id`` in the result.
 
         Examples:
             Retain an Entrez ID absent from the snapshot:
@@ -653,7 +638,7 @@ class WikiPathwaysSelection:
             ... )
             >>> selection = db.select_ids(["2687", "MISSING"])
             >>> selection.extract_unmatched_ids().to_dicts()
-            [{'InputId': 'MISSING'}]
+            [{'input_id': 'MISSING'}]
         """
         self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
         if self._df_unmapped is None:
@@ -666,9 +651,9 @@ class WikiPathwaysSelection:
 
 
 def _filter_species_frame(lf: pl.LazyFrame, species: str) -> pl.LazyFrame:
-    if "Species" not in lf.collect_schema().names():
+    if "species" not in lf.collect_schema().names():
         return lf
-    return lf.filter(pl.col("Species") == species)
+    return lf.filter(pl.col("species") == species)
 
 
 _WIKIPATHWAYS_TABLE_CONTRACTS = {
@@ -687,23 +672,6 @@ _WIKIPATHWAYS_TABLE_CONTRACTS = {
     "pathway_gene": (
         "derived",
         (("wiki_pathways_id", "VARCHAR"), ("gene_id", "VARCHAR")),
-    ),
-}
-
-_WIKIPATHWAYS_COLUMN_MAPPINGS = {
-    ("pathway", "Collection", "collection", "generated_snake_case"),
-    ("pathway", "GeneCount", "gene_count", "generated_snake_case"),
-    ("pathway", "PathwayName", "pathway_name", "generated_snake_case"),
-    ("pathway", "Species", "species", "generated_snake_case"),
-    ("pathway", "Url", "url", "generated_snake_case"),
-    ("pathway", "Version", "version", "generated_snake_case"),
-    ("pathway", "WikiPathwaysId", "wiki_pathways_id", "generated_snake_case"),
-    ("pathway_gene", "GeneId", "gene_id", "generated_snake_case"),
-    (
-        "pathway_gene",
-        "WikiPathwaysId",
-        "wiki_pathways_id",
-        "generated_snake_case",
     ),
 }
 
@@ -811,7 +779,7 @@ def _validate_wikipathways_publication(path: Path) -> str:
                     "FROM _bioextract.column_mapping"
                 ).fetchall()
             }
-            if column_mappings != _WIKIPATHWAYS_COLUMN_MAPPINGS:
+            if column_mappings:
                 raise ValueError(
                     "WikiPathways column provenance inventory is unsupported"
                 )

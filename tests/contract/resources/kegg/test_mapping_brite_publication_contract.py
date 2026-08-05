@@ -226,12 +226,13 @@ def test_tidy_profiles_validate_source_roles(tmp_path: Path) -> None:
         KEGGDatabase.from_duckdb(path)
 
 
-def test_mapping_publication_validates_column_provenance(tmp_path: Path) -> None:
+def test_mapping_publication_rejects_forged_column_provenance(tmp_path: Path) -> None:
     path = tmp_path / "mapping.duckdb"
     _mapping_source(tmp_path).write_duckdb(path)
     with duckdb.connect(str(path)) as connection:
         connection.execute(
-            "DELETE FROM _bioextract.column_mapping WHERE source_column='KeggGeneId'"
+            "INSERT INTO _bioextract.column_mapping VALUES "
+            "('mapping', 'forged', 'forged', 'forged')"
         )
 
     with pytest.raises(ValueError, match="column provenance inventory"):
@@ -244,7 +245,7 @@ def test_brite_publication_rejects_forged_column_provenance(tmp_path: Path) -> N
     with duckdb.connect(str(path)) as connection:
         connection.execute(
             "INSERT INTO _bioextract.column_mapping VALUES "
-            "('pathway', 'forged', 'forged', 'generated_snake_case')"
+            "('pathway', 'forged', 'forged', 'forged')"
         )
 
     with pytest.raises(ValueError, match="BRITE column provenance inventory"):

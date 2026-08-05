@@ -116,8 +116,8 @@ def test_idmapping_reads_plain_and_gzip(tmp_path: Path, compressed: bool) -> Non
         with gzip.open(compressed_path, "rt", encoding="utf-8") as source:
             path.write_text(source.read(), encoding="utf-8")
     frame = UniProtDatabase.from_idmapping(path).read_mapping(taxon_ids=["9606"])
-    assert frame.select("UniProtId", "TaxId").to_dicts() == [
-        {"UniProtId": "P12345", "TaxId": "9606"}
+    assert frame.select("uniprot_id", "tax_id").to_dicts() == [
+        {"uniprot_id": "P12345", "tax_id": "9606"}
     ]
     publication = tmp_path / f"published-{compressed}.duckdb"
     UniProtDatabase.from_idmapping(path).write_duckdb(publication, taxon_ids=["9606"])
@@ -143,9 +143,9 @@ def test_idmapping_parquet_and_hive_inputs(tmp_path: Path) -> None:
             "SELECT media_type FROM _bioextract.source_file"
         ).fetchone() == ("application/vnd.apache.parquet",)
 
-    hive = tmp_path / "hive" / "TaxId=9606"
+    hive = tmp_path / "hive" / "tax_id=9606"
     hive.mkdir(parents=True)
-    frame.drop("TaxId").write_parquet(hive / "part.parquet")
+    frame.drop("tax_id").write_parquet(hive / "part.parquet")
     (tmp_path / "hive" / "README.txt").write_text("ignored", encoding="utf-8")
     assert (
         UniProtDatabase.from_idmapping(tmp_path / "hive")
@@ -159,7 +159,7 @@ def test_idmapping_taxon_validation_and_all_taxa_opt_in(tmp_path: Path) -> None:
     database = UniProtDatabase.from_idmapping(
         _write_idmapping(tmp_path / "mapping.tab.gz")
     )
-    with pytest.raises(ValueError, match="TaxId"):
+    with pytest.raises(ValueError, match="tax_id"):
         database.scan_mapping(taxon_ids=["9606", ""])
     with pytest.raises(ValueError, match="allow_all_taxa"):
         database.write_duckdb(tmp_path / "blocked.duckdb")
@@ -185,20 +185,20 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
     database = UniProtDatabase.from_duckdb(path)
     assert database.release_version == "2026_01"
     matches = database.select_ids(["Q11111", "TEST", "missing"], namespace="uniprot")
-    assert matches.extract_proteins()["UniProtId"].to_list() == ["P12345"]
-    assert matches.extract_proteins()["ProteinExistence"].to_list() == [
+    assert matches.extract_proteins()["primary_accession"].to_list() == ["P12345"]
+    assert matches.extract_proteins()["protein_existence"].to_list() == [
         "1: Evidence at protein level"
     ]
-    assert "GroupId" not in matches.extract_proteins().schema
-    assert matches.extract_unmatched_ids()["InputId"].to_list() == [
+    assert "group_id" not in matches.extract_proteins().schema
+    assert matches.extract_unmatched_ids()["input_id"].to_list() == [
         "TEST",
         "missing",
     ]
     assert database.select_ids(["TEST"], namespace="gene_name").extract_gene_names()[
-        "GeneName"
+        "name"
     ].to_list() == ["TEST", "ALT", "LOC1", "ORF1", "TEST2", "ALT2"]
     assert database.select_ids(["P12345"], namespace="uniprot").extract_protein_names()[
-        "ProteinName"
+        "name"
     ].to_list() == [
         "Test protein",
         "First alternative",
@@ -206,46 +206,46 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
     ]
     assert database.select_ids(["1234"], namespace="gene_id").extract_cross_references(
         databases=["GeneID"]
-    )["ExternalId"].to_list() == ["1234"]
+    )["external_id"].to_list() == ["1234"]
     refseq = database.select_ids(
         ["NP_000001.1"], namespace="refseq"
     ).extract_cross_references(databases=["RefSeq"])
-    assert refseq.select("ExternalId", "IsoformId").to_dicts() == [
-        {"ExternalId": "NP_000001.1", "IsoformId": "P12345-2"}
+    assert refseq.select("external_id", "isoform_id").to_dicts() == [
+        {"external_id": "NP_000001.1", "isoform_id": "P12345-2"}
     ]
     con_server = database.select_ids(
         ["P12345"], namespace="uniprot"
     ).extract_cross_references(databases=["ConoServer"])
-    assert con_server.select("ExternalId", "Properties", "IsoformId").to_dicts() == [
+    assert con_server.select("external_id", "properties", "isoform_id").to_dicts() == [
         {
-            "ExternalId": "1570",
-            "Properties": "GIIIA [R13A]",
-            "IsoformId": None,
+            "external_id": "1570",
+            "properties": "GIIIA [R13A]",
+            "isoform_id": None,
         }
     ]
     sequences = database.select_ids(["P12345"], namespace="uniprot").extract_sequences(
         sequence_type="all"
     )
-    assert sequences.schema["CRC64"] == pl.String
-    assert sequences.select("SequenceType", "CRC64").to_dicts() == [
-        {"SequenceType": "canonical", "CRC64": "81FC3551E879CB1A"},
-        {"SequenceType": "isoform", "CRC64": None},
+    assert sequences.schema["crc64"] == pl.String
+    assert sequences.select("sequence_type", "crc64").to_dicts() == [
+        {"sequence_type": "canonical", "crc64": "81FC3551E879CB1A"},
+        {"sequence_type": "isoform", "crc64": None},
     ]
     selection = database.select_ids(["P12345"], namespace="uniprot")
-    assert selection.extract_ec_numbers()["ECNumber"].to_list() == ["1.2.3.4"]
-    assert selection.extract_go_annotations()["GOId"].to_list() == ["GO:0003677"]
+    assert selection.extract_ec_numbers()["ec_number"].to_list() == ["1.2.3.4"]
+    assert selection.extract_go_annotations()["go_id"].to_list() == ["GO:0003677"]
     assert selection.extract_comments(comment_types=["FUNCTION"])[
-        ["CommentType", "CommentText"]
+        ["comment_type", "comment_text"]
     ].to_dicts() == [
         {
-            "CommentType": "FUNCTION",
-            "CommentText": "Demonstrates a mem-brane fixture.",
+            "comment_type": "FUNCTION",
+            "comment_text": "Demonstrates a mem-brane fixture.",
         }
     ]
-    assert selection.extract_subcellular_locations()[
-        "SubcellularLocation"
-    ].to_list() == ["Nucleus"]
-    assert selection.extract_keywords()["Keyword"].to_list() == [
+    assert selection.extract_subcellular_locations()["location"].to_list() == [
+        "Nucleus"
+    ]
+    assert selection.extract_keywords()["keyword"].to_list() == [
         "Reference proteome",
         "Nucleus",
     ]
@@ -253,86 +253,86 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
         {"case": ["P12345"], "control": ["missing"]},
         namespace="uniprot",
     )
-    assert grouped.extract_proteins()["GroupId"].to_list() == ["case"]
-    assert grouped.extract_unmatched_ids().select("GroupId", "InputId").to_dicts() == [
-        {"GroupId": "control", "InputId": "missing"}
-    ]
+    assert grouped.extract_proteins()["group_id"].to_list() == ["case"]
+    assert grouped.extract_unmatched_ids().select(
+        "group_id", "input_id"
+    ).to_dicts() == [{"group_id": "control", "input_id": "missing"}]
     isoforms_frame = database.select_ids(
         ["P12345"], namespace="uniprot"
     ).extract_isoforms()
     assert isoforms_frame.select(
-        "IsoformId", "IsoformOrder", "SequenceStatus", "SequenceId"
+        "isoform_id", "isoform_order", "sequence_status", "sequence_id"
     ).to_dicts() == [
         {
-            "IsoformId": "P12345-1",
-            "IsoformOrder": 1,
-            "SequenceStatus": "Displayed",
-            "SequenceId": "P12345:canonical",
+            "isoform_id": "P12345-1",
+            "isoform_order": 1,
+            "sequence_status": "Displayed",
+            "sequence_id": "P12345:canonical",
         },
         {
-            "IsoformId": "P12345-2",
-            "IsoformOrder": 2,
-            "SequenceStatus": "Alternative",
-            "SequenceId": "P12345-2",
+            "isoform_id": "P12345-2",
+            "isoform_order": 2,
+            "sequence_status": "Alternative",
+            "sequence_id": "P12345-2",
         },
     ]
     assert selection.extract_isoform_identifiers().select(
-        "IsoformId", "Identifier", "IdentifierOrder", "IsMain"
+        "isoform_id", "identifier", "identifier_order", "is_main"
     ).to_dicts() == [
         {
-            "IsoformId": "P12345-1",
-            "Identifier": "P12345-1",
-            "IdentifierOrder": 1,
-            "IsMain": True,
+            "isoform_id": "P12345-1",
+            "identifier": "P12345-1",
+            "identifier_order": 1,
+            "is_main": True,
         },
         {
-            "IsoformId": "P12345-2",
-            "Identifier": "P12345-2",
-            "IdentifierOrder": 1,
-            "IsMain": True,
+            "isoform_id": "P12345-2",
+            "identifier": "P12345-2",
+            "identifier_order": 1,
+            "is_main": True,
         },
     ]
     assert database.select_ids(
         ["P12345"], namespace="uniprot"
     ).extract_isoform_variations().select(
-        "IsoformId", "VariationId", "VariationOrder"
+        "isoform_id", "variation_id", "variation_order"
     ).to_dicts() == [
         {
-            "IsoformId": "P12345-2",
-            "VariationId": "VSP_000001",
-            "VariationOrder": 1,
+            "isoform_id": "P12345-2",
+            "variation_id": "VSP_000001",
+            "variation_order": 1,
         }
     ]
     variation = database.select_ids(
         ["P12345"], namespace="uniprot"
     ).extract_sequence_variations()
-    assert variation.select("VariationId", "Note").to_dicts() == [
-        {"VariationId": "VSP_000001", "Note": "AA -> GG (in isoform 2)"}
+    assert variation.select("variation_id", "note").to_dicts() == [
+        {"variation_id": "VSP_000001", "note": "AA -> GG (in isoform 2)"}
     ]
     assert database.select_ids(
         ["P12345"], namespace="uniprot", taxon_ids=["10090"]
     ).extract_proteins().columns == [
-        "InputId",
-        "InputNamespace",
-        "UniProtId",
-        "EntryName",
-        "IsReviewed",
-        "TaxonId",
-        "ProteinExistence",
-        "SequenceLength",
-        "MolecularWeight",
-        "SequenceVersion",
-        "EntryVersion",
+        "input_id",
+        "input_namespace",
+        "primary_accession",
+        "entry_name",
+        "is_reviewed",
+        "taxon_id",
+        "protein_existence",
+        "sequence_length",
+        "molecular_weight",
+        "sequence_version",
+        "entry_version",
     ]
     assert database.select_ids(
         [], namespace="uniprot"
     ).extract_accessions().columns == [
-        "InputId",
-        "InputNamespace",
-        "UniProtId",
-        "Accession",
-        "AccessionOrder",
-        "IsPrimaryAccession",
+        "input_id",
+        "input_namespace",
+        "primary_accession",
+        "accession",
+        "accession_order",
+        "is_primary",
     ]
     with database.connect() as connection:
         metadata = dict(
@@ -378,18 +378,20 @@ SQ   SEQUENCE   3 AA;  365 MW;  69CB1DB000000000 CRC64;
 
     assert database.select_ids(
         ["Q99999"], namespace="uniprot"
-    ).extract_proteins().select("InputId", "UniProtId", "TaxonId").to_dicts() == [
-        {"InputId": "Q99999", "UniProtId": "P11111", "TaxonId": "9606"},
-        {"InputId": "Q99999", "UniProtId": "P22222", "TaxonId": "10090"},
+    ).extract_proteins().select(
+        "input_id", "primary_accession", "taxon_id"
+    ).to_dicts() == [
+        {"input_id": "Q99999", "primary_accession": "P11111", "taxon_id": "9606"},
+        {"input_id": "Q99999", "primary_accession": "P22222", "taxon_id": "10090"},
     ]
     assert database.select_ids(
         ["Q99999"], namespace="uniprot", taxon_ids=["10090"]
-    ).extract_proteins()["UniProtId"].to_list() == ["P22222"]
+    ).extract_proteins()["primary_accession"].to_list() == ["P22222"]
     assert database.select_groups(
         {"demerged": ["Q99999"]}, namespace="uniprot"
-    ).extract_proteins().select("GroupId", "UniProtId").to_dicts() == [
-        {"GroupId": "demerged", "UniProtId": "P11111"},
-        {"GroupId": "demerged", "UniProtId": "P22222"},
+    ).extract_proteins().select("group_id", "primary_accession").to_dicts() == [
+        {"group_id": "demerged", "primary_accession": "P11111"},
+        {"group_id": "demerged", "primary_accession": "P22222"},
     ]
 
 
@@ -429,16 +431,16 @@ def test_group_selection_resolves_each_identifier_once(
 
     assert selection.input_ids == ("P12345", "missing")
     assert selection.group_ids == ("case", "control", "empty")
-    assert selection.extract_proteins().select("GroupId", "InputId").to_dicts() == [
-        {"GroupId": "case", "InputId": "P12345"},
-        {"GroupId": "control", "InputId": "P12345"},
+    assert selection.extract_proteins().select("group_id", "input_id").to_dicts() == [
+        {"group_id": "case", "input_id": "P12345"},
+        {"group_id": "control", "input_id": "P12345"},
     ]
     selection.extract_accessions()
     assert selection.extract_unmatched_ids().select(
-        "GroupId", "InputId"
+        "group_id", "input_id"
     ).to_dicts() == [
-        {"GroupId": "case", "InputId": "missing"},
-        {"GroupId": "control", "InputId": "missing"},
+        {"group_id": "case", "input_id": "missing"},
+        {"group_id": "control", "input_id": "missing"},
     ]
     assert query_calls == [("P12345", "missing")]
 
@@ -448,7 +450,7 @@ def test_selection_and_fasta_inputs_reject_empty_values(tmp_path: Path) -> None:
     entries = _write_dat(tmp_path / "entries.dat.gz")
     UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(path)
     database = UniProtDatabase.from_duckdb(path)
-    with pytest.raises(ValueError, match="TaxId"):
+    with pytest.raises(ValueError, match="tax_id"):
         database.select_ids(["P12345"], namespace="uniprot", taxon_ids=[""])
     with pytest.raises(ValueError, match="group labels"):
         database.select_groups({"": ["P12345"]}, namespace="uniprot")
@@ -789,11 +791,11 @@ SQ   SEQUENCE   3 AA;  365 MW;  69CB1DB000000000 CRC64;
 
     database = UniProtDatabase.from_duckdb(path)
     assert database.select_ids(["P22966-1"], namespace="isoform_id").extract_proteins()[
-        "UniProtId"
+        "primary_accession"
     ].to_list() == ["P16375", "P16376"]
     assert database.select_ids(
         ["P16375"], namespace="uniprot"
-    ).extract_isoform_variations()["VariationId"].to_list() == ["VSP_013348"]
+    ).extract_isoform_variations()["variation_id"].to_list() == ["VSP_013348"]
     assert (
         database.select_ids(["P16376"], namespace="uniprot")
         .extract_isoform_variations()

@@ -18,6 +18,8 @@ verifies:
 - normalization of UniProt, KEGG gene, KO, pathway, and optional NCBI Gene ID
   inputs
 - many-to-many mapping expansion and stable output columns
+- stable `snake_case` mapping fields and an empty column-provenance inventory
+  because the raw mapping files are headerless and the fields are derived
 - single and grouped selection with unmapped reporting
 - nullable columns for optional source files
 - one-table `mapping` DuckDB publication and embedded source inventory

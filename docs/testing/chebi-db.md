@@ -12,7 +12,7 @@ Automated tests cover:
   and separate ChemOnt relations;
 - complete `CHEBI:<number>` keys and dynamic external namespaces;
 - primary/secondary, InChI, InChIKey, grouped selection, star rating,
-  obsolete policy, and all four unmatched `Reason` values;
+  obsolete policy, and all four unmatched `reason` values;
 - direct relations plus cycle-safe `is_a` ancestor/descendant traversal;
 - canonical fail-fast behavior, old-target preservation, staging/WAL cleanup,
   orphan-row skipping, and validation issue persistence;

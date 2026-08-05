@@ -136,17 +136,17 @@ def test_build_pfam_tidy_keeps_lazy_frames(tmp_path: Path) -> None:
     assert result.tables == ("mapping", "protein_term", "term", "term_xref")
     assert all(isinstance(frame, pl.LazyFrame) for frame in dataset.frames.values())
     assert dataset.frames["protein_term"].collect_schema() == pl.Schema(
-        {"UniProtId": pl.String, "PfamId": pl.String}
+        {"uniprot_id": pl.String, "pfam_id": pl.String}
     )
     assert dataset.frames["term"].collect_schema() == pl.Schema(
-        {"PfamId": pl.String, "PfamName": pl.String}
+        {"pfam_id": pl.String, "pfam_name": pl.String}
     )
     assert dataset.frames["term_xref"].collect_schema() == pl.Schema(
         {
-            "PfamId": pl.String,
-            "InterProId": pl.String,
-            "InterProName": pl.String,
-            "InterProType": pl.String,
+            "pfam_id": pl.String,
+            "interpro_id": pl.String,
+            "interpro_name": pl.String,
+            "interpro_type": pl.String,
         }
     )
     assert "maintain_order: true" not in dataset.frames["protein_term"].explain(

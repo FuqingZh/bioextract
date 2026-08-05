@@ -35,13 +35,14 @@ cog-24.fun.tab
 
 `cog-24.fun.tab` is optional. Without it, the output still keeps:
 
-- `EggnogProteinId`
-- `EggnogOgId`
-- `EggnogLevel`
-- `CogCategory`
-- `OgDescription`
+- `name`
+- `og`
+- `level`
+- `cog_category`
+- `description`
+- `COG_categories`
 
-and leaves `CogClass` / `CogName` null.
+and leaves `cog_class` / `cog_name` null.
 
 ## Public API
 
@@ -60,7 +61,7 @@ df_selected = selection.extract_mapping()
 df_unmapped = selection.extract_unmatched_ids()
 ```
 
-Grouped selections prepend `GroupId` in the same style as other resource DBs.
+Grouped selections prepend `group_id` in the same style as other resource DBs.
 The namespace is fixed to `eggnog_protein`.
 
 Plain SQLite is queried directly and emits no warning. A gzip-wrapped source
@@ -80,19 +81,20 @@ selection do not repeat the SQLite lookup.
 The wide mapping table exposes:
 
 ```text
-EggnogProteinId
-EggnogOgId
-EggnogLevel
-CogCategory
-CogClass
-CogName
-OgDescription
+name
+og
+level
+description
+COG_categories
+cog_category
+cog_class
+cog_name
 ```
 
 Many-to-many expansion is preserved:
 
 - one protein may map to multiple OGs
-- one OG may emit multiple `CogCategory` rows
+- one OG may emit multiple `cog_category` rows
 
 This keeps selected output auditable and easy to project into downstream term
 tables without eagerly loading the complete snapshot.
@@ -108,20 +110,20 @@ eggnog_protein
 Single selection output prepends:
 
 ```text
-InputId
-InputNamespace
+input_id
+input_namespace
 ```
 
 Grouped selection output prepends:
 
 ```text
-GroupId
-InputId
-InputNamespace
+group_id
+input_id
+input_namespace
 ```
 
-`extract_unmatched_ids()` returns `InputId` for single selection and
-`GroupId, InputId` for grouped selection.
+`extract_unmatched_ids()` returns `input_id` for single selection and
+`group_id, input_id` for grouped selection.
 
 ## Real Snapshot Status
 

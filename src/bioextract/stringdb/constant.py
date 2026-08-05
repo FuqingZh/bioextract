@@ -28,38 +28,35 @@ SCHEMA_LINKS = {
     },
 }
 SCHEMA_PROTEIN_MAP = {
-    "InputId": pl.String,
-    "StringId": pl.String,
-    "MapSource": pl.String,
+    "input_id": pl.String,
 }
 SCHEMA_EDGES = {
-    "StringIdA": pl.String,
-    "StringIdB": pl.String,
-    "Score": pl.Int64,
+    "string_id_a": pl.String,
+    "string_id_b": pl.String,
+    "combined_score": pl.Int64,
 }
 SCHEMA_UNMAPPED = {
-    "InputId": pl.String,
+    "input_id": pl.String,
 }
 SCHEMA_GROUPS = {
-    "GroupId": pl.String,
+    "group_id": pl.String,
 }
 SCHEMA_GROUP_INPUT_IDS = {
-    "GroupId": pl.String,
-    "InputId": pl.String,
+    "group_id": pl.String,
+    "input_id": pl.String,
 }
 SCHEMA_GROUP_STRING_MAPPING = {
-    "GroupId": pl.String,
-    "InputId": pl.String,
-    "StringId": pl.String,
-    "MapSource": pl.String,
+    "group_id": pl.String,
+    "input_id": pl.String,
 }
 SCHEMA_GROUP_EDGES = {
-    "GroupId": pl.String,
-    "StringIdA": pl.String,
-    "StringIdB": pl.String,
-    "Score": pl.Int64,
+    "group_id": pl.String,
+    "string_id_a": pl.String,
+    "string_id_b": pl.String,
+    "combined_score": pl.Int64,
 }
 
 RE_UNIPROT_PIPE = re.compile(r"^[^|]+\|([^|]+)\|")
 
 StringDatabaseVersion = Literal["v12.0"]
+StringNamespace = Literal["alias", "string"]

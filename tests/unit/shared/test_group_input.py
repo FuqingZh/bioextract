@@ -5,8 +5,8 @@ import pytest
 
 from bioextract._shared import create_group_input_frames
 
-SCHEMA_GROUPS = {"GroupId": pl.String}
-SCHEMA_GROUP_INPUT_IDS = {"GroupId": pl.String, "InputId": pl.String}
+SCHEMA_GROUPS = {"group_id": pl.String}
+SCHEMA_GROUP_INPUT_IDS = {"group_id": pl.String, "input_id": pl.String}
 
 
 def test_create_group_input_frames_preserves_group_contract() -> None:
@@ -23,24 +23,24 @@ def test_create_group_input_frames_preserves_group_contract() -> None:
     df_group_membership = group_input_frames.df_group_membership
     df_input_ids = group_input_frames.df_input_ids
 
-    assert df_groups.columns == ["GroupId"]
-    assert df_group_membership.columns == ["GroupId", "InputId"]
-    assert df_input_ids.columns == ["InputId"]
+    assert df_groups.columns == ["group_id"]
+    assert df_group_membership.columns == ["group_id", "input_id"]
+    assert df_input_ids.columns == ["input_id"]
     assert df_groups.to_dicts() == [
-        {"GroupId": "A"},
-        {"GroupId": "B"},
-        {"GroupId": "C"},
+        {"group_id": "A"},
+        {"group_id": "B"},
+        {"group_id": "C"},
     ]
     assert df_group_membership.to_dicts() == [
-        {"GroupId": "A", "InputId": "P04637"},
-        {"GroupId": "A", "InputId": "TP53"},
-        {"GroupId": "B", "InputId": "EGFR"},
-        {"GroupId": "B", "InputId": "P04637"},
+        {"group_id": "A", "input_id": "P04637"},
+        {"group_id": "A", "input_id": "TP53"},
+        {"group_id": "B", "input_id": "EGFR"},
+        {"group_id": "B", "input_id": "P04637"},
     ]
     assert df_input_ids.to_dicts() == [
-        {"InputId": "EGFR"},
-        {"InputId": "P04637"},
-        {"InputId": "TP53"},
+        {"input_id": "EGFR"},
+        {"input_id": "P04637"},
+        {"input_id": "TP53"},
     ]
 
 
@@ -51,10 +51,10 @@ def test_create_group_input_frames_keeps_empty_group_membership_typed() -> None:
         schema_group_input_ids=SCHEMA_GROUP_INPUT_IDS,
     )
 
-    assert group_input_frames.df_groups.to_dicts() == [{"GroupId": "A"}]
+    assert group_input_frames.df_groups.to_dicts() == [{"group_id": "A"}]
     assert group_input_frames.df_group_membership.schema == SCHEMA_GROUP_INPUT_IDS
     assert group_input_frames.df_group_membership.is_empty()
-    assert group_input_frames.df_input_ids.schema == {"InputId": pl.String}
+    assert group_input_frames.df_input_ids.schema == {"input_id": pl.String}
     assert group_input_frames.df_input_ids.is_empty()
 
 

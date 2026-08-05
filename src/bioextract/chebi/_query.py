@@ -80,18 +80,18 @@ class ChEBICompoundSelection:
         Examples:
             Observe the canonical shared identifier:
 
-            >>> selection.extract_matches()["ChEBIId"].head(1).to_list()  # doctest: +SKIP
+            >>> selection.extract_matches()["chebi_id"].head(1).to_list()  # doctest: +SKIP
             ['CHEBI:15377']
         """
         candidates = self._candidates()
         if candidates.is_empty():
             frame = pl.DataFrame(
                 schema={
-                    "InputId": pl.String,
-                    "InputNamespace": pl.String,
-                    "ChEBIId": pl.String,
-                    "MatchType": pl.String,
-                    "MatchedValue": pl.String,
+                    "input_id": pl.String,
+                    "input_namespace": pl.String,
+                    "chebi_id": pl.String,
+                    "match_type": pl.String,
+                    "matched_value": pl.String,
                 }
             )
         else:
@@ -105,22 +105,22 @@ class ChEBICompoundSelection:
                     & (pl.col("_star_rating").fill_null(0) >= self.min_star_rating)
                 )
                 .select(
-                    "InputId",
-                    pl.lit(self.namespace).alias("InputNamespace"),
-                    pl.col("_chebi_id").alias("ChEBIId"),
-                    pl.col("_match_type").alias("MatchType"),
-                    pl.col("_matched_value").alias("MatchedValue"),
+                    "input_id",
+                    pl.lit(self.namespace).alias("input_namespace"),
+                    pl.col("_chebi_id").alias("chebi_id"),
+                    pl.col("_match_type").alias("match_type"),
+                    pl.col("_matched_value").alias("matched_value"),
                 )
                 .unique()
-                .sort(["InputId", "ChEBIId"])
+                .sort(["input_id", "chebi_id"])
             )
         frame = self._expand_groups(frame)
         sort_cols = (
-            ["GroupId", "InputId", "ChEBIId"]
+            ["group_id", "input_id", "chebi_id"]
             if self._is_grouped
             else [
-                "InputId",
-                "ChEBIId",
+                "input_id",
+                "chebi_id",
             ]
         )
         return frame.sort(sort_cols)
@@ -132,14 +132,14 @@ class ChEBICompoundSelection:
             Inspect stable reason codes separately from successful matches:
 
             >>> unmatched = selection.extract_unmatched_ids()  # doctest: +SKIP
-            >>> "Reason" in unmatched.columns  # doctest: +SKIP
+            >>> "reason" in unmatched.columns  # doctest: +SKIP
             True
         """
-        matches = set(self.extract_matches().get_column("InputId").to_list())
+        matches = set(self.extract_matches().get_column("input_id").to_list())
         candidate_rows = self._candidates().to_dicts()
         by_input: dict[str, list[dict[str, object]]] = {}
         for row in candidate_rows:
-            by_input.setdefault(str(row["InputId"]), []).append(row)
+            by_input.setdefault(str(row["input_id"]), []).append(row)
         issue_inputs = self._invalid_target_inputs()
         output: list[dict[str, str]] = []
         for row in self._input_rows:
@@ -161,21 +161,21 @@ class ChEBICompoundSelection:
                 reason = "not_found"
             output.append(
                 {
-                    "InputId": row.input_id,
-                    "InputNamespace": self.namespace,
-                    "Reason": reason,
+                    "input_id": row.input_id,
+                    "input_namespace": self.namespace,
+                    "reason": reason,
                 }
             )
         frame = pl.DataFrame(
             output,
             schema={
-                "InputId": pl.String,
-                "InputNamespace": pl.String,
-                "Reason": pl.Enum(sorted(_REASONS)),
+                "input_id": pl.String,
+                "input_namespace": pl.String,
+                "reason": pl.Enum(sorted(_REASONS)),
             },
         )
         frame = self._expand_groups(frame)
-        sort_cols = ["GroupId", "InputId"] if self._is_grouped else ["InputId"]
+        sort_cols = ["group_id", "input_id"] if self._is_grouped else ["input_id"]
         return frame.sort(sort_cols)
 
     def extract_compounds(self) -> pl.DataFrame:
@@ -185,31 +185,31 @@ class ChEBICompoundSelection:
             Read the scalar annotation profile:
 
             >>> selection.extract_compounds().select(  # doctest: +SKIP
-            ...     "ChEBIId", "PreferredName", "Formula"
+            ...     "chebi_id", "preferred_name", "formula"
             ... ).columns
-            ['ChEBIId', 'PreferredName', 'Formula']
+            ['chebi_id', 'preferred_name', 'formula']
         """
         return self._extract_joined(
             """
             SELECT DISTINCT
-                selected.group_id AS "GroupId",
-                selected.input_id AS "InputId",
-                selected.input_namespace AS "InputNamespace",
-                compound.chebi_id AS "ChEBIId",
-                compound.preferred_name AS "PreferredName",
-                compound.definition AS "Definition",
-                compound.star_rating AS "StarRating",
-                compound.is_obsolete AS "IsObsolete",
-                compound.formula AS "Formula",
-                compound.charge AS "Charge",
-                compound.average_mass AS "AverageMass",
-                compound.monoisotopic_mass AS "MonoisotopicMass",
-                compound.smiles AS "SMILES",
-                compound.inchi AS "InChI",
-                compound.inchi_key AS "InChIKey"
+                selected.group_id AS "group_id",
+                selected.input_id AS "input_id",
+                selected.input_namespace AS "input_namespace",
+                compound.chebi_id AS chebi_id,
+                compound.preferred_name AS preferred_name,
+                compound.definition AS definition,
+                compound.star_rating AS star_rating,
+                compound.is_obsolete AS is_obsolete,
+                compound.formula AS formula,
+                compound.charge AS charge,
+                compound.average_mass AS average_mass,
+                compound.monoisotopic_mass AS monoisotopic_mass,
+                compound.smiles AS smiles,
+                compound.inchi AS inchi,
+                compound.inchi_key AS inchi_key
             FROM _selected_compound AS selected
             JOIN compound USING (chebi_id)
-            ORDER BY "GroupId", "InputId", "ChEBIId"
+            ORDER BY group_id, input_id, chebi_id
             """
         )
 
@@ -219,22 +219,22 @@ class ChEBICompoundSelection:
         Examples:
             Retain each synonym's official scope:
 
-            >>> selection.extract_names().select("Name", "Scope").columns  # doctest: +SKIP
-            ['Name', 'Scope']
+            >>> selection.extract_names().select("name", "scope").columns  # doctest: +SKIP
+            ['name', 'scope']
         """
         self._require_tables({"compound_name"}, "extract compound names")
         return self._extract_joined(
             """
             SELECT
-                selected.group_id AS "GroupId",
-                selected.input_id AS "InputId",
-                selected.input_namespace AS "InputNamespace",
-                selected.chebi_id AS "ChEBIId",
-                names.name AS "Name",
-                names.scope AS "Scope"
+                selected.group_id AS "group_id",
+                selected.input_id AS "input_id",
+                selected.input_namespace AS "input_namespace",
+                selected.chebi_id AS chebi_id,
+                names.name AS name,
+                names.scope AS scope
             FROM _selected_compound AS selected
             JOIN compound_name AS names USING (chebi_id)
-            ORDER BY "GroupId", "InputId", "ChEBIId", "Scope", "Name"
+            ORDER BY group_id, input_id, chebi_id, scope, name
             """
         )
 
@@ -245,9 +245,9 @@ class ChEBICompoundSelection:
             Keep prefix and accession separate for exact reuse:
 
             >>> selection.extract_cross_references().select(  # doctest: +SKIP
-            ...     "SourcePrefix", "Accession"
+            ...     "source_prefix", "accession"
             ... ).columns
-            ['SourcePrefix', 'Accession']
+            ['source_prefix', 'accession']
         """
         self._require_tables(
             {"compound_cross_reference"}, "extract compound cross-references"
@@ -255,16 +255,16 @@ class ChEBICompoundSelection:
         return self._extract_joined(
             """
             SELECT
-                selected.group_id AS "GroupId",
-                selected.input_id AS "InputId",
-                selected.input_namespace AS "InputNamespace",
-                selected.chebi_id AS "ChEBIId",
-                xref.source_prefix AS "SourcePrefix",
-                xref.accession AS "Accession",
-                xref.xref_id AS "CrossReferenceId"
+                selected.group_id AS "group_id",
+                selected.input_id AS "input_id",
+                selected.input_namespace AS "input_namespace",
+                selected.chebi_id AS chebi_id,
+                xref.source_prefix AS source_prefix,
+                xref.accession AS accession,
+                xref.xref_id AS xref_id
             FROM _selected_compound AS selected
             JOIN compound_cross_reference AS xref USING (chebi_id)
-            ORDER BY "GroupId", "InputId", "ChEBIId", "SourcePrefix", "Accession"
+            ORDER BY group_id, input_id, chebi_id, source_prefix, accession
             """
         )
 
@@ -281,7 +281,7 @@ class ChEBICompoundSelection:
             >>> selection.extract_relations(  # doctest: +SKIP
             ...     direction="outgoing"
             ... ).columns[-3:]
-            ['RelationType', 'RelationId', 'ObjectChEBIId']
+            ['relation_type', 'relation_id', 'object_chebi_id']
         """
         if direction not in {"outgoing", "incoming", "both"}:
             raise ValueError("direction must be 'outgoing', 'incoming', or 'both'")
@@ -294,19 +294,19 @@ class ChEBICompoundSelection:
         return self._extract_joined(
             f"""
             SELECT
-                selected.group_id AS "GroupId",
-                selected.input_id AS "InputId",
-                selected.input_namespace AS "InputNamespace",
-                selected.chebi_id AS "ChEBIId",
-                relation.subject_chebi_id AS "SubjectChEBIId",
-                relation.relation_type AS "RelationType",
-                relation.relation_id AS "RelationId",
-                relation.object_chebi_id AS "ObjectChEBIId"
+                selected.group_id AS "group_id",
+                selected.input_id AS "input_id",
+                selected.input_namespace AS "input_namespace",
+                selected.chebi_id AS chebi_id,
+                relation.subject_chebi_id AS subject_chebi_id,
+                relation.relation_type AS relation_type,
+                relation.relation_id AS relation_id,
+                relation.object_chebi_id AS object_chebi_id
             FROM _selected_compound AS selected
             JOIN compound_relation AS relation
               ON {" OR ".join(predicates)}
-            ORDER BY "GroupId", "InputId", "SubjectChEBIId",
-                     "RelationType", "ObjectChEBIId"
+            ORDER BY group_id, input_id, subject_chebi_id,
+                     relation_type, object_chebi_id
             """
         )
 
@@ -317,23 +317,23 @@ class ChEBICompoundSelection:
             Keep large molfiles outside the scalar compound profile:
 
             >>> selection.extract_structures().select(  # doctest: +SKIP
-            ...     "ChEBIId", "Molfile"
+            ...     "chebi_id", "molfile"
             ... ).columns
-            ['ChEBIId', 'Molfile']
+            ['chebi_id', 'molfile']
         """
         self._require_tables({"compound_structure"}, "extract compound structures")
         return self._extract_joined(
             """
             SELECT
-                selected.group_id AS "GroupId",
-                selected.input_id AS "InputId",
-                selected.input_namespace AS "InputNamespace",
-                selected.chebi_id AS "ChEBIId",
-                structure.structure_index AS "StructureIndex",
-                structure.molfile AS "Molfile"
+                selected.group_id AS "group_id",
+                selected.input_id AS "input_id",
+                selected.input_namespace AS "input_namespace",
+                selected.chebi_id AS chebi_id,
+                structure.structure_index AS structure_index,
+                structure.molfile AS molfile
             FROM _selected_compound AS selected
             JOIN compound_structure AS structure USING (chebi_id)
-            ORDER BY "GroupId", "InputId", "ChEBIId", "StructureIndex"
+            ORDER BY group_id, input_id, chebi_id, structure_index
             """
         )
 
@@ -344,20 +344,20 @@ class ChEBICompoundSelection:
             Extract source WURCS strings without parsing them:
 
             >>> selection.extract_wurcs().columns[-1]  # doctest: +SKIP
-            'WURCS'
+            'wurcs'
         """
         self._require_tables({"compound_wurcs"}, "extract compound WURCS")
         return self._extract_joined(
             """
             SELECT
-                selected.group_id AS "GroupId",
-                selected.input_id AS "InputId",
-                selected.input_namespace AS "InputNamespace",
-                selected.chebi_id AS "ChEBIId",
-                wurcs.wurcs AS "WURCS"
+                selected.group_id AS "group_id",
+                selected.input_id AS "input_id",
+                selected.input_namespace AS "input_namespace",
+                selected.chebi_id AS chebi_id,
+                wurcs.wurcs AS wurcs
             FROM _selected_compound AS selected
             JOIN compound_wurcs AS wurcs USING (chebi_id)
-            ORDER BY "GroupId", "InputId", "ChEBIId", "WURCS"
+            ORDER BY group_id, input_id, chebi_id, wurcs
             """
         )
 
@@ -368,7 +368,7 @@ class ChEBICompoundSelection:
             Retain traversal depth for each ancestor:
 
             >>> selection.extract_ancestors().columns[-2:]  # doctest: +SKIP
-            ['AncestorChEBIId', 'Depth']
+            ['ancestor_chebi_id', 'depth']
         """
         return self._extract_hierarchy(reverse=False)
 
@@ -379,7 +379,7 @@ class ChEBICompoundSelection:
             Retain traversal depth for each descendant:
 
             >>> selection.extract_descendants().columns[-2:]  # doctest: +SKIP
-            ['DescendantChEBIId', 'Depth']
+            ['descendant_chebi_id', 'depth']
         """
         return self._extract_hierarchy(reverse=True)
 
@@ -389,12 +389,12 @@ class ChEBICompoundSelection:
             first_join = "relation.object_chebi_id = selected.chebi_id"
             next_id = "relation.subject_chebi_id"
             recursive_join = "relation.object_chebi_id = hierarchy.related_id"
-            label = "DescendantChEBIId"
+            label = "descendant_chebi_id"
         else:
             first_join = "relation.subject_chebi_id = selected.chebi_id"
             next_id = "relation.object_chebi_id"
             recursive_join = "relation.subject_chebi_id = hierarchy.related_id"
-            label = "AncestorChEBIId"
+            label = "ancestor_chebi_id"
         return self._extract_joined(
             f"""
             WITH RECURSIVE hierarchy(
@@ -427,14 +427,14 @@ class ChEBICompoundSelection:
                   AND NOT list_contains(hierarchy.path, {next_id})
             )
             SELECT DISTINCT
-                group_id AS "GroupId",
-                input_id AS "InputId",
-                input_namespace AS "InputNamespace",
-                chebi_id AS "ChEBIId",
+                group_id AS "group_id",
+                input_id AS "input_id",
+                input_namespace AS "input_namespace",
+                chebi_id AS chebi_id,
                 related_id AS "{label}",
-                depth AS "Depth"
+                depth AS depth
             FROM hierarchy
-            ORDER BY "GroupId", "InputId", "Depth", "{label}"
+            ORDER BY group_id, input_id, depth, "{label}"
             """
         )
 
@@ -503,7 +503,7 @@ class ChEBICompoundSelection:
         frame = pl.DataFrame(
             rows,
             schema={
-                "InputId": pl.String,
+                "input_id": pl.String,
                 "_chebi_id": pl.String,
                 "_match_type": pl.String,
                 "_matched_value": pl.String,
@@ -580,16 +580,16 @@ class ChEBICompoundSelection:
             return frame
         membership = pl.DataFrame(
             self._group_membership,
-            schema={"GroupId": pl.String, "InputId": pl.String},
+            schema={"group_id": pl.String, "input_id": pl.String},
             orient="row",
         )
-        return membership.join(frame, on="InputId", how="inner").select(
-            "GroupId", *frame.columns
+        return membership.join(frame, on="input_id", how="inner").select(
+            "group_id", *frame.columns
         )
 
     def _finalize(self, frame: pl.DataFrame) -> pl.DataFrame:
-        if not self._is_grouped and "GroupId" in frame.columns:
-            return frame.drop("GroupId")
+        if not self._is_grouped and "group_id" in frame.columns:
+            return frame.drop("group_id")
         return frame
 
 
@@ -795,7 +795,7 @@ def _selection(
         rows.add((input_id, lookup))
         if grouped:
             if group_id is None:
-                raise AssertionError("grouped ChEBI input lacks GroupId")
+                raise AssertionError("grouped ChEBI input lacks group_id")
             group_membership.add((group_id, input_id))
     input_rows = tuple(
         _InputRow(input_id, lookup)
@@ -864,10 +864,10 @@ def _create_selected_table(
     )
     rows = [
         (
-            row["GroupId"] if grouped else None,
-            row["InputId"],
-            row["InputNamespace"],
-            row["ChEBIId"],
+            row["group_id"] if grouped else None,
+            row["input_id"],
+            row["input_namespace"],
+            row["chebi_id"],
         )
         for row in matches.to_dicts()
     ]
