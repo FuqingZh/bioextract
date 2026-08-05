@@ -39,8 +39,8 @@ interpro.xml.gz
 
 `interpro.xml.gz` is optional. When supplied, it contributes:
 
-- `InterProType`
-- `MemberDb`
+- `interpro_type`
+- `member_db`
 
 If XML is absent, those columns remain null.
 
@@ -90,14 +90,14 @@ from content.
 The mapping table exposes:
 
 ```text
-UniProtId
-InterProId
-InterProName
-InterProType
-MemberDb
-MemberDbId
-Start
-End
+uniprot_id
+interpro_id
+interpro_name
+interpro_type
+member_db
+member_db_id
+start
+end
 ```
 
 The contract stays row-level:
@@ -150,33 +150,33 @@ It does not consume or require a prior mapping publication.
 `protein_term`:
 
 ```text
-UniProtId
-PfamId
+uniprot_id
+pfam_id
 ```
 
 `term`:
 
 ```text
-PfamId
-PfamName
+pfam_id
+pfam_name
 ```
 
 `term_xref`:
 
 ```text
-PfamId
-InterProId
-InterProName
-InterProType
+pfam_id
+interpro_id
+interpro_name
+interpro_type
 ```
 
 Only IDs matching `PF[0-9]{5}` and present in the raw protein mapping are
-published. Positional repeats collapse to one `UniProtId + PfamId` row.
+published. Positional repeats collapse to one `uniprot_id + pfam_id` row.
 Pfam names come from the XML member `db_xref name`; InterPro names are kept
 separately in the trace table. Missing names, conflicting names, incomplete
 xrefs, invalid IDs, and cross-version inputs fail before asset writing. Raw
 member relationships are validated against XML by the exact
-`InterProId + PfamId` pair, so a valid Pfam ID cannot hide a mismatched
+`interpro_id + pfam_id` pair, so a valid Pfam ID cannot hide a mismatched
 InterPro reference.
 
 The publication resource schema is `interpro-v1`. The source profile and

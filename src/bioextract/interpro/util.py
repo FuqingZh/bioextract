@@ -39,16 +39,16 @@ def scan_mapping_frame(
     lf_mapping = scan_protein2ipr_frame(file_protein2ipr)
     if df_interpro_entry.height > 0:
         lf_mapping = (
-            lf_mapping.drop("InterProType")
-            .join(df_interpro_entry.lazy(), on="InterProId", how="left")
+            lf_mapping.drop("interpro_type")
+            .join(df_interpro_entry.lazy(), on="interpro_id", how="left")
             .select(COLS_MAPPING)
         )
     if df_interpro_member.height > 0:
         lf_mapping = (
-            lf_mapping.drop("MemberDb")
+            lf_mapping.drop("member_db")
             .join(
                 df_interpro_member.lazy(),
-                on=["InterProId", "MemberDbId"],
+                on=["interpro_id", "member_db_id"],
                 how="left",
             )
             .select(COLS_MAPPING)
@@ -63,27 +63,27 @@ def scan_protein2ipr_frame(file_protein2ipr: Path) -> pl.LazyFrame:
             separator="\t",
             has_header=False,
             new_columns=[
-                "UniProtId",
-                "InterProId",
-                "InterProName",
-                "MemberDbId",
-                "Start",
-                "End",
+                "uniprot_id",
+                "interpro_id",
+                "interpro_name",
+                "member_db_id",
+                "start",
+                "end",
             ],
             schema_overrides={
-                "UniProtId": pl.String,
-                "InterProId": pl.String,
-                "InterProName": pl.String,
-                "MemberDbId": pl.String,
-                "Start": pl.Int64,
-                "End": pl.Int64,
+                "uniprot_id": pl.String,
+                "interpro_id": pl.String,
+                "interpro_name": pl.String,
+                "member_db_id": pl.String,
+                "start": pl.Int64,
+                "end": pl.Int64,
             },
             infer_schema=False,
             quote_char=None,
         )
         .with_columns(
-            pl.lit(None, dtype=pl.String).alias("InterProType"),
-            pl.lit(None, dtype=pl.String).alias("MemberDb"),
+            pl.lit(None, dtype=pl.String).alias("interpro_type"),
+            pl.lit(None, dtype=pl.String).alias("member_db"),
         )
         .select(COLS_MAPPING)
     )
@@ -98,7 +98,7 @@ def validate_mapping_xml_relationships(
     """Require one complete XML explanation for every mapping relationship."""
     mapping_keys = (
         scan_protein2ipr_frame(file_protein2ipr)
-        .select("InterProId", "MemberDbId")
+        .select("interpro_id", "member_db_id")
         .unique()
         .collect(engine="streaming")
     )
@@ -208,14 +208,14 @@ def build_mapping_frame(
     df_mapping = pl.DataFrame(rows, schema=SCHEMA_MAPPING)
     if df_interpro_entry.height > 0:
         df_mapping = (
-            df_mapping.drop("InterProType")
-            .join(df_interpro_entry, on="InterProId", how="left")
+            df_mapping.drop("interpro_type")
+            .join(df_interpro_entry, on="interpro_id", how="left")
             .select(COLS_MAPPING)
         )
     if df_interpro_member.height > 0:
         df_mapping = (
-            df_mapping.drop("MemberDb")
-            .join(df_interpro_member, on=["InterProId", "MemberDbId"], how="left")
+            df_mapping.drop("member_db")
+            .join(df_interpro_member, on=["interpro_id", "member_db_id"], how="left")
             .select(COLS_MAPPING)
         )
     return df_mapping.unique().sort(COLS_MAPPING)
@@ -243,14 +243,14 @@ def iter_protein2ipr_records(
             if input_ids is not None and uniprot_id not in input_ids:
                 continue
             yield {
-                "UniProtId": uniprot_id,
-                "InterProId": interpro_id,
-                "InterProName": interpro_name,
-                "InterProType": None,
-                "MemberDb": None,
-                "MemberDbId": member_db_id,
-                "Start": int(start),
-                "End": int(end),
+                "uniprot_id": uniprot_id,
+                "interpro_id": interpro_id,
+                "interpro_name": interpro_name,
+                "interpro_type": None,
+                "member_db": None,
+                "member_db_id": member_db_id,
+                "start": int(start),
+                "end": int(end),
             }
 
 
@@ -273,8 +273,8 @@ def read_interpro_xml_frames(file_interpro_xml: Path | None) -> dict[str, pl.Dat
                 continue
             entries.append(
                 {
-                    "InterProId": interpro_id,
-                    "InterProType": elem.attrib.get("type"),
+                    "interpro_id": interpro_id,
+                    "interpro_type": elem.attrib.get("type"),
                 }
             )
             member_list = elem.find("member_list")
@@ -285,9 +285,9 @@ def read_interpro_xml_frames(file_interpro_xml: Path | None) -> dict[str, pl.Dat
                     if member_db_id:
                         members.append(
                             {
-                                "InterProId": interpro_id,
-                                "MemberDbId": member_db_id,
-                                "MemberDb": member_db,
+                                "interpro_id": interpro_id,
+                                "member_db_id": member_db_id,
+                                "member_db": member_db,
                             }
                         )
             elem.clear()
@@ -295,12 +295,12 @@ def read_interpro_xml_frames(file_interpro_xml: Path | None) -> dict[str, pl.Dat
     return {
         "entry": pl.DataFrame(entries, schema=SCHEMA_INTERPRO_ENTRY)
         .unique()
-        .sort("InterProId")
+        .sort("interpro_id")
         if entries
         else pl.DataFrame(schema=SCHEMA_INTERPRO_ENTRY),
         "member": pl.DataFrame(members, schema=SCHEMA_INTERPRO_MEMBER)
         .unique()
-        .sort("InterProId", "MemberDbId")
+        .sort("interpro_id", "member_db_id")
         if members
         else pl.DataFrame(schema=SCHEMA_INTERPRO_MEMBER),
     }
@@ -318,11 +318,11 @@ def extract_mapping_frame(
         df_input_ids.join(
             df_mapping,
             left_on="input_id",
-            right_on="UniProtId",
+            right_on="uniprot_id",
             how="inner",
         )
         .with_columns(
-            pl.col("input_id").alias("UniProtId"),
+            pl.col("input_id").alias("uniprot_id"),
             pl.lit(namespace).alias("input_namespace"),
         )
         .select(cols_out)

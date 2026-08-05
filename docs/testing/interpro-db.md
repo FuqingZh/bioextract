@@ -28,7 +28,7 @@ It does not cover:
 
 - `from_mapping_files()` accepts required and optional files.
 - `extract_mapping()` returns the normalized mapping columns.
-- XML enrichment fills `InterProType` and `MemberDb` when present.
+- XML enrichment fills `interpro_type` and `member_db` when present.
 - `select_ids(..., namespace="uniprot")` returns filtered rows.
 - `select_groups(..., namespace="uniprot")` preserves `group_id`.
 - unmapped IDs are reported correctly.
@@ -69,7 +69,7 @@ exact metadata, capability and schema inventories, readable row counts, a
 deterministic sample after write, and:
 
 - exact schemas for `mapping`, `protein_term`, `term`, and `term_xref`
-- global `UniProtId + PfamId` uniqueness
+- global `uniprot_id + pfam_id` uniqueness
 - one non-empty name per published Pfam ID
 - complete Pfam-to-InterPro xrefs
 - equality with the PFAM projection of the full canonical mapping for a
