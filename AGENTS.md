@@ -66,7 +66,7 @@
   one public contract or one resource migration, with focused tests and the
   complete canonical gate before handoff.
 - The detailed AO lifecycle, retry, teardown, and evidence rules live in
-  [`docs/development/ao-delivery.md`](docs/development/ao-delivery.md).
+  [`docs/runbooks/ao-delivery.md`](docs/runbooks/ao-delivery.md).
 
 ## Data And Destructive-Operation Boundaries
 

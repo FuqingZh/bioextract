@@ -1,7 +1,7 @@
 # bioextract Documentation
 
 Version: v1.0
-Date: 2026-08-04
+Date: 2026-08-05
 Status: current
 
 This directory contains durable architecture, data contracts, test standards,
@@ -21,8 +21,18 @@ when a domain does not yet have a dedicated architecture document.
 4. Read the repository-wide [Test Standard](testing/README.md), then the
    corresponding resource test standard and, where present, the real-snapshot
    benchmark before changing validation or publication behavior.
-5. Read the repository [AO and delivery norms](development/ao-delivery.md)
+5. Read the repository [AO and delivery norms](runbooks/ao-delivery.md)
    before starting PR-bound work or changing repository gates.
+
+## Directory Map
+
+- `architecture/` — current system boundaries and materialized-data contracts.
+- `implementation-plans/` — accepted execution plans and their historical
+  closeout records.
+- `testing/` — reusable validation standards and resource-specific checks.
+- `benchmarks/` — reproducible measurement baselines.
+- `runbooks/` — controlled delivery and operational procedures.
+- `archive/` — superseded plans retained for traceability.
 
 ## Authority Map
 
@@ -46,57 +56,57 @@ when a domain does not yet have a dedicated architecture document.
 ## Plans And History
 
 The active
-[Column Lineage And Public Schema Convergence Plan](implementation-plan/20260804-v1.0-column-lineage-public-schema-convergence.md)
+[Column Lineage And Public Schema Convergence Plan](implementation-plans/20260804-v1.0-column-lineage-public-schema-convergence.md)
 defines the official-header versus derived-column ownership rule, shared
 `snake_case` selection protocol, `from_*` lifecycle naming, resource-specific
 migration slices, and the publication rebuild and verification boundary.
 
 The completed
-[Publication Inspection Plan](implementation-plan/20260804-v1.0-publication-inspection-implementation-plan.md)
+[Publication Inspection Plan](implementation-plans/20260804-v1.0-publication-inspection-implementation-plan.md)
 records the narrow, read-only API for inspecting exactly one caller-supplied
 local bioextract DuckDB publication, its metadata-v1 validation and immutable
 result contract, and the boundary that leaves optional discovery and catalogs
 to external callers.
 
 The completed
-[Storage And Publication Convergence Plan](implementation-plan/20260803-v1.0-storage-publication-convergence-implementation-plan.md)
+[Storage And Publication Convergence Plan](implementation-plans/20260803-v1.0-storage-publication-convergence-implementation-plan.md)
 records the accepted direct-access versus materialization boundary, DuckDB-only
 bioextract publication contract, metadata v1 reset, former-Parquet resource
 migrations, eggNOG SQLite behavior, GO subcell cleanup, and acceptance of the
 nine maintained formal publications. All five slices are complete.
 
 The completed
-[Test Suite Layering Plan](implementation-plan/20260731-v1.0-test-suite-layering.md)
+[Test Suite Layering Plan](implementation-plans/20260731-v1.0-test-suite-layering.md)
 records the unit, contract, integration, and external-snapshot smoke
 boundaries, fixture ownership, migration slices, and the growth from its
 482-case pre-migration baseline to the current 598-case hermetic gate.
 
 The completed
-[Public API And Grouped Selection Convergence Plan](implementation-plan/20260731-v1.0-public-api-grouped-selection-convergence.md)
+[Public API And Grouped Selection Convergence Plan](implementation-plans/20260731-v1.0-public-api-grouped-selection-convergence.md)
 records the top-level database import contract, shared unique-ID resolution and
 group fan-out model, internal behavior-type boundary, and unchanged
 publication schemas.
 
 The completed
-[Constructor Source Convergence Plan](implementation-plan/20260731-v1.0-constructor-source-convergence.md)
+[Constructor Source Convergence Plan](implementation-plans/20260731-v1.0-constructor-source-convergence.md)
 records the implemented three-phase constructor naming contract and the
 eggNOG, STRING, WikiPathways, and Rhea delivery boundaries.
 
-The completed [UniProtKB Domain Access Plan](implementation-plan/20260730-uniprot-knowledgebase-domain-access.md)
+The completed [UniProtKB Domain Access Plan](implementation-plans/20260730-uniprot-knowledgebase-domain-access.md)
 records the Swiss-Prot DuckDB boundary and version-contract convergence.
 
 The completed
-[KEGG Metabolic Domain Access Plan](implementation-plan/20260730-kegg-metabolic-domain-access.md)
+[KEGG Metabolic Domain Access Plan](implementation-plans/20260730-kegg-metabolic-domain-access.md)
 records the compound, reaction, enzyme, module, cross-reference, publication,
 and reaction-centered selection boundary.
 
 The completed
-[ChEBI Domain Access And Publication Plan](implementation-plan/20260729-chebi-domain-access.md)
+[ChEBI Domain Access And Publication Plan](implementation-plans/20260729-chebi-domain-access.md)
 records the portable ChEBI publication, exact compound
 selection, stable profile extraction, and cycle-safe relation traversal.
 
 The completed
-[Domain Contract Convergence Plan](implementation-plan/20260729-v1.0-domain-contract-convergence.md)
+[Domain Contract Convergence Plan](implementation-plans/20260729-v1.0-domain-contract-convergence.md)
 records the dependency-ordered public-output, naming, provenance,
 limits-removal, and resource-API migration work.
 
