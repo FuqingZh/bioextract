@@ -41,23 +41,32 @@ the activity-state rules in the calibration AO runbook.
 For an existing PR, mark a draft ready, then restore its owning worker. If it
 has no owner, first prove every other writer quiesced, then claim it without
 takeover and read the assigned owner back before sending work. Owner absence
-alone does not make a ready PR unowned.
+alone does not make a ready PR unowned; ready-for-review is only a claim
+prerequisite.
+
+Classify observations by their owner: sandbox state covers only the current
+agent sandbox; worker state covers the AO worktree, pane, environment, and
+Codex home; daemon state covers the persistent service, database, and project
+readback; host state covers the service manager, filesystem, credentials, and
+installed binaries outside worker containment.
 
 If the sandbox disagrees with these results, classify the observation by its
 owner. A sandbox-only path, PID, or read-only failure is `indeterminate`; use
 host-authoritative service and AO health/readiness evidence before changing
-persistent host state. Healthy core service and AO readback is `daemon ready`;
-an external integration or authentication-only doctor failure is `delivery
-degraded`; repeated authoritative core failure is `unavailable`. Only the last
-condition selects the unavailable fallback. Do not call the repository
-continuation-proven until a real anchored review or CI correction has returned
-to its owning worker.
+persistent host state. Active host service, AO `ready` or `running` readback,
+and a passing `healthz` probe is `daemon ready`; an external integration or
+authentication-only doctor failure is `delivery degraded`; repeated
+authoritative core failure is `unavailable`. Only the last condition selects
+the unavailable fallback. Registration and healthy configuration establish
+only `runtime-ready`; do not call the repository continuation-proven until a
+real anchored review or CI correction has returned to its owning worker.
 
 When continuation is not proven, new unowned PR work uses the isolated-worktree
-fallback. An existing AO-owned branch, worktree, or PR is preserved until its
-owner is restored or authoritative containment and write-authority revocation
-are proven. The controller never patches, stages, commits, or pushes an
-owner's sibling worktree.
+fallback and reports that fallback at handoff. The same reported fallback
+applies when AO is authoritatively unavailable. An existing AO-owned branch,
+worktree, or PR is preserved until its owner is restored or authoritative
+containment and write-authority revocation are proven. The controller never
+patches, stages, commits, or pushes an owner's sibling worktree.
 
 ## Worker And Branch Norms
 
@@ -97,9 +106,9 @@ and any unavailable host-side check. Conversation authorization for a low-risk
 implementation also authorizes native GitHub per-PR auto-merge without a second
 approval, but only after exact-head required CI passes, current-head review is
 clean, and no actionable review threads remain. An explicit user stop or a
-high-risk, irreversible, permission, security, secret, release, or
-compatibility decision withholds that authority. This never authorizes AO
-project `autoMerge`.
+repository-local stricter policy, or a high-risk, irreversible, permission,
+security, secret, release, or compatibility decision withholds that authority
+and requires escalation. This never authorizes AO project `autoMerge`.
 
 ## Publication And Shared-Storage Safety
 
