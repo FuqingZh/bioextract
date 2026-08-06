@@ -93,10 +93,13 @@ External snapshot smoke is opt-in through `pdm run test-smoke` and explicit
 publication paths; it is never a reason to weaken the hermetic gate.
 
 Before handoff, record the exact current head, focused checks, complete gate,
-and any unavailable host-side check. For a low-risk PR, native GitHub
-per-PR auto-merge is considered only after exact-head required CI passes,
-current-head review is clean, and no actionable review threads remain. This
-does not authorize AO project `autoMerge`.
+and any unavailable host-side check. Conversation authorization for a low-risk
+implementation also authorizes native GitHub per-PR auto-merge without a second
+approval, but only after exact-head required CI passes, current-head review is
+clean, and no actionable review threads remain. An explicit user stop or a
+high-risk, irreversible, permission, security, secret, release, or
+compatibility decision withholds that authority. This never authorizes AO
+project `autoMerge`.
 
 ## Publication And Shared-Storage Safety
 

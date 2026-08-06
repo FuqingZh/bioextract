@@ -16,9 +16,9 @@
 
 - Database classes are the stable top-level API. Selection and result classes
   are behaviorally public but are not stable package exports.
-- Python methods and parameters, plus generated tables, views, and columns, use
-  singular `snake_case`. Preserve the spelling and order of unchanged official
-  two-dimensional source headers.
+- Python methods and parameters use `snake_case`. Generated tables, views, and
+  columns use singular `snake_case`. Preserve the spelling and order of
+  unchanged official two-dimensional source headers.
 - Before v1.0, do not add compatibility aliases, sidecar manifests, or
   filename-derived schema identity. Embedded publication metadata is
   authoritative.
