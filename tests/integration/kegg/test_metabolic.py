@@ -551,6 +551,24 @@ def test_release_archive_accepts_explicit_relation_overlay(tmp_path: Path) -> No
     assert source_paths["reaction_ko:0"] == str(override.resolve())
 
 
+def test_nested_release_archive_preserves_lists_when_required_roles_are_overlaid(
+    tmp_path: Path,
+) -> None:
+    release = metabolic_release(tmp_path)
+    files = metabolic_files(tmp_path)
+    archive = tmp_path / "fully-overlaid-release.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        for source in sorted(release.rglob("*")):
+            if source.is_file():
+                output.write(source, Path("wrapper") / source.relative_to(release))
+
+    path = tmp_path / "fully-overlaid.duckdb"
+    KEGGDatabase.from_metabolic_files(archive, **files).write_duckdb(path)
+
+    with duckdb.connect(str(path), read_only=True) as connection:
+        assert connection.execute("SELECT count(*) FROM compound").fetchone() == (2,)
+
+
 def test_relation_only_inputs_preserve_rows_and_enable_namespace(
     tmp_path: Path,
 ) -> None:

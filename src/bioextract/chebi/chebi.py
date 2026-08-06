@@ -213,6 +213,10 @@ class ChEBIDatabase:
             else:
                 file_sdf = None
         chemont = _optional_file(chemont_obo)
+        if sdf is not None and file_sdf is not None and file_obo.samefile(file_sdf):
+            raise ValueError(
+                "ChEBI OBO and SDF roles must refer to different physical files"
+            )
         if chemont is not None:
             _inspect_ontology_source(chemont)
         return cls(
@@ -835,15 +839,18 @@ def _open_ontology_text(path: Path) -> Generator[TextIO]:
             member = _select_ontology_member(
                 member.filename for member in archive.infolist() if not member.is_dir()
             )
-            with (
-                archive.open(member) as raw,
-                io.TextIOWrapper(
-                    raw,
+            with archive.open(member) as raw:
+                decoded = (
+                    gzip.GzipFile(fileobj=raw)
+                    if member.lower().endswith(".gz")
+                    else raw
+                )
+                with io.TextIOWrapper(
+                    decoded,
                     encoding="utf-8",
                     errors="replace",
-                ) as handle,
-            ):
-                yield handle
+                ) as handle:
+                    yield handle
         return
     if tarfile.is_tarfile(path):
         with tarfile.open(path, mode="r:*") as archive:
@@ -856,15 +863,18 @@ def _open_ontology_text(path: Path) -> Generator[TextIO]:
             raw = archive.extractfile(members[member_name])
             if raw is None:
                 raise ValueError(f"Cannot read ontology archive member: {member_name}")
-            with (
-                raw,
-                io.TextIOWrapper(
-                    raw,
+            with raw:
+                decoded = (
+                    gzip.GzipFile(fileobj=raw)
+                    if member_name.lower().endswith(".gz")
+                    else raw
+                )
+                with io.TextIOWrapper(
+                    decoded,
                     encoding="utf-8",
                     errors="replace",
-                ) as handle,
-            ):
-                yield handle
+                ) as handle:
+                    yield handle
         return
     with path.open("r", encoding="utf-8", errors="replace") as handle:
         yield handle
@@ -885,7 +895,7 @@ def _select_ontology_member(member_names: Iterator[str]) -> str:
     candidates = [
         member
         for member in members
-        if PurePosixPath(member).name.lower().endswith(".obo")
+        if PurePosixPath(member).name.lower().removesuffix(".gz").endswith(".obo")
     ]
     if len(candidates) != 1:
         raise ValueError(

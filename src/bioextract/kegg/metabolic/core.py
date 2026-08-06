@@ -239,6 +239,19 @@ def discover_release_layout(
     ]
     required_relations = [role for role in RELATION_ROLES if role not in skipped]
 
+    def has_discoverable_source(candidate: Path) -> bool:
+        return any(
+            role not in skipped and (candidate / family / relative).exists()
+            for family in ENTRY_ROLES
+            for role, relative in (
+                (f"{family}_list", "list.tsv"),
+                (f"{family}_entries", "entries"),
+            )
+        ) or any(
+            role not in skipped and (candidate / f"{role}.tsv").is_file()
+            for role in RELATION_ROLES
+        )
+
     def qualifies(candidate: Path) -> bool:
         if required_families:
             return all(
@@ -249,7 +262,7 @@ def discover_release_layout(
             return all(
                 (candidate / f"{role}.tsv").is_file() for role in required_relations
             )
-        return candidate == root
+        return has_discoverable_source(candidate)
 
     layout_candidates = [candidate for candidate in candidates if qualifies(candidate)]
     if len(layout_candidates) > 1:

@@ -130,6 +130,16 @@ def test_obo_directory_validates_discovered_candidate(tmp_path: Path) -> None:
         ChEBIDatabase.from_obo(source)
 
 
+def test_obo_directory_rejects_explicit_sdf_role_reuse(tmp_path: Path) -> None:
+    source = tmp_path / "ontology"
+    source.mkdir()
+    file_obo = source / "chebi.obo"
+    file_obo.write_text(OBO, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="different physical files"):
+        ChEBIDatabase.from_obo(source, sdf=file_obo)
+
+
 @pytest.mark.parametrize("container", ["plain", "gzip", "zip", "tar"])
 def test_obo_input_container_is_detected_from_content(
     tmp_path: Path,
@@ -199,6 +209,29 @@ $$$$
     )
 
     assert result.row_counts["compound_structure"] == 1
+
+
+@pytest.mark.parametrize("archive_kind", ["zip", "tar"])
+def test_obo_archive_reads_gzip_ontology_member(
+    tmp_path: Path,
+    archive_kind: str,
+) -> None:
+    file_obo = tmp_path / "chebi.obo.gz"
+    with gzip.open(file_obo, "wt", encoding="utf-8") as handle:
+        handle.write(OBO)
+    archive_path = tmp_path / f"chebi-obo.{archive_kind}"
+    if archive_kind == "zip":
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.write(file_obo, "nested/chebi.obo.gz")
+    else:
+        with tarfile.open(archive_path, "w") as archive:
+            archive.add(file_obo, arcname="nested/chebi.obo.gz")
+
+    result = ChEBIDatabase.from_obo(archive_path).write_duckdb(
+        tmp_path / f"chebi-obo-{archive_kind}.duckdb"
+    )
+
+    assert result.row_counts["compound"] == 1
 
 
 def test_chemont_relations_share_container_but_not_domain_tables(
