@@ -89,8 +89,9 @@ import subprocess
 import sys
 
 subprocess.run([sys.executable, "-c", {child_probe!r}], check=True)
-"""
+    """
     environment = os.environ.copy()
+    environment.pop("BIOEXTRACT_TEST_THREADS", None)
     environment["PYTHONPATH"] = str(_ROOT / "src")
     result = subprocess.run(
         [
