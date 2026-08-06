@@ -105,7 +105,8 @@ Before handoff, record the exact current head, focused checks, complete gate,
 and any unavailable host-side check. Conversation authorization for a low-risk
 implementation also authorizes native GitHub per-PR auto-merge without a second
 approval, but only after exact-head required CI passes, current-head review is
-clean, and no actionable review threads remain. An explicit user stop or a
+clean, and no actionable review threads remain. Read all of those gates back
+immediately before requesting auto-merge. An explicit user stop or a
 repository-local stricter policy, or a high-risk, irreversible, permission,
 security, secret, release, or compatibility decision withholds that authority
 and requires escalation. This never authorizes AO project `autoMerge`.
