@@ -38,11 +38,20 @@ unowned PR work before creating its implementation branch or pull request.
 Immediately read the new session back and hand the task to that owner through
 the activity-state rules in the calibration AO runbook.
 
+For an existing PR, mark a draft ready, then restore its owning worker. If it
+has no owner, first prove every other writer quiesced, then claim it without
+takeover and read the assigned owner back before sending work. Owner absence
+alone does not make a ready PR unowned.
+
 If the sandbox disagrees with these results, classify the observation by its
 owner. A sandbox-only path, PID, or read-only failure is `indeterminate`; use
 host-authoritative service and AO health/readiness evidence before changing
-persistent host state. Do not call the repository continuation-proven until a
-real anchored review or CI correction has returned to its owning worker.
+persistent host state. Healthy core service and AO readback is `daemon ready`;
+an external integration or authentication-only doctor failure is `delivery
+degraded`; repeated authoritative core failure is `unavailable`. Only the last
+condition selects the unavailable fallback. Do not call the repository
+continuation-proven until a real anchored review or CI correction has returned
+to its owning worker.
 
 When continuation is not proven, new unowned PR work uses the isolated-worktree
 fallback. An existing AO-owned branch, worktree, or PR is preserved until its

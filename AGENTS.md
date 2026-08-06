@@ -42,7 +42,8 @@
 ## Safety And Delivery
 
 - Never recursively scan `/cephfs_data`. Resolve a concrete resource subtree
-  first and bound traversal, file types, result count, and concurrency.
+  first and bound traversal, file types, file or byte size, result count, and
+  concurrency.
 - Publication replacement, formal CephFS delivery, and deletion of old
   artifacts are explicit release actions. Stage and replace atomically.
 - For PR-bound work, read `docs/runbooks/ao-delivery.md`. It owns the detailed
