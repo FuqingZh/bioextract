@@ -10,7 +10,7 @@ from collections.abc import Generator, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TextIO
+from typing import BinaryIO, TextIO
 
 import polars as pl
 
@@ -608,11 +608,7 @@ def _open_text(path: Path, *, preferred_suffix: str) -> Generator[TextIO]:
                     f"Expected one {preferred_suffix} member in archive: {path}"
                 )
             with archive.open(names[0]) as member:
-                raw = (
-                    gzip.GzipFile(fileobj=member)
-                    if names[0].lower().endswith(".gz")
-                    else member
-                )
+                raw = _decode_gzip_member(member)
                 with io.TextIOWrapper(
                     raw, encoding="utf-8", errors="replace"
                 ) as handle:
@@ -634,11 +630,7 @@ def _open_text(path: Path, *, preferred_suffix: str) -> Generator[TextIO]:
             if raw is None:
                 raise ValueError(f"Cannot read archive member: {members[0].name}")
             with raw as member:
-                decoded = (
-                    gzip.GzipFile(fileobj=member)
-                    if members[0].name.lower().endswith(".gz")
-                    else member
-                )
+                decoded = _decode_gzip_member(member)
                 with io.TextIOWrapper(
                     decoded, encoding="utf-8", errors="replace"
                 ) as handle:
@@ -646,3 +638,9 @@ def _open_text(path: Path, *, preferred_suffix: str) -> Generator[TextIO]:
         return
     with path.open("rt", encoding="utf-8", errors="replace") as handle:
         yield handle
+
+
+def _decode_gzip_member(member: BinaryIO) -> BinaryIO:
+    magic = member.read(2)
+    member.seek(0)
+    return gzip.GzipFile(fileobj=member) if magic == b"\x1f\x8b" else member

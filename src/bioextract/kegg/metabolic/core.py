@@ -179,15 +179,18 @@ def from_metabolic_files(
     release_version: str | None = None,
 ) -> MetabolicSnapshot:
     values: dict[str, Any] = locals()
-    sources = {
-        role: _paths(values[role], entries=role.endswith("_entries"))
-        for role in (
-            *[f"{x}_list" for x in ENTRY_ROLES],
-            *[f"{x}_entries" for x in ENTRY_ROLES],
-            *RELATION_ROLES,
-        )
-        if values[role] is not None
-    }
+    sources: dict[str, tuple[Path, ...]] = {}
+    for role in (
+        *[f"{x}_list" for x in ENTRY_ROLES],
+        *[f"{x}_entries" for x in ENTRY_ROLES],
+        *RELATION_ROLES,
+    ):
+        if values[role] is None:
+            continue
+        paths = _paths(values[role], entries=role.endswith("_entries"))
+        if role.endswith("_entries") and not paths:
+            raise ValueError(f"KEGG metabolic entry role {role!r} must not be empty")
+        sources[role] = paths
     explicit_roles = set(sources)
     if source is None:
         if not sources:

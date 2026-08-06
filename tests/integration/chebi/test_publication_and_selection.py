@@ -212,6 +212,44 @@ $$$$
 
 
 @pytest.mark.parametrize("archive_kind", ["zip", "tar"])
+def test_obo_archive_detects_gzip_sdf_member_by_content(
+    tmp_path: Path,
+    archive_kind: str,
+) -> None:
+    file_sdf = tmp_path / "compressed-sdf"
+    with gzip.open(file_sdf, "wt", encoding="utf-8") as handle:
+        handle.write(
+            """water
+  bioextract
+
+  0  0  0  0  0  0            999 V2000
+M  END
+> <ChEBI ID>
+CHEBI:1
+
+$$$$
+"""
+        )
+    archive_path = tmp_path / f"content-detected.{archive_kind}"
+    if archive_kind == "zip":
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr("nested/chebi.obo", OBO)
+            archive.write(file_sdf, "nested/chebi.sdf")
+    else:
+        file_obo = tmp_path / "chebi.obo"
+        file_obo.write_text(OBO, encoding="utf-8")
+        with tarfile.open(archive_path, "w") as archive:
+            archive.add(file_obo, arcname="nested/chebi.obo")
+            archive.add(file_sdf, arcname="nested/chebi.sdf")
+
+    result = ChEBIDatabase.from_obo(archive_path).write_duckdb(
+        tmp_path / f"content-detected-{archive_kind}.duckdb"
+    )
+
+    assert result.row_counts["compound_structure"] == 1
+
+
+@pytest.mark.parametrize("archive_kind", ["zip", "tar"])
 def test_obo_archive_reads_gzip_ontology_member(
     tmp_path: Path,
     archive_kind: str,
