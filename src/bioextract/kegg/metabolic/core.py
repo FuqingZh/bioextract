@@ -314,12 +314,15 @@ def _inspect_release_archive(
         from .publication import extract_archive
 
         extract_archive(path, root)
-        discovered = discover_release_layout(root, skipped_roles=skipped_roles)
+        skipped = set(skipped_roles)
+        discovered = discover_release_layout(root, skipped_roles=skipped)
         required = (
             *[f"{family}_entries" for family in ENTRY_ROLES],
             *RELATION_ROLES,
         )
-        missing = [role for role in required if role not in discovered]
+        missing = [
+            role for role in required if role not in discovered and role not in skipped
+        ]
         if missing:
             raise ValueError(
                 f"Incomplete KEGG metabolic release archive; missing roles: {missing}"

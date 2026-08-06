@@ -6,9 +6,10 @@ import os
 
 
 def _bootstrap_duckdb() -> None:
+    process_id = str(os.getpid())
     if (
         os.environ.get("BIOEXTRACT_RUNTIME_BOOTSTRAP") != "1"
-        or os.environ.get("BIOEXTRACT_DUCKDB_BOOTSTRAPPED") == "1"
+        or os.environ.get("BIOEXTRACT_DUCKDB_BOOTSTRAPPED") == process_id
     ):
         return
     raw_limit = os.environ.get("BIOEXTRACT_TEST_THREADS", "4")
@@ -26,7 +27,7 @@ def _bootstrap_duckdb() -> None:
     import _duckdb
 
     _duckdb.set_default_connection(_duckdb.connect(config={"threads": str(limit)}))
-    os.environ["BIOEXTRACT_DUCKDB_BOOTSTRAPPED"] = "1"
+    os.environ["BIOEXTRACT_DUCKDB_BOOTSTRAPPED"] = process_id
 
 
 _bootstrap_duckdb()

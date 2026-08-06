@@ -154,6 +154,44 @@ def test_obo_input_container_is_detected_from_content(
         ).fetchone() == (2,)
 
 
+@pytest.mark.parametrize("archive_kind", ["zip", "tar"])
+def test_obo_archive_reads_gzip_sdf_supplement(
+    tmp_path: Path,
+    archive_kind: str,
+) -> None:
+    file_sdf = tmp_path / "chebi.sdf.gz"
+    with gzip.open(file_sdf, "wt", encoding="utf-8") as handle:
+        handle.write(
+            """water
+  bioextract
+
+  0  0  0  0  0  0            999 V2000
+M  END
+> <ChEBI ID>
+CHEBI:1
+
+$$$$
+"""
+        )
+    archive_path = tmp_path / f"chebi.{archive_kind}"
+    if archive_kind == "zip":
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr("nested/chebi.obo", OBO)
+            archive.write(file_sdf, "nested/chebi.sdf.gz")
+    else:
+        file_obo = tmp_path / "chebi.obo"
+        file_obo.write_text(OBO, encoding="utf-8")
+        with tarfile.open(archive_path, "w") as archive:
+            archive.add(file_obo, arcname="nested/chebi.obo")
+            archive.add(file_sdf, arcname="nested/chebi.sdf.gz")
+
+    result = ChEBIDatabase.from_obo(archive_path).write_duckdb(
+        tmp_path / f"chebi-{archive_kind}.duckdb"
+    )
+
+    assert result.row_counts["compound_structure"] == 1
+
+
 def test_chemont_relations_share_container_but_not_domain_tables(
     tmp_path: Path,
 ) -> None:

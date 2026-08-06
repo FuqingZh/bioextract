@@ -664,7 +664,11 @@ def _archive_has_exactly_one(path: Path, *, suffix: str) -> bool:
         return False
     for member in names:
         _validate_archive_member(member)
-    matches = [member for member in names if member.lower().endswith(suffix)]
+    matches = [
+        member
+        for member in names
+        if member.lower().removesuffix(".gz").endswith(suffix)
+    ]
     if len(matches) > 1:
         raise ValueError(
             f"ChEBI source archive must contain at most one {suffix} member; "

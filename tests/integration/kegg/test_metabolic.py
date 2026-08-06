@@ -523,6 +523,34 @@ def test_release_source_accepts_explicit_relation_overlay(tmp_path: Path) -> Non
     assert source_paths["reaction_ko:0"] == str(override.resolve())
 
 
+def test_release_archive_accepts_explicit_relation_overlay(tmp_path: Path) -> None:
+    release = metabolic_release(tmp_path)
+    override = tmp_path / "override-reaction-ko.tsv"
+    override.write_bytes((release / "raw" / "reaction_ko.tsv").read_bytes())
+    (release / "raw" / "reaction_ko.tsv").unlink()
+    archive = tmp_path / "release.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        for source in sorted(release.rglob("*")):
+            if source.is_file():
+                output.write(source, source.relative_to(release))
+
+    database = KEGGDatabase.from_metabolic_files(archive, reaction_ko=override)
+    snapshot = database.snapshot.metabolic
+    assert snapshot is not None
+    assert snapshot.complete_release is True
+    assert snapshot.sources["reaction_ko"] == (override.resolve(),)
+
+    path = tmp_path / "archive-overlay.duckdb"
+    database.write_duckdb(path)
+    with duckdb.connect(str(path), read_only=True) as connection:
+        source_paths = dict(
+            connection.execute(
+                "SELECT logical_name, display_path FROM _bioextract.source_file"
+            ).fetchall()
+        )
+    assert source_paths["reaction_ko:0"] == str(override.resolve())
+
+
 def test_relation_only_inputs_preserve_rows_and_enable_namespace(
     tmp_path: Path,
 ) -> None:

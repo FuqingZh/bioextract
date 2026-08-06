@@ -601,24 +601,30 @@ def _open_text(path: Path, *, preferred_suffix: str) -> Generator[TextIO]:
                 info.filename
                 for info in archive.infolist()
                 if not info.is_dir()
-                and info.filename.lower().endswith(preferred_suffix)
+                and info.filename.lower().removesuffix(".gz").endswith(preferred_suffix)
             ]
             if len(names) != 1:
                 raise ValueError(
                     f"Expected one {preferred_suffix} member in archive: {path}"
                 )
-            with (
-                archive.open(names[0]) as raw,
-                io.TextIOWrapper(raw, encoding="utf-8", errors="replace") as handle,
-            ):
-                yield handle
+            with archive.open(names[0]) as member:
+                raw = (
+                    gzip.GzipFile(fileobj=member)
+                    if names[0].lower().endswith(".gz")
+                    else member
+                )
+                with io.TextIOWrapper(
+                    raw, encoding="utf-8", errors="replace"
+                ) as handle:
+                    yield handle
         return
     if tarfile.is_tarfile(path):
         with tarfile.open(path, mode="r:*") as archive:
             members = [
                 member
                 for member in archive.getmembers()
-                if member.isfile() and member.name.lower().endswith(preferred_suffix)
+                if member.isfile()
+                and member.name.lower().removesuffix(".gz").endswith(preferred_suffix)
             ]
             if len(members) != 1:
                 raise ValueError(
@@ -627,11 +633,16 @@ def _open_text(path: Path, *, preferred_suffix: str) -> Generator[TextIO]:
             raw = archive.extractfile(members[0])
             if raw is None:
                 raise ValueError(f"Cannot read archive member: {members[0].name}")
-            with (
-                raw,
-                io.TextIOWrapper(raw, encoding="utf-8", errors="replace") as handle,
-            ):
-                yield handle
+            with raw as member:
+                decoded = (
+                    gzip.GzipFile(fileobj=member)
+                    if members[0].name.lower().endswith(".gz")
+                    else member
+                )
+                with io.TextIOWrapper(
+                    decoded, encoding="utf-8", errors="replace"
+                ) as handle:
+                    yield handle
         return
     with path.open("rt", encoding="utf-8", errors="replace") as handle:
         yield handle

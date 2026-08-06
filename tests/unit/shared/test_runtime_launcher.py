@@ -69,3 +69,50 @@ print(json.dumps({{
     assert payload["env"] == dict.fromkeys(_THREAD_ENV_VARS, "1")
     assert payload["polars"] == 1
     assert all(count <= 1 for count in payload["pools"])
+
+
+def test_launcher_bootstraps_duckdb_in_child_python_process() -> None:
+    child_probe = """
+import json
+import os
+
+import duckdb
+
+print(json.dumps({
+    "marker": os.environ["BIOEXTRACT_DUCKDB_BOOTSTRAPPED"],
+    "pid": os.getpid(),
+    "threads": duckdb.sql("SELECT current_setting('threads')").fetchone()[0],
+}))
+"""
+    parent_probe = f"""
+import subprocess
+import sys
+
+subprocess.run([sys.executable, "-c", {child_probe!r}], check=True)
+"""
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(_ROOT / "src")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_ROOT / "scripts/run_with_thread_budget.py"),
+            "--default",
+            "1",
+            "--",
+            sys.executable,
+            "-c",
+            parent_probe,
+        ],
+        cwd=_ROOT,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload: dict[str, Any] = json.loads(result.stdout)
+
+    assert payload == {
+        "marker": str(payload["pid"]),
+        "pid": payload["pid"],
+        "threads": 1,
+    }
