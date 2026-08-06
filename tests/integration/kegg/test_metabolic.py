@@ -582,18 +582,18 @@ def test_nested_release_archive_preserves_lists_when_required_roles_are_overlaid
         assert connection.execute("SELECT count(*) FROM compound").fetchone() == (2,)
 
 
-@pytest.mark.parametrize("empty_overlay", [[], "directory"])
+@pytest.mark.parametrize("use_directory", [False, True])
 def test_complete_release_rejects_empty_entry_overlay(
     tmp_path: Path,
-    empty_overlay: list[Path] | str,
+    use_directory: bool,
 ) -> None:
     release = metabolic_release(tmp_path)
     overlay: list[Path] | Path
-    if empty_overlay == "directory":
+    if use_directory:
         overlay = tmp_path / "empty-entries"
         overlay.mkdir()
     else:
-        overlay = empty_overlay
+        overlay = []
 
     with pytest.raises(
         ValueError, match="entry role 'reaction_entries' must not be empty"

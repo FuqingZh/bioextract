@@ -10,7 +10,7 @@ from collections.abc import Generator, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import BinaryIO, TextIO
+from typing import IO, TextIO, cast
 
 import polars as pl
 
@@ -640,7 +640,11 @@ def _open_text(path: Path, *, preferred_suffix: str) -> Generator[TextIO]:
         yield handle
 
 
-def _decode_gzip_member(member: BinaryIO) -> BinaryIO:
+def _decode_gzip_member(member: IO[bytes]) -> IO[bytes]:
     magic = member.read(2)
     member.seek(0)
-    return gzip.GzipFile(fileobj=member) if magic == b"\x1f\x8b" else member
+    return (
+        cast(IO[bytes], gzip.GzipFile(fileobj=member))
+        if magic == b"\x1f\x8b"
+        else member
+    )
