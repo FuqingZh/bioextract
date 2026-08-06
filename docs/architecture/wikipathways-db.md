@@ -97,10 +97,9 @@ source provenance needed to create a new canonical publication.
 Grouped selections mirror the STRINGdb and Reactome style:
 
 ```python
-df_mapping = (
-    db.select_groups({"A": ["2687"], "B": ["435", "MISSING"]})
-    .extract_mapping()
-)
+df_mapping = db.select_groups(
+    {"A": ["2687"], "B": ["435", "MISSING"]}
+).extract_mapping()
 ```
 
 ## Source Resolution And Dataset Identity

@@ -112,9 +112,7 @@ Build one query-ready database from a complete extracted release or archive:
 ```python
 from bioextract import RheaDatabase
 
-result = RheaDatabase.from_files("rhea-release.zip").write_duckdb(
-    "out/rhea.duckdb"
-)
+result = RheaDatabase.from_files("rhea-release.zip").write_duckdb("out/rhea.duckdb")
 print(result.tables)
 ```
 
@@ -328,9 +326,7 @@ proteins = db.select_ids(
     taxon_ids=["9606"],
 ).extract_proteins()
 with db.connect() as connection:
-    relation_count = connection.execute(
-        "SELECT count(*) FROM protein"
-    ).fetchone()[0]
+    relation_count = connection.execute("SELECT count(*) FROM protein").fetchone()[0]
 ```
 
 Constructor arguments declare source roles, while headers and record grammar

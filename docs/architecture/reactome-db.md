@@ -83,11 +83,7 @@ db = ReactomeDatabase.from_files(
     relations="ReactomePathwaysRelation.txt",
 )
 
-selection = (
-    db
-    .with_species("Homo sapiens")
-    .select_ids(["P04637", "Q9Y243", "MISSING"])
-)
+selection = db.with_species("Homo sapiens").select_ids(["P04637", "Q9Y243", "MISSING"])
 
 df_mapping = selection.extract_mapping()
 df_unmapped = selection.extract_unmatched_ids()

@@ -82,6 +82,7 @@ GoNamespace = Literal[
     "molecular_function",
 ]
 
+
 def select_terms(
     self,
     *,
@@ -90,8 +91,7 @@ def select_terms(
     subset_id: str | GoSubsetId | None = None,
     include_obsolete: bool = False,
     resolve_alt_ids: bool = True,
-) -> pl.DataFrame:
-    ...
+) -> pl.DataFrame: ...
 ```
 
 The public `namespace` type should be a `Literal` so common IDEs expose the
@@ -109,8 +109,7 @@ db.select_terms(subset_id="goslim_generic")
 Add `GODatabase.list_subsets()`:
 
 ```python
-def list_subsets(self) -> pl.DataFrame:
-    ...
+def list_subsets(self) -> pl.DataFrame: ...
 ```
 
 Return columns:
