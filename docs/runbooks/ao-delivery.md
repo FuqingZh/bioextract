@@ -33,6 +33,11 @@ ao project get bioextract --json
 ao session ls -p bioextract --json
 ```
 
+When those gates hold, start a task-specific owning worker for genuinely new,
+unowned PR work before creating its implementation branch or pull request.
+Immediately read the new session back and hand the task to that owner through
+the activity-state rules in the calibration AO runbook.
+
 If the sandbox disagrees with these results, classify the observation by its
 owner. A sandbox-only path, PID, or read-only failure is `indeterminate`; use
 host-authoritative service and AO health/readiness evidence before changing
