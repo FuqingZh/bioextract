@@ -563,7 +563,20 @@ def test_nested_release_archive_preserves_lists_when_required_roles_are_overlaid
                 output.write(source, Path("wrapper") / source.relative_to(release))
 
     path = tmp_path / "fully-overlaid.duckdb"
-    KEGGDatabase.from_metabolic_files(archive, **files).write_duckdb(path)
+    KEGGDatabase.from_metabolic_files(
+        archive,
+        compound_entries=files["compound_entries"],
+        reaction_entries=files["reaction_entries"],
+        enzyme_entries=files["enzyme_entries"],
+        module_entries=files["module_entries"],
+        compound_pubchem=files["compound_pubchem"],
+        compound_reaction=files["compound_reaction"],
+        reaction_enzyme=files["reaction_enzyme"],
+        reaction_ko=files["reaction_ko"],
+        reaction_module=files["reaction_module"],
+        reaction_pathway=files["reaction_pathway"],
+        module_pathway=files["module_pathway"],
+    ).write_duckdb(path)
 
     with duckdb.connect(str(path), read_only=True) as connection:
         assert connection.execute("SELECT count(*) FROM compound").fetchone() == (2,)
