@@ -121,6 +121,15 @@ def test_obo_directory_rejects_ambiguous_candidates(tmp_path: Path) -> None:
         ChEBIDatabase.from_obo(source)
 
 
+def test_obo_directory_validates_discovered_candidate(tmp_path: Path) -> None:
+    source = tmp_path / "invalid"
+    source.mkdir()
+    (source / "chebi.obo").write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"No \[Term\] stanza"):
+        ChEBIDatabase.from_obo(source)
+
+
 @pytest.mark.parametrize("container", ["plain", "gzip", "zip", "tar"])
 def test_obo_input_container_is_detected_from_content(
     tmp_path: Path,

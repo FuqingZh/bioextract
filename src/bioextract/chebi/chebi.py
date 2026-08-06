@@ -193,6 +193,7 @@ class ChEBIDatabase:
         source_path = _require_file_or_directory(source)
         if source_path.is_dir():
             file_obo = _discover_ontology_file(source_path)
+            _inspect_ontology_source(file_obo)
             file_sdf = (
                 _optional_file(sdf)
                 if sdf is not None
