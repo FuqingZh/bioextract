@@ -58,8 +58,9 @@ when a domain does not yet have a dedicated architecture document.
 The active
 [Runtime And Constructor Convergence Plan](implementation-plans/20260805-v1.0-runtime-and-constructor-convergence.md)
 defines the repository validation thread-budget boundary, the separate
-host/AO resource-control ownership, the common `source` overlay contract, and
-the dependency-ordered Rhea, KEGG metabolic, and ChEBI constructor migrations.
+host/AO resource-control ownership, gzip FASTA error normalization, the common
+`source` overlay contract, and the dependency-ordered Rhea, KEGG metabolic,
+and ChEBI constructor migrations.
 
 The active
 [Column Lineage And Public Schema Convergence Plan](implementation-plans/20260804-v1.0-column-lineage-public-schema-convergence.md)
