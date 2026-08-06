@@ -601,6 +601,18 @@ def test_complete_release_rejects_empty_entry_overlay(
         KEGGDatabase.from_metabolic_files(release, reaction_entries=overlay)
 
 
+def test_complete_release_without_optional_lists_publishes(tmp_path: Path) -> None:
+    release = metabolic_release(tmp_path)
+    for file_list in release.glob("raw/*/list.tsv"):
+        file_list.unlink()
+
+    path = tmp_path / "without-lists.duckdb"
+    KEGGDatabase.from_metabolic_files(release).write_duckdb(path)
+
+    with duckdb.connect(str(path), read_only=True) as connection:
+        assert connection.execute("SELECT count(*) FROM compound").fetchone() == (2,)
+
+
 def test_relation_only_inputs_preserve_rows_and_enable_namespace(
     tmp_path: Path,
 ) -> None:

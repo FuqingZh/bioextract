@@ -593,7 +593,10 @@ def publish(
         ids, equation_pairs, issues = _spool_entries(effective, spool)
         if effective.complete_release:
             for family in ENTRY_ROLES:
-                listed = _read_list_ids(effective.sources.get(f"{family}_list", ()))
+                list_role = f"{family}_list"
+                if list_role not in effective.sources:
+                    continue
+                listed = _read_list_ids(effective.sources[list_role])
                 if listed != ids[family]:
                     raise ValueError(f"KEGG {family} list/entry mismatch")
         issues.extend(_spool_relations(effective, spool, ids, equation_pairs))

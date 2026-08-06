@@ -140,6 +140,23 @@ def test_obo_directory_rejects_explicit_sdf_role_reuse(tmp_path: Path) -> None:
         ChEBIDatabase.from_obo(source, sdf=file_obo)
 
 
+def test_obo_directory_excludes_explicit_colocated_chemont(tmp_path: Path) -> None:
+    source = tmp_path / "ontologies"
+    source.mkdir()
+    file_chebi = source / "chebi.obo"
+    file_chemont = source / "chemont.obo"
+    file_chebi.write_text(OBO, encoding="utf-8")
+    file_chemont.write_text(OBO.replace("CHEBI:", "CHEMONT:"), encoding="utf-8")
+
+    result = ChEBIDatabase.from_obo(
+        source,
+        chemont_obo=file_chemont,
+    ).write_duckdb(tmp_path / "colocated.duckdb")
+
+    assert "compound" in result.tables
+    assert "chemont_term" in result.tables
+
+
 @pytest.mark.parametrize("container", ["plain", "gzip", "zip", "tar"])
 def test_obo_input_container_is_detected_from_content(
     tmp_path: Path,

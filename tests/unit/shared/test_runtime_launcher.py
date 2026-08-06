@@ -117,3 +117,48 @@ subprocess.run([sys.executable, "-c", {child_probe!r}], check=True)
         "pid": payload["pid"],
         "threads": 1,
     }
+
+
+def test_launcher_rebootstraps_duckdb_after_same_pid_exec() -> None:
+    probe = """
+import json
+import os
+
+import duckdb
+
+print(json.dumps({
+    "marker": os.environ["BIOEXTRACT_DUCKDB_BOOTSTRAPPED"],
+    "pid": os.getpid(),
+    "threads": duckdb.sql("SELECT current_setting('threads')").fetchone()[0],
+}))
+"""
+    environment = os.environ.copy()
+    environment.pop("BIOEXTRACT_TEST_THREADS", None)
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str(_ROOT / "scripts"), str(_ROOT / "src"))
+    )
+    environment["BIOEXTRACT_RUNTIME_BOOTSTRAP"] = "1"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_ROOT / "scripts/run_with_thread_budget.py"),
+            "--default",
+            "1",
+            "--",
+            sys.executable,
+            "-c",
+            probe,
+        ],
+        cwd=_ROOT,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload: dict[str, Any] = json.loads(result.stdout)
+
+    assert payload == {
+        "marker": str(payload["pid"]),
+        "pid": payload["pid"],
+        "threads": 1,
+    }

@@ -190,9 +190,13 @@ class ChEBIDatabase:
             ...     print(error.filename)
             missing-chebi.obo
         """
+        chemont = _optional_file(chemont_obo)
         source_path = _require_file_or_directory(source)
         if source_path.is_dir():
-            file_obo = _discover_ontology_file(source_path)
+            file_obo = _discover_ontology_file(
+                source_path,
+                excluded=(() if chemont is None else (chemont,)),
+            )
             _inspect_ontology_source(file_obo)
             file_sdf = (
                 _optional_file(sdf)
@@ -212,7 +216,6 @@ class ChEBIDatabase:
                 )
             else:
                 file_sdf = None
-        chemont = _optional_file(chemont_obo)
         if sdf is not None and file_sdf is not None and file_obo.samefile(file_sdf):
             raise ValueError(
                 "ChEBI OBO and SDF roles must refer to different physical files"
@@ -626,12 +629,18 @@ def _discover_table_files(
     return discovered
 
 
-def _discover_ontology_file(directory: Path) -> Path:
+def _discover_ontology_file(
+    directory: Path,
+    *,
+    excluded: Iterable[Path] = (),
+) -> Path:
+    excluded_paths = tuple(excluded)
     matches = sorted(
         candidate
         for candidate in directory.rglob("*")
         if candidate.is_file()
         and candidate.name.lower().removesuffix(".gz").endswith(".obo")
+        and not any(candidate.samefile(path) for path in excluded_paths)
     )
     if len(matches) != 1:
         raise ValueError(

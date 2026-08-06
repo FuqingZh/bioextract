@@ -48,6 +48,7 @@ def main() -> int:
             paths.insert(0, scripts_dir)
         os.environ["PYTHONPATH"] = os.pathsep.join(paths)
         os.environ["BIOEXTRACT_RUNTIME_BOOTSTRAP"] = "1"
+        os.environ.pop("BIOEXTRACT_DUCKDB_BOOTSTRAPPED", None)
     os.execvpe(args.command[0], args.command, os.environ)
     return 0
 
