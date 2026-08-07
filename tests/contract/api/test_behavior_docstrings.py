@@ -69,6 +69,7 @@ BEHAVIOR_CLASSES = (
 
 BEHAVIOR_FUNCTIONS = (("kegg.brite.build_tidy_frames", build_kegg_tidy_frames),)
 
+
 class _FunctionDescriptor(Protocol):
     __func__: FunctionType
 
