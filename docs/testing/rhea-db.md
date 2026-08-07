@@ -5,9 +5,10 @@ Status: current
 
 Changes to `RheaDatabase` must verify:
 
-1. `from_files()` has exactly 11 optional keyword-only roles, rejects an empty
-   profile and duplicate physical files across roles, requires RDF and
-   directions for any reaction role, and accepts independent compound and
+1. `from_files(source=None, ...)` has one positional-or-keyword source plus 11
+   optional keyword-only roles; it rejects an empty explicit profile and
+   duplicate physical files across roles, requires RDF and directions for any
+   reaction role without a source, and accepts independent compound and
    cross-reference roles plus mixed partial profiles.
 2. gzip/plain RDF detection is content-based.
 3. RDF direction, participants, coefficients, locations, compounds, symbolic
@@ -61,3 +62,7 @@ open it through `RheaDatabase.from_duckdb()`, compare
 ChEBI, UniProt, EC, participant, and unmatched-ID query.
 The release smoke must also directly join participant `chebi_id` values to a
 ChEBI `compound.chebi_id` column without casts or prefix concatenation.
+
+The source-backed constructor must also verify directory and archive discovery,
+explicit scalar-role replacement, missing overridden and unoverridden roles,
+complete final inventory, physical-file uniqueness, and final provenance.
