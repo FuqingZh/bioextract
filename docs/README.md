@@ -56,6 +56,13 @@ when a domain does not yet have a dedicated architecture document.
 ## Plans And History
 
 The active
+[Runtime And Constructor Convergence Plan](implementation-plans/20260805-v1.0-runtime-and-constructor-convergence.md)
+defines the repository validation thread-budget boundary, the separate
+host/AO resource-control ownership, gzip FASTA error normalization, the common
+`source` overlay contract, and the dependency-ordered Rhea, KEGG metabolic,
+and ChEBI constructor migrations.
+
+The active
 [Column Lineage And Public Schema Convergence Plan](implementation-plans/20260804-v1.0-column-lineage-public-schema-convergence.md)
 defines the official-header versus derived-column ownership rule, shared
 `snake_case` selection protocol, `from_*` lifecycle naming, resource-specific
@@ -87,10 +94,11 @@ records the top-level database import contract, shared unique-ID resolution and
 group fan-out model, internal behavior-type boundary, and unchanged
 publication schemas.
 
-The completed
-[Constructor Source Convergence Plan](implementation-plans/20260731-v1.0-constructor-source-convergence.md)
-records the implemented three-phase constructor naming contract and the
-eggNOG, STRING, WikiPathways, and Rhea delivery boundaries.
+The superseded, completed
+[Constructor Source Convergence Plan](archive/20260731-v1.0-constructor-source-convergence.md)
+records the implemented eggNOG, STRING, WikiPathways, and first Rhea
+constructor delivery boundaries. The active runtime and constructor plan
+replaces its frozen Rhea, KEGG metabolic, and ChEBI follow-on decisions.
 
 The completed [UniProtKB Domain Access Plan](implementation-plans/20260730-uniprot-knowledgebase-domain-access.md)
 records the Swiss-Prot DuckDB boundary and version-contract convergence.
@@ -110,7 +118,8 @@ The completed
 records the dependency-ordered public-output, naming, provenance,
 limits-removal, and resource-API migration work.
 
-Completed plans with reusable design rationale are retained under
-[`archive/`](archive/). Superseded GO term-selection and UniProt subcellular
-location plans point to their current architecture authorities. Historical PR
-descriptions are not project documentation; Git history remains their archive.
+Superseded plans with reusable design rationale are retained under
+[`archive/`](archive/). The archived constructor, GO term-selection, and
+UniProt subcellular-location plans point to their current or follow-up
+authorities. Historical PR descriptions are not project documentation; Git
+history remains their archive.
