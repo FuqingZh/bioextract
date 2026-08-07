@@ -54,13 +54,13 @@ def test_removed_legacy_writer_apis_are_not_exported() -> None:
     assert not hasattr(eggnog.EggNOGDatabase, "persist")
     assert not hasattr(eggnog.EggNOGDatabase, "unpack")
     assert not hasattr(kegg.KEGGDatabase, "from_metabolic_release")
+    assert not hasattr(chebi.ChEBIDatabase, "from_release")
     assert not hasattr(kegg.KEGGDatabase, "write_parquet")
     assert not hasattr(interpro.InterProDatabase, "write_parquet")
 
 
 def test_resource_factories_do_not_expose_limits() -> None:
     factories = (
-        chebi.ChEBIDatabase.from_release,
         go.GODatabase.from_obo,
         kegg.KEGGDatabase.from_brite_json,
         kegg.KEGGDatabase.from_metabolic_files,
@@ -81,8 +81,8 @@ def test_resource_factories_do_not_expose_limits() -> None:
 
 def test_resource_factory_parameter_names_follow_domain_roles() -> None:
     expected = {
-        chebi.ChEBIDatabase.from_release: ("source", "chemont_obo"),
         chebi.ChEBIDatabase.from_table_files: (
+            "source",
             "compounds",
             "names",
             "relations",
@@ -92,7 +92,7 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "chemical_data",
             "chemont_obo",
         ),
-        chebi.ChEBIDatabase.from_obo: ("path", "sdf", "chemont_obo"),
+        chebi.ChEBIDatabase.from_obo: ("source", "sdf", "chemont_obo"),
         chebi.ChEBIDatabase.from_duckdb: ("path",),
         go.GODatabase.from_obo: ("path",),
         go.GODatabase.from_duckdb: ("path",),

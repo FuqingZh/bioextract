@@ -71,8 +71,8 @@ ChemOnt remains a separate `chemont_*` graph in the same container:
 ```python
 from bioextract import ChEBIDatabase
 
-result = ChEBIDatabase.from_release(
-    "chebi/database/2026-07-07/raw",
+result = ChEBIDatabase.from_obo(
+    "chebi/database/2026-07-07/raw/chebi.obo",
     chemont_obo="ChemOnt_2_1.obo.zip",
 ).write_duckdb("out/chebi.duckdb")
 

@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import gzip
-import io
 import os
 import shutil
+import stat
 import tarfile
 import tempfile
 import zipfile
-from collections.abc import Callable, Generator, Iterable, Iterator, Mapping
+from collections.abc import Generator, Iterable, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import BinaryIO, Literal, TextIO, cast
+from typing import Literal, TextIO
 
 import duckdb
 import polars as pl
@@ -61,6 +61,9 @@ _TABLE_ROLES = {
 class _ChEBISnapshot:
     table_sources: Mapping[str, Path] = field(default_factory=dict[str, Path])
     release_source: Path | None = None
+    archive_table_members: Mapping[str, str] = field(default_factory=dict[str, str])
+    archive_obo_member: str | None = None
+    archive_sdf_member: str | None = None
     file_obo: Path | None = None
     file_sdf: Path | None = None
     file_chemont_obo: Path | None = None
@@ -86,56 +89,11 @@ class ChEBIDatabase:
     _publication: _ChEBIPublication | None = field(default=None, repr=False)
 
     @classmethod
-    def from_release(
-        cls,
-        source: os.PathLike[str] | str,
-        *,
-        chemont_obo: os.PathLike[str] | str | None = None,
-    ) -> ChEBIDatabase:
-        """Open a ChEBI table release directory or archive.
-
-        Args:
-            source: Extracted release directory, zip archive, or tar archive.
-            chemont_obo: Optional local ChemOnt OBO path or archive.
-
-        Examples:
-            A missing release path is rejected immediately:
-
-            >>> try:
-            ...     ChEBIDatabase.from_release("missing-chebi-release")
-            ... except FileNotFoundError as error:
-            ...     print(error.filename)
-            missing-chebi-release
-        """
-        path = _require_file_or_directory(source)
-        chemont = _optional_file(chemont_obo)
-        if path.is_dir():
-            table_sources = _discover_table_files(path)
-            file_obo = _discover_named_file(path, "chebi.obo")
-            file_sdf = _discover_named_file(path, "chebi.sdf")
-            if file_obo is None:
-                _require_compounds(table_sources)
-            return cls(
-                snapshot=_ChEBISnapshot(
-                    table_sources=table_sources,
-                    file_obo=file_obo,
-                    file_sdf=file_sdf,
-                    file_chemont_obo=chemont,
-                )
-            )
-        _inspect_release_archive(path)
-        return cls(
-            snapshot=_ChEBISnapshot(
-                release_source=path,
-                file_chemont_obo=chemont,
-            )
-        )
-
-    @classmethod
     def from_table_files(
         cls,
+        source: os.PathLike[str] | str | None = None,
         *,
-        compounds: os.PathLike[str] | str,
+        compounds: os.PathLike[str] | str | None = None,
         names: os.PathLike[str] | str | None = None,
         relations: os.PathLike[str] | str | None = None,
         secondary_ids: os.PathLike[str] | str | None = None,
@@ -146,19 +104,27 @@ class ChEBIDatabase:
     ) -> ChEBIDatabase:
         """Open explicit ChEBI table files for a partial or complete build.
 
-        Each parameter names the logical role of an official ChEBI file.
-        Plain and gzip-compressed TSV inputs are detected by content.
+        ``source`` may be a table-release directory, zip archive, or tar
+        archive. Explicit non-``None`` roles replace discovered roles; without
+        a source, ``compounds`` remains the required primary role. OBO files
+        are never selected by this representation-specific constructor.
 
         Examples:
-            Missing required compounds input fails at construction:
+            Replace one discovered table role while retaining the source
+            profile:
+
+            >>> db = ChEBIDatabase.from_table_files(  # doctest: +SKIP
+            ...     "chebi-release",
+            ...     names="overrides/names.tsv",
+            ... )
+
+            Missing the required primary table fails before publication:
 
             >>> try:
-            ...     ChEBIDatabase.from_table_files(
-            ...         compounds="missing-compounds.tsv"
-            ...     )
-            ... except FileNotFoundError as error:
-            ...     print(error.filename)
-            missing-compounds.tsv
+            ...     ChEBIDatabase.from_table_files()
+            ... except ValueError as error:
+            ...     print(error)
+            ChEBI release does not contain compounds.tsv
         """
         values = {
             "compound": compounds,
@@ -169,29 +135,84 @@ class ChEBIDatabase:
             "structure": structures,
             "chemical_data": chemical_data,
         }
+        explicit_sources = {
+            table_name: _require_file(path)
+            for table_name, path in values.items()
+            if path is not None
+        }
+        chemont = _optional_file(chemont_obo)
+        _validate_physical_inventory(
+            {
+                **explicit_sources,
+                **({"chemont_obo": chemont} if chemont is not None else {}),
+            }
+        )
+        if source is None:
+            _require_compounds(explicit_sources)
+            return cls(
+                snapshot=_ChEBISnapshot(
+                    table_sources=explicit_sources,
+                    file_chemont_obo=chemont,
+                )
+            )
+
+        source_path = _require_file_or_directory(source)
+        if source_path.is_dir():
+            discovered = _discover_table_files(
+                source_path,
+                skipped_roles=set(explicit_sources),
+            )
+            table_sources = {**discovered, **explicit_sources}
+            _require_compounds(table_sources)
+            _validate_physical_inventory(
+                {
+                    **table_sources,
+                    **({"chemont_obo": chemont} if chemont is not None else {}),
+                }
+            )
+            return cls(
+                snapshot=_ChEBISnapshot(
+                    table_sources=table_sources,
+                    file_chemont_obo=chemont,
+                )
+            )
+
+        archive_members = _inspect_table_archive(
+            source_path,
+            skipped_roles=set(explicit_sources),
+        )
+        if "compound" not in archive_members and "compound" not in explicit_sources:
+            raise ValueError("ChEBI release does not contain compounds.tsv")
+        _validate_physical_inventory(
+            {
+                "release_archive": source_path,
+                **explicit_sources,
+                **({"chemont_obo": chemont} if chemont is not None else {}),
+            }
+        )
         return cls(
             snapshot=_ChEBISnapshot(
-                table_sources={
-                    table_name: _require_file(path)
-                    for table_name, path in values.items()
-                    if path is not None
-                },
-                file_chemont_obo=_optional_file(chemont_obo),
+                table_sources=explicit_sources,
+                release_source=source_path,
+                archive_table_members=archive_members,
+                file_chemont_obo=chemont,
             )
         )
 
     @classmethod
     def from_obo(
         cls,
-        path: os.PathLike[str] | str,
+        source: os.PathLike[str] | str,
         *,
         sdf: os.PathLike[str] | str | None = None,
         chemont_obo: os.PathLike[str] | str | None = None,
     ) -> ChEBIDatabase:
         """Open ChEBI OBO and optional ChemOnt OBO input.
 
-        Ordinary files, gzip streams, zip archives, and tar archives are
-        recognized from their content; compression suffixes are not required.
+        ``source`` may be an exact OBO file, a directory containing exactly one
+        OBO candidate, or an archive containing exactly one OBO member. Only
+        directory and archive sources discover a matching SDF supplement; an
+        exact file requires an explicit ``sdf``.
 
         Examples:
             A missing ontology input fails at construction:
@@ -202,15 +223,86 @@ class ChEBIDatabase:
             ...     print(error.filename)
             missing-chebi.obo
         """
-        source_path = _require_file(path)
-        _inspect_ontology_source(source_path)
         chemont = _optional_file(chemont_obo)
+        source_path = _require_file_or_directory(source)
+        explicit_sdf = _optional_file(sdf)
+        if source_path.is_dir():
+            file_obo = _discover_ontology_file(
+                source_path,
+                excluded=(() if chemont is None else (chemont,)),
+            )
+            file_sdf = (
+                explicit_sdf
+                if explicit_sdf is not None
+                else _discover_supplement_file(source_path, suffix=".sdf")
+            )
+            _validate_physical_inventory(
+                {
+                    "chebi_obo": file_obo,
+                    **({"chebi_sdf": file_sdf} if file_sdf is not None else {}),
+                    **({"chemont_obo": chemont} if chemont is not None else {}),
+                }
+            )
+            _inspect_ontology_source(file_obo)
+            if file_sdf is not None:
+                _inspect_sdf_source(file_sdf)
+            return cls(
+                snapshot=_ChEBISnapshot(
+                    file_obo=file_obo,
+                    file_sdf=file_sdf,
+                    file_chemont_obo=chemont,
+                )
+            )
+
+        if _is_archive(source_path):
+            archive_members = _inspect_ontology_archive(
+                source_path,
+                discover_sdf=explicit_sdf is None,
+            )
+            obo_member = archive_members["obo"]
+            sdf_member = archive_members.get("sdf")
+            _validate_physical_inventory(
+                {
+                    "release_archive": source_path,
+                    **({"chebi_sdf": explicit_sdf} if explicit_sdf is not None else {}),
+                    **({"chemont_obo": chemont} if chemont is not None else {}),
+                }
+            )
+            _inspect_archive_member(source_path, obo_member, suffix=".obo")
+            if sdf_member is not None:
+                _inspect_archive_member(source_path, sdf_member, suffix=".sdf")
+            if explicit_sdf is not None:
+                _inspect_sdf_source(explicit_sdf)
+            if chemont is not None:
+                _inspect_ontology_source(chemont)
+            return cls(
+                snapshot=_ChEBISnapshot(
+                    release_source=source_path,
+                    archive_obo_member=obo_member,
+                    archive_sdf_member=(
+                        None if explicit_sdf is not None else sdf_member
+                    ),
+                    file_sdf=explicit_sdf,
+                    file_chemont_obo=chemont,
+                )
+            )
+
+        _validate_physical_inventory(
+            {
+                "chebi_obo": source_path,
+                **({"chebi_sdf": explicit_sdf} if explicit_sdf is not None else {}),
+                **({"chemont_obo": chemont} if chemont is not None else {}),
+            }
+        )
+        _inspect_ontology_source(source_path)
+        if explicit_sdf is not None:
+            _inspect_sdf_source(explicit_sdf)
         if chemont is not None:
             _inspect_ontology_source(chemont)
         return cls(
             snapshot=_ChEBISnapshot(
                 file_obo=source_path,
-                file_sdf=_optional_file(sdf),
+                file_sdf=explicit_sdf,
                 file_chemont_obo=chemont,
             )
         )
@@ -342,26 +434,22 @@ class ChEBIDatabase:
                 "construct a handle from official source files"
             )
 
-        with _prepared_table_sources(self.snapshot) as (
+        with _prepared_sources(self.snapshot) as (
             table_sources,
+            file_obo,
+            file_sdf,
+            file_chemont_obo,
             provenance_sources,
         ):
             relations: list[RelationSpec] = []
             validation_issues = ()
-            if self.snapshot.file_obo is not None:
+            if file_obo is not None:
                 canonical = build_canonical_relations(
-                    self.snapshot.file_obo,
-                    file_sdf=self.snapshot.file_sdf,
+                    file_obo,
+                    file_sdf=file_sdf,
                 )
                 relations.extend(canonical.relations)
                 validation_issues = canonical.validation_issues
-                provenance_sources.append(
-                    _source_record("chebi_obo", self.snapshot.file_obo)
-                )
-                if self.snapshot.file_sdf is not None:
-                    provenance_sources.append(
-                        _source_record("chebi_sdf", self.snapshot.file_sdf)
-                    )
             else:
                 relations.extend(
                     RelationSpec(
@@ -372,17 +460,11 @@ class ChEBIDatabase:
                     )
                     for table_name, file_source in table_sources.items()
                 )
-            if self.snapshot.file_chemont_obo is not None:
+            if file_chemont_obo is not None:
                 relations.extend(
                     _obo_relations(
-                        self.snapshot.file_chemont_obo,
+                        file_chemont_obo,
                         namespace="chemont",
-                    )
-                )
-                provenance_sources.append(
-                    _source_record(
-                        "chemont_obo",
-                        self.snapshot.file_chemont_obo,
                     )
                 )
             if not relations:
@@ -395,7 +477,11 @@ class ChEBIDatabase:
                 resource_schema_version=_SCHEMA_VERSION,
                 source_schema_profile=SOURCE_SCHEMA_PROFILE,
                 sources=provenance_sources,
-                scope=_scope(self.snapshot, bool(table_sources)),
+                scope=_scope(
+                    has_tables=bool(table_sources),
+                    has_obo=file_obo is not None,
+                    has_chemont=file_chemont_obo is not None,
+                ),
                 release_version=None,
                 if_exists=if_exists,
                 validation_issues=validation_issues,
@@ -547,213 +633,328 @@ def _read_obo_frames(file_obo: Path) -> dict[str, pl.DataFrame]:
 
 
 @contextmanager
-def _prepared_table_sources(
+def _prepared_sources(
     snapshot: _ChEBISnapshot,
-) -> Generator[tuple[dict[str, Path], list[SourceFileRecord]]]:
-    with tempfile.TemporaryDirectory(prefix="bioextract-chebi-") as dir_tmp_value:
-        dir_tmp = Path(dir_tmp_value)
-        if snapshot.release_source is not None:
-            table_sources = _extract_release_archive(
-                snapshot.release_source,
-                dir_tmp,
-            )
-            provenance = [_source_record("release_archive", snapshot.release_source)]
-        else:
-            table_sources = dict(snapshot.table_sources)
-            provenance = [
-                _source_record(table_name, file_source)
-                for table_name, file_source in table_sources.items()
-            ]
+) -> Generator[
+    tuple[
+        dict[str, Path], Path | None, Path | None, Path | None, list[SourceFileRecord]
+    ]
+]:
+    """Materialize archive members and normalize compressed table inputs."""
+    with tempfile.TemporaryDirectory(prefix="bioextract-chebi-") as value:
+        directory = Path(value)
+        table_sources = dict(snapshot.table_sources)
+        file_obo = snapshot.file_obo
+        file_sdf = snapshot.file_sdf
+        provenance_sdf = file_sdf
+        file_chemont_obo = snapshot.file_chemont_obo
+        provenance: list[SourceFileRecord] = []
 
-        prepared: dict[str, Path] = {}
+        archive = snapshot.release_source
+        archive_used = False
+        if archive is not None:
+            for table_name, member_name in snapshot.archive_table_members.items():
+                table_sources[table_name] = _extract_archive_member(
+                    archive,
+                    member_name,
+                    directory / f"{table_name}.source",
+                )
+                archive_used = True
+            if snapshot.archive_obo_member is not None:
+                file_obo = _extract_archive_member(
+                    archive,
+                    snapshot.archive_obo_member,
+                    directory / "chebi.obo.source",
+                )
+                archive_used = True
+            if snapshot.archive_sdf_member is not None and file_sdf is None:
+                file_sdf = _extract_archive_member(
+                    archive,
+                    snapshot.archive_sdf_member,
+                    directory / "chebi.sdf.source",
+                )
+                archive_used = True
+            if archive_used:
+                provenance.append(_source_record("release_archive", archive))
+
+        prepared_tables: dict[str, Path] = {}
         for table_name, file_source in table_sources.items():
             if _is_gzip(file_source):
-                file_plain = dir_tmp / f"{table_name}.tsv"
+                file_plain = directory / f"{table_name}.tsv"
                 with (
                     gzip.open(file_source, "rb") as handle_in,
                     file_plain.open("wb") as handle_out,
                 ):
                     shutil.copyfileobj(handle_in, handle_out)
-                prepared[table_name] = file_plain
+                prepared_tables[table_name] = file_plain
             else:
-                prepared[table_name] = file_source
-        yield prepared, provenance
+                prepared_tables[table_name] = file_source
+
+        if file_sdf is not None and _is_archive(file_sdf):
+            sdf_member = _one_candidate(
+                "Explicit SDF archive must contain exactly one .sdf member",
+                [
+                    member
+                    for member in _archive_member_names(file_sdf)
+                    if _normalized_suffix_name(
+                        PurePosixPath(member).name,
+                        ".sdf",
+                    )
+                ],
+            )
+            file_sdf = _extract_archive_member(
+                file_sdf,
+                sdf_member,
+                directory / "explicit-chebi.sdf.source",
+            )
+
+        provenance.extend(
+            _source_record(table_name, file_source)
+            for table_name, file_source in snapshot.table_sources.items()
+        )
+        if file_obo is not None and snapshot.archive_obo_member is None:
+            provenance.append(_source_record("chebi_obo", file_obo))
+        if provenance_sdf is not None and snapshot.archive_sdf_member is None:
+            provenance.append(_source_record("chebi_sdf", provenance_sdf))
+        if file_chemont_obo is not None:
+            provenance.append(_source_record("chemont_obo", file_chemont_obo))
+        yield (
+            prepared_tables,
+            file_obo,
+            file_sdf,
+            file_chemont_obo,
+            provenance,
+        )
 
 
-def _discover_table_files(directory: Path) -> dict[str, Path]:
-    by_base_name: dict[str, Path] = {}
-    for candidate in directory.rglob("*"):
-        if candidate.is_file():
-            name = candidate.name
-            if name.endswith(".gz"):
-                name = name[:-3]
-            by_base_name.setdefault(name, candidate)
+def _discover_table_files(
+    directory: Path,
+    *,
+    skipped_roles: set[str] | None = None,
+) -> dict[str, Path]:
+    skipped: set[str] = set() if skipped_roles is None else skipped_roles
+    candidates: dict[str, list[Path]] = {table_name: [] for table_name in _TABLE_FILES}
+    for candidate in sorted(directory.rglob("*")):
+        if not candidate.is_file():
+            continue
+        table_name = _table_role_for_name(candidate.name)
+        if table_name is not None and table_name not in skipped:
+            candidates[table_name].append(candidate)
     return {
-        table_name: by_base_name[base_name]
-        for table_name, base_name in _TABLE_FILES.items()
-        if base_name in by_base_name
+        table_name: _one_candidate(
+            f"ChEBI table role {table_name} must contain exactly one candidate",
+            paths,
+        )
+        for table_name, paths in candidates.items()
+        if paths
     }
 
 
-def _discover_named_file(directory: Path, base_name: str) -> Path | None:
-    matches = sorted(
+def _discover_ontology_file(
+    directory: Path,
+    *,
+    excluded: Iterable[Path] = (),
+) -> Path:
+    excluded_paths = tuple(excluded)
+    candidates = [
         candidate
-        for candidate in directory.rglob("*")
+        for candidate in sorted(directory.rglob("*"))
         if candidate.is_file()
-        and candidate.name.removesuffix(".gz").lower() == base_name.lower()
+        and _normalized_suffix_name(candidate.name, ".obo")
+        and not any(_same_physical(candidate, path) for path in excluded_paths)
+    ]
+    return _one_candidate(
+        "ChEBI source directory must contain exactly one .obo candidate",
+        candidates,
     )
-    return matches[0] if matches else None
 
 
-def _inspect_release_archive(path: Path) -> None:
-    with tempfile.TemporaryDirectory(prefix="bioextract-chebi-inspect-") as value:
-        _extract_release_archive(path, Path(value))
+def _discover_supplement_file(directory: Path, *, suffix: str) -> Path | None:
+    candidates = [
+        candidate
+        for candidate in sorted(directory.rglob("*"))
+        if candidate.is_file() and _normalized_suffix_name(candidate.name, suffix)
+    ]
+    return (
+        None
+        if not candidates
+        else _one_candidate(
+            f"ChEBI source directory must contain exactly one {suffix} candidate",
+            candidates,
+        )
+    )
 
 
-def _extract_release_archive(path: Path, directory: Path) -> dict[str, Path]:
-    expected_by_basename = {
-        base_name: table_name for table_name, base_name in _TABLE_FILES.items()
+def _inspect_table_archive(
+    path: Path,
+    *,
+    skipped_roles: set[str] | None = None,
+) -> dict[str, str]:
+    skipped: set[str] = set() if skipped_roles is None else skipped_roles
+    members = _archive_member_names(path)
+    candidates: dict[str, list[str]] = {table_name: [] for table_name in _TABLE_FILES}
+    for member_name in members:
+        table_name = _table_role_for_name(PurePosixPath(member_name).name)
+        if table_name is not None and table_name not in skipped:
+            candidates[table_name].append(member_name)
+    return {
+        table_name: _one_candidate(
+            f"ChEBI archive table role {table_name} must contain exactly one candidate",
+            names,
+        )
+        for table_name, names in candidates.items()
+        if names
     }
-    expected_by_basename.update(
-        {
-            f"{base_name}.gz": table_name
-            for table_name, base_name in _TABLE_FILES.items()
-        }
+
+
+def _inspect_ontology_archive(
+    path: Path,
+    *,
+    discover_sdf: bool = True,
+) -> dict[str, str]:
+    members = _archive_member_names(path)
+    obo = _one_candidate(
+        "ChEBI source archive must contain exactly one .obo member",
+        [
+            member
+            for member in members
+            if _normalized_suffix_name(PurePosixPath(member).name, ".obo")
+        ],
     )
-    extracted: dict[str, Path] = {}
+    sdf_candidates = (
+        [
+            member
+            for member in members
+            if _normalized_suffix_name(PurePosixPath(member).name, ".sdf")
+        ]
+        if discover_sdf
+        else []
+    )
+    return {
+        "obo": obo,
+        **(
+            {
+                "sdf": _one_candidate(
+                    "ChEBI source archive must contain exactly one .sdf member",
+                    sdf_candidates,
+                )
+            }
+            if sdf_candidates
+            else {}
+        ),
+    }
+
+
+def _inspect_archive_member(path: Path, member_name: str, *, suffix: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="bioextract-chebi-inspect-") as value:
+        extracted = _extract_archive_member(path, member_name, Path(value) / "member")
+        if suffix == ".obo":
+            _inspect_ontology_source(extracted)
+        elif suffix == ".sdf":
+            _inspect_sdf_source(extracted)
+        else:
+            raise ValueError(f"Unsupported archive inspection suffix: {suffix}")
+
+
+def _archive_member_names(path: Path) -> tuple[str, ...]:
     if zipfile.is_zipfile(path):
-        _extract_zip_release(
-            path,
-            expected_by_basename,
-            directory,
-            extracted,
-        )
+        with zipfile.ZipFile(path) as archive:
+            names: list[str] = []
+            for info in archive.infolist():
+                _validate_archive_member(info.filename)
+                if info.is_dir():
+                    continue
+                mode = (info.external_attr >> 16) & 0xFFFF
+                if info.create_system == 3 and mode and stat.S_ISLNK(mode):
+                    raise ValueError(f"Archive symlink is not allowed: {info.filename}")
+                names.append(_normalize_member_name(info.filename))
     elif tarfile.is_tarfile(path):
-        _extract_tar_release(
-            path,
-            expected_by_basename,
-            directory,
-            extracted,
-        )
+        with tarfile.open(path, mode="r:*") as archive:
+            names = []
+            for member in archive.getmembers():
+                _validate_archive_member(member.name)
+                if member.issym() or member.islnk():
+                    raise ValueError(f"Archive link is not allowed: {member.name}")
+                if member.isfile():
+                    names.append(_normalize_member_name(member.name))
     else:
         raise ValueError(
-            f"ChEBI release source is not a directory, zip, or tar archive: {path}"
+            f"ChEBI source is not a directory, zip, or tar archive: {path}"
         )
-    _require_compounds(extracted)
-    return extracted
+    if len(set(names)) != len(names):
+        raise ValueError(f"Archive contains duplicate member paths: {path}")
+    return tuple(names)
 
 
-def _extract_zip_release(
-    path: Path,
-    expected_by_basename: Mapping[str, str],
-    directory: Path,
-    extracted: dict[str, Path],
-) -> None:
-    with zipfile.ZipFile(path) as archive:
-        members = (
-            (
-                member.filename,
-                cast(
-                    Callable[[], BinaryIO],
-                    lambda member=member: archive.open(member.filename),
-                ),
-            )
-            for member in archive.infolist()
-            if not member.is_dir()
-        )
-        _copy_release_members(members, expected_by_basename, directory, extracted)
-
-
-def _extract_tar_release(
-    path: Path,
-    expected_by_basename: Mapping[str, str],
-    directory: Path,
-    extracted: dict[str, Path],
-) -> None:
-    with tarfile.open(path, mode="r:*") as archive:
-        members = (
-            (
-                member.name,
-                lambda member=member: _require_tar_member(
-                    archive,
-                    member,
-                ),
-            )
-            for member in archive.getmembers()
-            if member.isfile()
-        )
-        _copy_release_members(members, expected_by_basename, directory, extracted)
-
-
-def _copy_release_members(
-    members: Iterator[tuple[str, Callable[[], BinaryIO]]],
-    expected_by_basename: Mapping[str, str],
-    directory: Path,
-    extracted: dict[str, Path],
-) -> None:
-    for member_name, opener in members:
-        _validate_archive_member(member_name)
-        base_name = PurePosixPath(member_name).name
-        table_name = expected_by_basename.get(base_name)
-        if table_name is None or table_name in extracted:
-            continue
-        suffix = ".tsv.gz" if base_name.endswith(".gz") else ".tsv"
-        path = directory / f"{table_name}{suffix}"
-        with opener() as handle_in, path.open("wb") as handle_out:
-            shutil.copyfileobj(handle_in, handle_out)
-        extracted[table_name] = path
-
-
-def _require_tar_member(
-    archive: tarfile.TarFile,
-    member: tarfile.TarInfo,
-) -> BinaryIO:
-    handle = archive.extractfile(member)
-    if handle is None:
-        raise ValueError(f"Cannot read archive member: {member.name}")
-    return cast(BinaryIO, handle)
+def _extract_archive_member(path: Path, member_name: str, destination: Path) -> Path:
+    normalized = _normalize_member_name(member_name)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            matches = [
+                info
+                for info in archive.infolist()
+                if not info.is_dir()
+                and _normalize_member_name(info.filename) == normalized
+            ]
+            if len(matches) != 1:
+                raise ValueError(f"Archive member is not unique: {member_name}")
+            with (
+                archive.open(matches[0]) as handle_in,
+                destination.open("wb") as handle_out,
+            ):
+                shutil.copyfileobj(handle_in, handle_out)
+    elif tarfile.is_tarfile(path):
+        with tarfile.open(path, mode="r:*") as archive:
+            matches = [
+                member
+                for member in archive.getmembers()
+                if member.isfile() and _normalize_member_name(member.name) == normalized
+            ]
+            if len(matches) != 1:
+                raise ValueError(f"Archive member is not unique: {member_name}")
+            handle_in = archive.extractfile(matches[0])
+            if handle_in is None:
+                raise ValueError(f"Cannot read archive member: {member_name}")
+            with handle_in, destination.open("wb") as handle_out:
+                shutil.copyfileobj(handle_in, handle_out)
+    else:
+        raise ValueError(f"Not an archive: {path}")
+    return destination
 
 
 @contextmanager
 def _open_ontology_text(path: Path) -> Generator[TextIO]:
+    with _open_text_source(path, preferred_suffix=".obo") as handle:
+        yield handle
+
+
+@contextmanager
+def _open_text_source(path: Path, *, preferred_suffix: str) -> Generator[TextIO]:
     if _is_gzip(path):
         with gzip.open(path, "rt", encoding="utf-8", errors="replace") as handle:
             yield handle
         return
-    if zipfile.is_zipfile(path):
-        with zipfile.ZipFile(path) as archive:
-            member = _select_ontology_member(
-                member.filename for member in archive.infolist() if not member.is_dir()
+    if _is_archive(path):
+        members = _archive_member_names(path)
+        member_name = _one_candidate(
+            f"Archive must contain exactly one {preferred_suffix} member",
+            [
+                member
+                for member in members
+                if _normalized_suffix_name(
+                    PurePosixPath(member).name,
+                    preferred_suffix,
+                )
+            ],
+        )
+        with tempfile.TemporaryDirectory(prefix="bioextract-chebi-text-") as value:
+            extracted = _extract_archive_member(
+                path, member_name, Path(value) / "source"
             )
-            with (
-                archive.open(member) as raw,
-                io.TextIOWrapper(
-                    raw,
-                    encoding="utf-8",
-                    errors="replace",
-                ) as handle,
-            ):
-                yield handle
-        return
-    if tarfile.is_tarfile(path):
-        with tarfile.open(path, mode="r:*") as archive:
-            members = {
-                member.name: member
-                for member in archive.getmembers()
-                if member.isfile()
-            }
-            member_name = _select_ontology_member(iter(members))
-            raw = archive.extractfile(members[member_name])
-            if raw is None:
-                raise ValueError(f"Cannot read ontology archive member: {member_name}")
-            with (
-                raw,
-                io.TextIOWrapper(
-                    raw,
-                    encoding="utf-8",
-                    errors="replace",
-                ) as handle,
-            ):
+            with _open_text_source(
+                extracted, preferred_suffix=preferred_suffix
+            ) as handle:
                 yield handle
         return
     with path.open("r", encoding="utf-8", errors="replace") as handle:
@@ -768,27 +969,72 @@ def _inspect_ontology_source(path: Path) -> None:
     raise ValueError(f"No [Term] stanza found in ontology source: {path}")
 
 
-def _select_ontology_member(member_names: Iterator[str]) -> str:
-    members = list(member_names)
-    for member in members:
-        _validate_archive_member(member)
-    candidates = [
-        member
-        for member in members
-        if PurePosixPath(member).name.lower().endswith(".obo")
-    ]
-    if len(candidates) != 1:
-        raise ValueError(
-            "Ontology archive must contain exactly one .obo member; "
-            f"found {len(candidates)}"
-        )
-    return candidates[0]
+def _inspect_sdf_source(path: Path) -> None:
+    with _open_text_source(path, preferred_suffix=".sdf") as handle:
+        if any(line.strip() == "$$$$" for line in handle):
+            return
+    raise ValueError(f"No SDF record found in structure source: {path}")
+
+
+def _table_role_for_name(name: str) -> str | None:
+    normalized = name.lower()
+    if normalized.endswith(".gz"):
+        normalized = normalized[:-3]
+    for table_name, base_name in _TABLE_FILES.items():
+        if normalized == base_name.lower():
+            return table_name
+    return None
+
+
+def _normalized_suffix_name(name: str, suffix: str) -> bool:
+    normalized = name.lower()
+    if normalized.endswith(".gz"):
+        normalized = normalized[:-3]
+    return normalized.endswith(suffix.lower())
+
+
+def _one_candidate[T](label: str, candidates: Iterable[T]) -> T:
+    values = list(candidates)
+    if len(values) != 1:
+        detail = ", ".join(str(value) for value in values)
+        raise ValueError(f"{label}; found {len(values)}: {detail}")
+    return values[0]
+
+
+def _normalize_member_name(member_name: str) -> str:
+    _validate_archive_member(member_name)
+    return PurePosixPath(member_name).as_posix()
 
 
 def _validate_archive_member(member_name: str) -> None:
     path = PurePosixPath(member_name)
-    if path.is_absolute() or ".." in path.parts:
+    if not member_name or path.is_absolute() or ".." in path.parts:
         raise ValueError(f"Unsafe archive member path: {member_name}")
+
+
+def _validate_physical_inventory(sources: Mapping[str, Path]) -> None:
+    identities: dict[tuple[int, int], str] = {}
+    for logical_name, path in sources.items():
+        identity = _physical_identity(path)
+        previous = identities.get(identity)
+        if previous is not None:
+            raise ValueError(
+                "ChEBI source roles must use different physical files: "
+                f"{previous} and {logical_name} both refer to {path}"
+            )
+        identities[identity] = logical_name
+
+
+def _physical_identity(path: Path) -> tuple[int, int]:
+    stat_result = path.stat()
+    return stat_result.st_dev, stat_result.st_ino
+
+
+def _same_physical(left: Path, right: Path) -> bool:
+    try:
+        return _physical_identity(left) == _physical_identity(right)
+    except FileNotFoundError:
+        return False
 
 
 def _require_compounds(table_sources: Mapping[str, Path]) -> None:
@@ -819,6 +1065,10 @@ def _is_gzip(path: Path) -> bool:
         return handle.read(2) == b"\x1f\x8b"
 
 
+def _is_archive(path: Path) -> bool:
+    return zipfile.is_zipfile(path) or tarfile.is_tarfile(path)
+
+
 def _source_record(logical_name: str, path: Path) -> SourceFileRecord:
     return SourceFileRecord(
         logical_name=logical_name,
@@ -839,13 +1089,13 @@ def _media_type(path: Path) -> str:
     return "text/tab-separated-values"
 
 
-def _scope(snapshot: _ChEBISnapshot, has_tables: bool) -> str:
+def _scope(*, has_tables: bool, has_obo: bool, has_chemont: bool) -> str:
     components: list[str] = []
     if has_tables:
         components.append("tables")
-    if snapshot.file_obo is not None:
+    if has_obo:
         components.append("chebi_ontology")
-    if snapshot.file_chemont_obo is not None:
+    if has_chemont:
         components.append("chemont")
     return "+".join(components)
 
