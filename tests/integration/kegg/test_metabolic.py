@@ -1,3 +1,5 @@
+import shutil
+import tarfile
 import zipfile
 from pathlib import Path
 
@@ -91,10 +93,34 @@ DIAGRAM     M00001
     return result
 
 
+def metabolic_source(
+    files: dict[str, Path],
+    *,
+    source: Path | None = None,
+    release_version: str | None = None,
+) -> KEGGDatabase:
+    return KEGGDatabase.from_metabolic_files(
+        source,
+        compound_entries=files["compound_entries"],
+        reaction_entries=files["reaction_entries"],
+        enzyme_entries=files["enzyme_entries"],
+        module_entries=files["module_entries"],
+        compound_pubchem=files["compound_pubchem"],
+        compound_reaction=files["compound_reaction"],
+        reaction_enzyme=files["reaction_enzyme"],
+        reaction_ko=files["reaction_ko"],
+        reaction_module=files["reaction_module"],
+        reaction_pathway=files["reaction_pathway"],
+        module_pathway=files["module_pathway"],
+        release_version=release_version,
+    )
+
+
 def publish(tmp_path: Path) -> tuple[KEGGDatabase, Path]:
     path = tmp_path / "kegg.duckdb"
-    source = KEGGDatabase.from_metabolic_files(
-        **metabolic_files(tmp_path), release_version="test"
+    source = metabolic_source(
+        metabolic_files(tmp_path),
+        release_version="test",
     )
     result = source.write_duckdb(path)
     assert isinstance(result, DuckDBWriteResult)
@@ -417,12 +443,48 @@ def metabolic_release(tmp_path: Path, *, directory_name: str = "2026-07") -> Pat
     return release
 
 
-def test_release_discovery_uses_exact_layout(tmp_path: Path) -> None:
+def _archive_release(
+    release: Path,
+    archive: Path,
+    *,
+    kind: str,
+    prefix: Path = Path("wrapper") / "2026-07",
+) -> Path:
+    if kind == "zip":
+        with zipfile.ZipFile(archive, "w") as output:
+            for source in sorted(release.rglob("*")):
+                if source.is_file():
+                    output.write(source, prefix / source.relative_to(release))
+    else:
+        with tarfile.open(archive, "w") as output:
+            for source in sorted(release.rglob("*")):
+                if source.is_file():
+                    output.add(
+                        source,
+                        arcname=str(prefix / source.relative_to(release)),
+                    )
+    return archive
+
+
+@pytest.mark.parametrize("layout", ["release", "raw", "nested"])
+def test_release_discovery_uses_one_exact_layout(
+    tmp_path: Path,
+    layout: str,
+) -> None:
     release = metabolic_release(tmp_path)
     raw = release / "raw"
-    db = KEGGDatabase.from_metabolic_release(raw.parent)
+    source = release
+    if layout == "raw":
+        source = raw
+    elif layout == "nested":
+        source = tmp_path / "nested-source"
+        raw = source / "wrapper" / "raw"
+        shutil.copytree(release / "raw", raw)
+
+    db = KEGGDatabase.from_metabolic_files(source)
     snapshot = db.snapshot.metabolic
     assert snapshot is not None
+    assert snapshot.complete_release is True
     assert len(snapshot.sources["reaction_entries"]) == 1
     assert snapshot.sources["reaction_list"] == (raw / "reaction" / "list.tsv",)
 
@@ -432,7 +494,7 @@ def test_release_directory_name_does_not_create_release_metadata(
 ) -> None:
     release = metabolic_release(tmp_path, directory_name="2099-12")
     path = tmp_path / "unknown-release.duckdb"
-    KEGGDatabase.from_metabolic_release(release).write_duckdb(path)
+    KEGGDatabase.from_metabolic_files(release).write_duckdb(path)
 
     with duckdb.connect(str(path), read_only=True) as connection:
         metadata = dict(
@@ -445,9 +507,9 @@ def test_release_directory_name_does_not_create_release_metadata(
 def test_caller_release_version_is_recorded_with_caller_source(tmp_path: Path) -> None:
     release = metabolic_release(tmp_path, directory_name="arbitrary-layout")
     path = tmp_path / "caller-release.duckdb"
-    KEGGDatabase.from_metabolic_release(
-        release, release_version="2026-07"
-    ).write_duckdb(path)
+    KEGGDatabase.from_metabolic_files(release, release_version="2026-07").write_duckdb(
+        path
+    )
 
     with duckdb.connect(str(path), read_only=True) as connection:
         metadata = dict(
@@ -457,41 +519,329 @@ def test_caller_release_version_is_recorded_with_caller_source(tmp_path: Path) -
     assert metadata["bioextract.release_version_source"] == "caller"
 
 
-def test_release_archive_accepts_an_extra_top_level_directory(tmp_path: Path) -> None:
-    files = metabolic_files(tmp_path)
-    raw = tmp_path / "archive-root" / "wrapper" / "2026-07" / "raw"
-    list_ids = {
-        "compound": ("C00001", "C00002"),
-        "reaction": ("R00001",),
-        "enzyme": ("3.6.1.3", "9.9.9.9"),
-        "module": ("M00001",),
-    }
-    for family, identifiers in list_ids.items():
-        entries = raw / family / "entries"
-        entries.mkdir(parents=True)
-        (entries / f"{family}.keg").write_bytes(files[f"{family}_entries"].read_bytes())
-        (raw / family / "list.tsv").write_text(
-            "".join(f"{identifier}\tentry\n" for identifier in identifiers),
-            encoding="utf-8",
-        )
-    for relation in (
-        "compound_pubchem",
-        "compound_reaction",
-        "reaction_enzyme",
-        "reaction_ko",
-        "reaction_module",
-        "reaction_pathway",
-        "module_pathway",
-    ):
-        (raw / f"{relation}.tsv").write_bytes(files[relation].read_bytes())
-
-    archive = tmp_path / "release.zip"
-    with zipfile.ZipFile(archive, "w") as output:
-        for source in sorted((tmp_path / "archive-root").rglob("*")):
-            if source.is_file():
-                output.write(source, source.relative_to(tmp_path / "archive-root"))
+@pytest.mark.parametrize("kind", ["zip", "tar"])
+def test_release_archive_accepts_nested_layout(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    release = metabolic_release(tmp_path)
+    archive = _archive_release(release, tmp_path / f"release.{kind}", kind=kind)
     path = tmp_path / "release.duckdb"
-    KEGGDatabase.from_metabolic_release(archive).write_duckdb(path)
+    KEGGDatabase.from_metabolic_files(archive).write_duckdb(path)
+    with KEGGDatabase.from_duckdb(path).connect() as connection:
+        assert connection.execute("SELECT count(*) FROM compound").fetchone() == (2,)
+
+
+def test_source_overlays_replace_whole_roles_and_final_provenance(
+    tmp_path: Path,
+) -> None:
+    release = metabolic_release(tmp_path)
+    raw = release / "raw"
+    original_entries = raw / "reaction" / "entries" / "000001.keg"
+    original_relation = raw / "reaction_ko.tsv"
+    overlay_entries = tmp_path / "overlay-reaction"
+    overlay_entries.mkdir()
+    overlay_entry = overlay_entries / "replacement.keg"
+    overlay_entry.write_bytes(original_entries.read_bytes())
+    overlay_relation = tmp_path / "overlay-reaction-ko.tsv"
+    overlay_relation.write_bytes(original_relation.read_bytes())
+    original_relation.unlink()
+
+    database = KEGGDatabase.from_metabolic_files(
+        release,
+        reaction_entries=overlay_entries,
+        reaction_ko=overlay_relation,
+    )
+    snapshot = database.snapshot.metabolic
+    assert snapshot is not None
+    assert snapshot.complete_release is True
+    assert snapshot.sources["reaction_entries"] == (overlay_entry,)
+    assert snapshot.sources["reaction_ko"] == (overlay_relation,)
+
+    path = tmp_path / "overlay.duckdb"
+    database.write_duckdb(path)
+    with duckdb.connect(str(path), read_only=True) as connection:
+        display_paths = {
+            row[0]
+            for row in connection.execute(
+                "SELECT display_path FROM _bioextract.source_file"
+            ).fetchall()
+        }
+    assert str(overlay_entry) in display_paths
+    assert str(overlay_relation) in display_paths
+    assert str(original_entries) not in display_paths
+    assert str(original_relation) not in display_paths
+
+
+def test_source_rejects_a_missing_unoverridden_required_role(tmp_path: Path) -> None:
+    release = metabolic_release(tmp_path)
+    (release / "raw" / "reaction_ko.tsv").unlink()
+
+    with pytest.raises(ValueError, match="missing roles.*reaction_ko"):
+        KEGGDatabase.from_metabolic_files(release)
+
+
+@pytest.mark.parametrize(
+    ("role", "value_kind"),
+    [
+        ("compound_list", "directory"),
+        ("reaction_entries", "directory"),
+        ("reaction_entries", "sequence"),
+        ("reaction_ko", "directory"),
+    ],
+)
+def test_explicit_non_none_role_rejects_an_empty_fileset(
+    tmp_path: Path,
+    role: str,
+    value_kind: str,
+) -> None:
+    release = metabolic_release(tmp_path)
+    empty_directory = tmp_path / f"empty-{role}"
+    if value_kind == "directory":
+        empty_directory.mkdir()
+
+    with pytest.raises(ValueError, match=rf"role '{role}'.*at least one file"):
+        if role == "compound_list":
+            KEGGDatabase.from_metabolic_files(
+                release,
+                compound_list=empty_directory,
+            )
+        elif role == "reaction_entries" and value_kind == "sequence":
+            KEGGDatabase.from_metabolic_files(release, reaction_entries=[])
+        elif role == "reaction_entries":
+            KEGGDatabase.from_metabolic_files(
+                release,
+                reaction_entries=empty_directory,
+            )
+        else:
+            KEGGDatabase.from_metabolic_files(
+                release,
+                reaction_ko=empty_directory,
+            )
+
+
+@pytest.mark.parametrize("role", ["compound_list", "reaction_ko"])
+def test_scalar_role_accepts_a_nonempty_directory(
+    tmp_path: Path,
+    role: str,
+) -> None:
+    directory = tmp_path / role
+    directory.mkdir()
+    source = _write(directory / "source.tsv", "value\n")
+
+    database = (
+        KEGGDatabase.from_metabolic_files(compound_list=directory)
+        if role == "compound_list"
+        else KEGGDatabase.from_metabolic_files(reaction_ko=directory)
+    )
+    snapshot = database.snapshot.metabolic
+    assert snapshot is not None
+    assert snapshot.sources[role] == (source,)
+
+
+def test_entry_collection_order_is_deterministic(tmp_path: Path) -> None:
+    directory = tmp_path / "compound-entries"
+    directory.mkdir()
+    second = _write(directory / "b.keg", "ENTRY       C00002\n///\n")
+    first = _write(directory / "a.keg", "ENTRY       C00001\n///\n")
+
+    database = KEGGDatabase.from_metabolic_files(compound_entries=directory)
+    snapshot = database.snapshot.metabolic
+    assert snapshot is not None
+    assert snapshot.sources["compound_entries"] == (first, second)
+
+    sequence = KEGGDatabase.from_metabolic_files(
+        compound_entries=[second, first]
+    ).snapshot.metabolic
+    assert sequence is not None
+    assert sequence.sources["compound_entries"] == (first, second)
+
+
+def test_complete_release_allows_absent_optional_lists(tmp_path: Path) -> None:
+    release = metabolic_release(tmp_path)
+    for file_list in release.glob("raw/*/list.tsv"):
+        file_list.unlink()
+
+    path = tmp_path / "without-lists.duckdb"
+    KEGGDatabase.from_metabolic_files(release).write_duckdb(path)
+    with KEGGDatabase.from_duckdb(path).connect() as connection:
+        assert connection.execute("SELECT count(*) FROM compound").fetchone() == (2,)
+
+
+def test_present_optional_list_still_requires_entry_parity(tmp_path: Path) -> None:
+    release = metabolic_release(tmp_path)
+    (release / "raw" / "compound" / "list.tsv").write_text(
+        "C99999\tentry\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="compound list/entry mismatch"):
+        KEGGDatabase.from_metabolic_files(release).write_duckdb(
+            tmp_path / "mismatch.duckdb"
+        )
+
+
+def test_source_layout_is_required_even_when_all_required_roles_are_overlaid(
+    tmp_path: Path,
+) -> None:
+    files = metabolic_files(tmp_path)
+    empty_source = tmp_path / "empty-source"
+    empty_source.mkdir()
+
+    with pytest.raises(ValueError, match="contains no release layout"):
+        metabolic_source(files, source=empty_source)
+
+
+def test_source_rejects_multiple_plausible_layouts(tmp_path: Path) -> None:
+    files = metabolic_files(tmp_path)
+    source = tmp_path / "ambiguous-source"
+    for prefix in ("first", "second"):
+        directory = source / prefix / "raw" / "compound"
+        directory.mkdir(parents=True)
+        (directory / "list.tsv").write_text("C00001\tentry\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="multiple release layouts"):
+        metabolic_source(files, source=source)
+
+
+@pytest.mark.parametrize("kind", ["zip", "tar"])
+def test_archive_rejects_zero_or_multiple_plausible_layouts(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    files = metabolic_files(tmp_path)
+    empty_source = tmp_path / "empty-archive-source"
+    empty_source.mkdir()
+    _write(empty_source / "README.txt", "not a KEGG release\n")
+    empty_archive = _archive_release(
+        empty_source,
+        tmp_path / f"empty.{kind}",
+        kind=kind,
+        prefix=Path("."),
+    )
+    with pytest.raises(ValueError, match="contains no release layout"):
+        metabolic_source(files, source=empty_archive)
+
+    ambiguous_source = tmp_path / "ambiguous-archive-source"
+    for prefix in ("first", "second"):
+        directory = ambiguous_source / prefix / "raw" / "compound"
+        directory.mkdir(parents=True)
+        (directory / "list.tsv").write_text("C00001\tentry\n", encoding="utf-8")
+    ambiguous_archive = _archive_release(
+        ambiguous_source,
+        tmp_path / f"ambiguous.{kind}",
+        kind=kind,
+        prefix=Path("."),
+    )
+    with pytest.raises(ValueError, match="multiple release layouts"):
+        metabolic_source(files, source=ambiguous_archive)
+
+
+def test_archive_rejects_duplicate_normalized_members(tmp_path: Path) -> None:
+    files = metabolic_files(tmp_path)
+    archive = tmp_path / "duplicate-members.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("raw/compound/list.tsv", "C00001\tentry\n")
+        output.writestr("./raw/compound/list.tsv", "C00001\tentry\n")
+
+    with pytest.raises(ValueError, match="duplicate members"):
+        metabolic_source(files, source=archive)
+
+
+def test_final_inventory_rejects_physical_file_reuse(tmp_path: Path) -> None:
+    source = _write(tmp_path / "relation.tsv", "rn:R00001\tko:K00001\n")
+
+    with pytest.raises(ValueError, match="same physical file"):
+        KEGGDatabase.from_metabolic_files(
+            reaction_ko=source,
+            reaction_module=source,
+        )
+
+
+def test_release_archive_cannot_also_be_an_explicit_role(tmp_path: Path) -> None:
+    release = metabolic_release(tmp_path)
+    archive = _archive_release(release, tmp_path / "release.zip", kind="zip")
+
+    with pytest.raises(ValueError, match="same physical file"):
+        KEGGDatabase.from_metabolic_files(archive, reaction_entries=archive)
+
+
+@pytest.mark.parametrize("kind", ["zip", "tar"])
+def test_release_archive_overlay_satisfies_missing_role_and_records_provenance(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    release = metabolic_release(tmp_path)
+    relation = release / "raw" / "reaction_ko.tsv"
+    overlay = tmp_path / "overlay-reaction-ko.tsv"
+    overlay.write_bytes(relation.read_bytes())
+    relation.unlink()
+    archive = _archive_release(release, tmp_path / f"overlay.{kind}", kind=kind)
+
+    with pytest.raises(ValueError, match="missing roles.*reaction_ko"):
+        KEGGDatabase.from_metabolic_files(archive)
+
+    path = tmp_path / "archive-overlay.duckdb"
+    KEGGDatabase.from_metabolic_files(archive, reaction_ko=overlay).write_duckdb(path)
+    with duckdb.connect(str(path), read_only=True) as connection:
+        source_paths = dict(
+            connection.execute(
+                "SELECT logical_name, display_path FROM _bioextract.source_file"
+            ).fetchall()
+        )
+    assert source_paths["release_archive:0"] == str(archive)
+    assert source_paths["reaction_ko:0"] == str(overlay)
+
+
+def test_fully_replaced_archive_is_omitted_from_final_provenance(
+    tmp_path: Path,
+) -> None:
+    release = metabolic_release(tmp_path)
+    archive = _archive_release(release, tmp_path / "release.zip", kind="zip")
+    raw = release / "raw"
+    path = tmp_path / "fully-replaced.duckdb"
+    KEGGDatabase.from_metabolic_files(
+        archive,
+        compound_list=raw / "compound" / "list.tsv",
+        compound_entries=raw / "compound" / "entries",
+        reaction_list=raw / "reaction" / "list.tsv",
+        reaction_entries=raw / "reaction" / "entries",
+        enzyme_list=raw / "enzyme" / "list.tsv",
+        enzyme_entries=raw / "enzyme" / "entries",
+        module_list=raw / "module" / "list.tsv",
+        module_entries=raw / "module" / "entries",
+        compound_pubchem=raw / "compound_pubchem.tsv",
+        compound_reaction=raw / "compound_reaction.tsv",
+        reaction_enzyme=raw / "reaction_enzyme.tsv",
+        reaction_ko=raw / "reaction_ko.tsv",
+        reaction_module=raw / "reaction_module.tsv",
+        reaction_pathway=raw / "reaction_pathway.tsv",
+        module_pathway=raw / "module_pathway.tsv",
+    ).write_duckdb(path)
+    with duckdb.connect(str(path), read_only=True) as connection:
+        display_paths = {
+            row[0]
+            for row in connection.execute(
+                "SELECT display_path FROM _bioextract.source_file"
+            ).fetchall()
+        }
+    assert str(archive) not in display_paths
+    assert str(raw / "reaction_ko.tsv") in display_paths
+
+
+def test_archive_layout_keeps_optional_lists_when_required_roles_are_overlaid(
+    tmp_path: Path,
+) -> None:
+    release = metabolic_release(tmp_path)
+    for entries in release.glob("raw/*/entries"):
+        shutil.rmtree(entries)
+    for relation in release.glob("raw/*.tsv"):
+        relation.unlink()
+    archive = _archive_release(release, tmp_path / "lists-only.zip", kind="zip")
+    files = metabolic_files(tmp_path)
+
+    path = tmp_path / "fully-overlaid.duckdb"
+    metabolic_source(files, source=archive).write_duckdb(path)
     with KEGGDatabase.from_duckdb(path).connect() as connection:
         assert connection.execute("SELECT count(*) FROM compound").fetchone() == (2,)
 

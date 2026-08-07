@@ -38,6 +38,8 @@ from .core import (
     open_text,
     parse_equation,
     record_names,
+    validate_complete_release,
+    validate_source_inventory,
 )
 
 _RELATION_COLUMNS = {
@@ -528,13 +530,15 @@ def _source_media_type(path: Path) -> str:
 def _source_records(
     snapshot: MetabolicSnapshot,
     *,
+    include_archive: bool,
     include_source_hashes: bool,
 ) -> list[SourceFileRecord]:
-    logical_sources: Mapping[str, tuple[Path, ...]]
-    if snapshot.archive is not None:
+    logical_sources: dict[str, tuple[Path, ...]]
+    if snapshot.archive is not None and include_archive:
         logical_sources = {"release_archive": (snapshot.archive,)}
+        logical_sources.update(snapshot.sources)
     else:
-        logical_sources = snapshot.sources
+        logical_sources = dict(snapshot.sources)
     records: list[SourceFileRecord] = []
     for role, paths in logical_sources.items():
         for index, source in enumerate(paths):
@@ -564,26 +568,21 @@ def publish(
     with tempfile.TemporaryDirectory(prefix="bioextract-kegg-metabolic-") as directory:
         root = Path(directory)
         effective = snapshot
+        archive_used = False
         if snapshot.archive is not None:
             release = root / "release"
             release.mkdir()
             extract_archive(snapshot.archive, release)
             discovered_sources = discover_release_layout(release)
-            missing = [
-                role
-                for role in (
-                    *[f"{family}_entries" for family in ENTRY_ROLES],
-                    *RELATION_ROLES,
-                )
-                if role not in discovered_sources
-            ]
-            if missing:
-                raise ValueError(
-                    "Incomplete KEGG metabolic release archive; "
-                    f"missing roles: {missing}"
-                )
+            archive_used = bool(discovered_sources.keys() - snapshot.sources.keys())
+            final_sources = dict(discovered_sources)
+            final_sources.update(snapshot.sources)
+            validate_complete_release(final_sources)
+            validate_source_inventory(final_sources)
             effective = MetabolicSnapshot(
-                discovered_sources, snapshot.release_version, True
+                final_sources,
+                snapshot.release_version,
+                True,
             )
         effective = _resolve_entry_archives(effective, root)
         spool = _Spool(root / "relations")
@@ -591,13 +590,17 @@ def publish(
         ids, equation_pairs, issues = _spool_entries(effective, spool)
         if effective.complete_release:
             for family in ENTRY_ROLES:
-                listed = _read_list_ids(effective.sources.get(f"{family}_list", ()))
+                list_role = f"{family}_list"
+                if list_role not in effective.sources:
+                    continue
+                listed = _read_list_ids(effective.sources[list_role])
                 if listed != ids[family]:
                     raise ValueError(f"KEGG {family} list/entry mismatch")
         issues.extend(_spool_relations(effective, spool, ids, equation_pairs))
         spool.close()
         sources = _source_records(
             snapshot,
+            include_archive=archive_used,
             include_source_hashes=include_source_hashes,
         )
         return write_duckdb_publication(

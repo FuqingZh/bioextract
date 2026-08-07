@@ -53,6 +53,7 @@ def test_removed_legacy_writer_apis_are_not_exported() -> None:
     assert not hasattr(eggnog.EggNOGDatabase, "from_duckdb")
     assert not hasattr(eggnog.EggNOGDatabase, "persist")
     assert not hasattr(eggnog.EggNOGDatabase, "unpack")
+    assert not hasattr(kegg.KEGGDatabase, "from_metabolic_release")
     assert not hasattr(kegg.KEGGDatabase, "write_parquet")
     assert not hasattr(interpro.InterProDatabase, "write_parquet")
 
@@ -62,6 +63,7 @@ def test_resource_factories_do_not_expose_limits() -> None:
         chebi.ChEBIDatabase.from_release,
         go.GODatabase.from_obo,
         kegg.KEGGDatabase.from_brite_json,
+        kegg.KEGGDatabase.from_metabolic_files,
         reactome.ReactomeDatabase.from_files,
         wikipathways.WikiPathwaysDatabase.from_gmt,
         eggnog.EggNOGDatabase.from_sqlite,
@@ -103,7 +105,25 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "gene_list",
             "ncbi_gene_conversion",
         ),
-        kegg.KEGGDatabase.from_metabolic_release: ("source", "release_version"),
+        kegg.KEGGDatabase.from_metabolic_files: (
+            "source",
+            "compound_list",
+            "compound_entries",
+            "reaction_list",
+            "reaction_entries",
+            "enzyme_list",
+            "enzyme_entries",
+            "module_list",
+            "module_entries",
+            "compound_pubchem",
+            "compound_reaction",
+            "reaction_enzyme",
+            "reaction_ko",
+            "reaction_module",
+            "reaction_pathway",
+            "module_pathway",
+            "release_version",
+        ),
         kegg.KEGGDatabase.from_duckdb: ("path",),
         reactome.ReactomeDatabase.from_files: (
             "uniprot_mapping",
@@ -181,6 +201,19 @@ def test_phase_1_constructor_parameter_kinds_are_explicit() -> None:
         rhea_parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
         and rhea_parameters[name].default is None
         for name in tuple(rhea_parameters)[1:]
+    )
+
+    metabolic_parameters = inspect.signature(
+        kegg.KEGGDatabase.from_metabolic_files
+    ).parameters
+    assert (
+        metabolic_parameters["source"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    )
+    assert metabolic_parameters["source"].default is None
+    assert all(
+        metabolic_parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+        and metabolic_parameters[name].default is None
+        for name in tuple(metabolic_parameters)[1:]
     )
 
 

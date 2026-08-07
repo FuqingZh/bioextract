@@ -7,7 +7,7 @@ import tarfile
 import zipfile
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 import duckdb
@@ -55,6 +55,11 @@ RELATION_ROLES = (
     "reaction_pathway",
     "module_pathway",
 )
+LIST_ROLES = tuple(f"{family}_list" for family in ENTRY_ROLES)
+ENTRY_SOURCE_ROLES = tuple(f"{family}_entries" for family in ENTRY_ROLES)
+REQUIRED_SOURCE_ROLES = (*ENTRY_SOURCE_ROLES, *RELATION_ROLES)
+SOURCE_ROLES = (*LIST_ROLES, *ENTRY_SOURCE_ROLES, *RELATION_ROLES)
+_RELATION_ROLE_BY_FILENAME = {f"{role}.tsv": role for role in RELATION_ROLES}
 _CAPABILITY_TABLES: Mapping[str, frozenset[str]] = {
     "compound_entries": frozenset(
         {"compound", "compound_name", "compound_cross_reference"}
@@ -127,7 +132,7 @@ class MetabolicPublication:
 def _paths(
     value: os.PathLike[str] | str | Sequence[os.PathLike[str] | str] | None,
     *,
-    entries: bool = False,
+    role: str,
 ) -> tuple[Path, ...]:
     if value is None:
         return ()
@@ -138,14 +143,20 @@ def _paths(
         if not path.exists():
             raise FileNotFoundError(path)
         if path.is_dir():
-            pattern = "*.keg" if entries else "*"
+            pattern = "*.keg" if role.endswith("_entries") else "*"
             result.extend(sorted(p for p in path.rglob(pattern) if p.is_file()))
         else:
             result.append(path)
-    return tuple(sorted(result))
+    paths = tuple(sorted(result))
+    if not paths:
+        raise ValueError(
+            f"KEGG metabolic input role {role!r} must resolve to at least one file"
+        )
+    return paths
 
 
 def from_metabolic_files(
+    source: os.PathLike[str] | str | None = None,
     *,
     compound_list: os.PathLike[str] | str | None = None,
     compound_entries: os.PathLike[str]
@@ -176,82 +187,219 @@ def from_metabolic_files(
     module_pathway: os.PathLike[str] | str | None = None,
     release_version: str | None = None,
 ) -> MetabolicSnapshot:
+    """Resolve explicit roles and one optional release source into a snapshot."""
     values: dict[str, Any] = locals()
-    sources = {
-        role: _paths(values[role], entries=role.endswith("_entries"))
-        for role in (
-            *[f"{x}_list" for x in ENTRY_ROLES],
-            *[f"{x}_entries" for x in ENTRY_ROLES],
-            *RELATION_ROLES,
-        )
+    explicit_sources = {
+        role: _paths(values[role], role=role)
+        for role in SOURCE_ROLES
         if values[role] is not None
     }
-    if not sources:
+    validate_source_inventory(explicit_sources)
+
+    if source is None:
+        if explicit_sources:
+            return MetabolicSnapshot(
+                sources=explicit_sources,
+                release_version=release_version,
+            )
         raise ValueError("At least one KEGG metabolic input must be provided")
-    return MetabolicSnapshot(sources=sources, release_version=release_version)
 
-
-def from_metabolic_release(
-    source: os.PathLike[str] | str,
-    *,
-    release_version: str | None = None,
-) -> MetabolicSnapshot:
-    path = Path(source)
-    if not path.exists():
-        raise FileNotFoundError(path)
-    if path.is_file():
-        if not (zipfile.is_zipfile(path) or tarfile.is_tarfile(path)):
-            raise ValueError(f"Unsupported KEGG metabolic release archive: {path}")
+    source_path = Path(source)
+    if not source_path.exists():
+        raise FileNotFoundError(source_path)
+    if source_path.is_dir():
+        discovered_sources = discover_release_layout(source_path)
+        final_sources = dict(discovered_sources)
+        final_sources.update(explicit_sources)
+        validate_complete_release(final_sources)
+        validate_source_inventory(final_sources)
         return MetabolicSnapshot(
-            sources={},
+            sources=final_sources,
             release_version=release_version,
             complete_release=True,
-            archive=path,
         )
-    root = path / "raw" if (path / "raw").is_dir() else path
-    sources = discover_release_layout(root)
-    missing = [
+
+    archive_roles = _inspect_release_archive(source_path)
+    validate_source_inventory({"release_archive": (source_path,), **explicit_sources})
+    missing = sorted(
         role
-        for role in (*[f"{x}_entries" for x in ENTRY_ROLES], *RELATION_ROLES)
-        if role not in sources
-    ]
+        for role in REQUIRED_SOURCE_ROLES
+        if role not in archive_roles and role not in explicit_sources
+    )
     if missing:
-        raise ValueError(f"Incomplete KEGG metabolic release; missing roles: {missing}")
+        raise ValueError(
+            f"Incomplete KEGG metabolic release archive; missing roles: {missing}"
+        )
     return MetabolicSnapshot(
-        sources=sources,
+        sources=explicit_sources,
         release_version=release_version,
         complete_release=True,
+        archive=source_path,
     )
 
 
 def discover_release_layout(root: Path) -> dict[str, tuple[Path, ...]]:
-    candidates = [root]
-    if (root / "raw").is_dir():
-        candidates.insert(0, root / "raw")
-    candidates.extend(sorted(path for path in root.rglob("raw") if path.is_dir()))
-    raw = next(
-        (
-            candidate
-            for candidate in candidates
-            if all((candidate / family / "entries").is_dir() for family in ENTRY_ROLES)
-        ),
-        root,
-    )
+    """Resolve exactly one KEGG raw layout without traversal-order precedence."""
+    candidates: list[Path] = []
+    candidate_ids: set[Path] = set()
+    for candidate in (root, *sorted(root.rglob("raw"))):
+        if not candidate.is_dir():
+            continue
+        identity = candidate.resolve()
+        if identity in candidate_ids:
+            continue
+        candidate_ids.add(identity)
+        candidates.append(candidate)
+
+    layouts = [
+        (candidate, sources)
+        for candidate in candidates
+        if (sources := _discover_release_candidate(candidate)) is not None
+    ]
+    if not layouts:
+        raise ValueError(f"KEGG metabolic source contains no release layout: {root}")
+    if len(layouts) > 1:
+        raise ValueError(
+            "KEGG metabolic source contains multiple release layouts: "
+            + ", ".join(str(candidate) for candidate, _ in layouts)
+        )
+    return layouts[0][1]
+
+
+def _discover_release_candidate(
+    raw: Path,
+) -> dict[str, tuple[Path, ...]] | None:
     found: dict[str, tuple[Path, ...]] = {}
+    recognized = False
     for family in ENTRY_ROLES:
         file_list = raw / family / "list.tsv"
         dir_entries = raw / family / "entries"
         if file_list.is_file():
+            recognized = True
             found[f"{family}_list"] = (file_list,)
         if dir_entries.is_dir():
+            recognized = True
             entries = tuple(sorted(dir_entries.glob("*.keg")))
             if entries:
                 found[f"{family}_entries"] = entries
     for role in RELATION_ROLES:
         relation = raw / f"{role}.tsv"
         if relation.is_file():
+            recognized = True
             found[role] = (relation,)
-    return found
+    return found if recognized else None
+
+
+def validate_complete_release(
+    sources: Mapping[str, tuple[Path, ...]],
+) -> None:
+    """Reject a source-backed inventory missing a required metabolic role."""
+    missing = sorted(role for role in REQUIRED_SOURCE_ROLES if not sources.get(role))
+    if missing:
+        raise ValueError(f"Incomplete KEGG metabolic release; missing roles: {missing}")
+
+
+def validate_source_inventory(
+    sources: Mapping[str, tuple[Path, ...]],
+) -> None:
+    """Reject empty roles and physical-file reuse in a final inventory."""
+    physical_roles: dict[tuple[int, int], tuple[str, Path]] = {}
+    for role, paths in sources.items():
+        if not paths:
+            raise ValueError(
+                f"KEGG metabolic input role {role!r} must resolve to at least one file"
+            )
+        for path in paths:
+            resolved = path.resolve()
+            stat = resolved.stat()
+            physical_id = (stat.st_dev, stat.st_ino)
+            if physical_id in physical_roles:
+                other_role, other_path = physical_roles[physical_id]
+                raise ValueError(
+                    f"KEGG metabolic input roles {other_role!r} and {role!r} "
+                    f"refer to the same physical file: {other_path}"
+                )
+            physical_roles[physical_id] = (role, resolved)
+
+
+def _inspect_release_archive(path: Path) -> frozenset[str]:
+    members: list[str]
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path) as archive:
+            members = [
+                member.filename for member in archive.infolist() if not member.is_dir()
+            ]
+    elif tarfile.is_tarfile(path):
+        with tarfile.open(path, mode="r:*") as archive:
+            links = [
+                member.name
+                for member in archive.getmembers()
+                if member.issym() or member.islnk()
+            ]
+            if links:
+                raise ValueError(
+                    "Links are not allowed in KEGG release archives: "
+                    + ", ".join(links)
+                )
+            members = [
+                member.name for member in archive.getmembers() if member.isfile()
+            ]
+    else:
+        raise ValueError(f"Unsupported KEGG metabolic release archive: {path}")
+
+    layouts: dict[PurePosixPath, set[str]] = {}
+    normalized_members = [PurePosixPath(name) for name in members]
+    if len(normalized_members) != len(set(normalized_members)):
+        raise ValueError(
+            f"KEGG metabolic release archive has duplicate members: {path}"
+        )
+    for name, member in zip(members, normalized_members, strict=True):
+        if member.is_absolute() or ".." in member.parts:
+            raise ValueError(f"Unsafe path in KEGG release archive: {name}")
+        match = _archive_member_role(member)
+        if match is None:
+            continue
+        candidate, role = match
+        layouts.setdefault(candidate, set()).add(role)
+
+    if not layouts:
+        raise ValueError(
+            f"KEGG metabolic release archive contains no release layout: {path}"
+        )
+    if len(layouts) > 1:
+        raise ValueError(
+            "KEGG metabolic release archive contains multiple release layouts: "
+            + ", ".join(str(candidate) for candidate in sorted(layouts, key=str))
+        )
+    return frozenset(next(iter(layouts.values())))
+
+
+def _archive_member_role(
+    member: PurePosixPath,
+) -> tuple[PurePosixPath, str] | None:
+    parts = member.parts
+    candidate: PurePosixPath
+    role: str
+    if member.name in _RELATION_ROLE_BY_FILENAME:
+        candidate = member.parent
+        role = _RELATION_ROLE_BY_FILENAME[member.name]
+    elif len(parts) >= 2 and parts[-2] in ENTRY_ROLES and member.name == "list.tsv":
+        candidate = member.parent.parent
+        role = f"{parts[-2]}_list"
+    elif (
+        len(parts) >= 3
+        and parts[-3] in ENTRY_ROLES
+        and parts[-2] == "entries"
+        and member.suffix == ".keg"
+    ):
+        candidate = member.parent.parent.parent
+        role = f"{parts[-3]}_entries"
+    else:
+        return None
+
+    if candidate != PurePosixPath(".") and candidate.name != "raw":
+        return None
+    return candidate, role
 
 
 def open_text(path: Path):
