@@ -26,14 +26,13 @@ artifacts; the only output is the DuckDB database.
 
 The public constructors disclose complexity by capability:
 
-- `from_files(...)` accepts the 11 keyword-only explicit roles. Any reaction
-  role requires both RDF and the direction quartet; compound and
-  cross-reference roles remain independently constructible. One supplied
-  group has its group scope, while any mixed group profile has `partial`
-  scope. Explicit paths are normalized to their actual files, and one physical
-  file cannot fill multiple logical roles.
-- `from_release(source)` accepts an extracted directory or zip/tar archive and
-  strictly requires all 15 assets in the current official release contract.
+- `from_files(source=None, ...)` accepts an extracted release directory or
+  zip/tar archive plus the 11 scalar explicit roles. Without a source, any
+  reaction role requires both RDF and the direction quartet; compound and
+  cross-reference roles remain independently constructible. With a source,
+  explicit roles replace discovered counterparts and the final inventory must
+  contain all 15 official assets. Explicit paths are normalized to their
+  actual files, and one physical file cannot fill multiple logical roles.
 - `from_duckdb(path)` validates a bioextract Rhea publication and opens it as a
   read-only domain-query handle.
 
@@ -41,9 +40,9 @@ Partial inputs create only meaningful tables. A missing component is represented
 by an absent table, not an empty table that could be mistaken for an observed
 zero-row dataset.
 
-Compression is detected internally. The explicit-file constructor therefore does not
-encode `.gz` in their method names, and release archives need not be manually
-extracted.
+Compression is detected internally. The explicit-file constructor therefore
+does not encode `.gz` in its method name, and source archives need not be
+manually extracted.
 
 ## Naming Contract
 

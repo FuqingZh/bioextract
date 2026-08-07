@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import os
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -178,6 +179,7 @@ def _write_release(root: Path) -> Path:
 def test_from_files_signature_and_removed_constructors() -> None:
     parameters = inspect.signature(RheaDatabase.from_files).parameters
     assert tuple(parameters) == (
+        "source",
         "rdf",
         "directions",
         "relationships",
@@ -190,13 +192,16 @@ def test_from_files_signature_and_removed_constructors() -> None:
         "uniprot_sprot",
         "uniprot_trembl",
     )
+    assert parameters["source"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert parameters["source"].default is None
     assert all(
         parameter.kind is inspect.Parameter.KEYWORD_ONLY and parameter.default is None
-        for parameter in parameters.values()
+        for parameter in tuple(parameters.values())[1:]
     )
     assert not hasattr(RheaDatabase, "from_reaction_files")
     assert not hasattr(RheaDatabase, "from_compound_files")
     assert not hasattr(RheaDatabase, "from_cross_reference_files")
+    assert not hasattr(RheaDatabase, "from_release")
 
 
 def test_from_files_validation_and_scope_matrix(tmp_path: Path) -> None:
@@ -406,10 +411,111 @@ def test_release_is_strict_but_partial_constructor_is_not(
     _write(tmp_path / "chebiId_name.tsv", "1\t A\n")
 
     with pytest.raises(ValueError, match="Incomplete Rhea release"):
-        RheaDatabase.from_release(tmp_path)
+        RheaDatabase.from_files(tmp_path)
 
     db = RheaDatabase.from_files(chebi_names=tmp_path / "chebiId_name.tsv")
     assert db.snapshot.scope == "compounds"
+
+
+def test_source_backed_from_files_replaces_roles_and_records_final_provenance(
+    tmp_path: Path,
+) -> None:
+    release = _write_release(tmp_path / "release")
+    overlay = _write(
+        tmp_path / "overlay-directions.tsv",
+        "RHEA_ID_MASTER\tRHEA_ID_LR\tRHEA_ID_RL\tRHEA_ID_BI\n"
+        "10000\t10001\t10002\t10003\n",
+    )
+    path = tmp_path / "source-overlay.duckdb"
+
+    report = RheaDatabase.from_files(release, directions=overlay).write_duckdb(path)
+
+    assert report.scope == "release"
+    assert report.release_number == 141
+    assert report.source_files["directions"] == str(overlay)
+    assert str(release) in report.source_files["rdf"]
+    with duckdb.connect(str(path), read_only=True) as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+    assert metadata["bioextract.scope"] == "release"
+
+
+def test_source_backed_from_files_allows_only_overridden_missing_roles(
+    tmp_path: Path,
+) -> None:
+    release = _write_release(tmp_path / "release")
+    missing = release / "raw" / "rhea.rdf"
+    missing.unlink()
+    overlay = _write(tmp_path / "overlay.rdf", RDF_FIXTURE)
+
+    report = RheaDatabase.from_files(release, rdf=overlay).write_duckdb(
+        tmp_path / "overridden-missing.duckdb"
+    )
+    assert report.scope == "release"
+    assert report.source_files["rdf"] == str(overlay)
+
+    missing_directions = _write_release(tmp_path / "missing-directions")
+    (missing_directions / "raw" / "rhea-directions.tsv").unlink()
+    with pytest.raises(ValueError, match="Incomplete Rhea release"):
+        RheaDatabase.from_files(missing_directions)
+
+
+def test_archive_source_overlay_replaces_missing_role_and_keeps_archive_provenance(
+    tmp_path: Path,
+) -> None:
+    release = _write_release(tmp_path / "release")
+    archive_path = tmp_path / "release.zip"
+    with zipfile.ZipFile(archive_path, mode="w") as archive:
+        for path in release.rglob("*"):
+            if path.is_file() and path.name != "rhea.rdf":
+                archive.write(path, path.relative_to(tmp_path))
+    overlay = _write(tmp_path / "overlay.rdf", RDF_FIXTURE)
+
+    report = RheaDatabase.from_files(archive_path, rdf=overlay).write_duckdb(
+        tmp_path / "archive-overlay.duckdb"
+    )
+
+    assert report.scope == "release"
+    assert report.source_files["rdf"] == str(overlay)
+    assert str(archive_path) in report.source_files["directions"]
+
+
+def test_source_backed_from_files_rejects_final_physical_file_reuse(
+    tmp_path: Path,
+) -> None:
+    release = _write_release(tmp_path / "release")
+
+    with pytest.raises(ValueError, match="same physical file"):
+        RheaDatabase.from_files(release, rdf=release / "raw" / "rhea-directions.tsv")
+
+
+@pytest.mark.parametrize(
+    "role",
+    [
+        "rdf",
+        "directions",
+        "relationships",
+        "obsolete_reactions",
+        "reaction_smiles",
+        "sdf",
+        "chebi_names",
+        "chebi_ph7_3_mapping",
+        "xrefs",
+        "uniprot_sprot",
+        "uniprot_trembl",
+    ],
+)
+def test_source_backed_explicit_roles_reject_missing_and_directory_values(
+    tmp_path: Path, role: str
+) -> None:
+    release = _write_release(tmp_path / f"release-{role}")
+    missing = tmp_path / f"missing-{role}"
+
+    with pytest.raises(FileNotFoundError):
+        RheaDatabase.from_files(release, **{role: missing})
+    with pytest.raises(ValueError, match="not a file"):
+        RheaDatabase.from_files(release, **{role: tmp_path})
 
 
 def test_if_exists_and_failed_build_preserve_destination(
@@ -468,7 +574,7 @@ def test_publication_metadata_and_direction_view_follow_shared_contract(
 ) -> None:
     release = _write_release(tmp_path / "release")
     path = tmp_path / "rhea.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(path)
+    RheaDatabase.from_files(release).write_duckdb(path)
 
     with duckdb.connect(str(path), read_only=True) as connection:
         metadata = dict(
@@ -523,7 +629,7 @@ def test_from_duckdb_rejects_wrong_identity_and_corrupt_inventory(
 
     release = _write_release(tmp_path / "release")
     corrupt = tmp_path / "corrupt.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(corrupt)
+    RheaDatabase.from_files(release).write_duckdb(corrupt)
     with duckdb.connect(str(corrupt)) as connection:
         connection.execute(
             "UPDATE _bioextract.table_info "
@@ -538,7 +644,7 @@ def test_metadata_versions_physical_curie_contract_and_native_connection(
 ) -> None:
     release = _write_release(tmp_path / "release")
     current = tmp_path / "current.duckdb"
-    RheaDatabase.from_release(release).write_duckdb(current)
+    RheaDatabase.from_files(release).write_duckdb(current)
 
     database = RheaDatabase.from_duckdb(current)
     with database.connect() as connection:

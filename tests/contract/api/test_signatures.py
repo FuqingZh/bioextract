@@ -70,7 +70,7 @@ def test_resource_factories_do_not_expose_limits() -> None:
         uniprot.UniProtDatabase.from_knowledgebase,
         stringdb.STRINGDatabase.from_files,
         omnipath.OmniPathDatabase.from_files,
-        rhea.RheaDatabase.from_release,
+        rhea.RheaDatabase.from_files,
     )
     assert all(
         "limits" not in inspect.signature(factory).parameters for factory in factories
@@ -138,6 +138,7 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
         ),
         omnipath.OmniPathDatabase.from_files: ("enzsub", "interactions"),
         rhea.RheaDatabase.from_files: (
+            "source",
             "rdf",
             "directions",
             "relationships",
@@ -150,7 +151,6 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "uniprot_sprot",
             "uniprot_trembl",
         ),
-        rhea.RheaDatabase.from_release: ("source",),
         rhea.RheaDatabase.from_duckdb: ("path",),
     }
     assert {
@@ -175,9 +175,12 @@ def test_phase_1_constructor_parameter_kinds_are_explicit() -> None:
     )
 
     rhea_parameters = inspect.signature(rhea.RheaDatabase.from_files).parameters
+    assert rhea_parameters["source"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert rhea_parameters["source"].default is None
     assert all(
-        parameter.kind is inspect.Parameter.KEYWORD_ONLY and parameter.default is None
-        for parameter in rhea_parameters.values()
+        rhea_parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+        and rhea_parameters[name].default is None
+        for name in tuple(rhea_parameters)[1:]
     )
 
 
