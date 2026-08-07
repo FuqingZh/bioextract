@@ -98,6 +98,10 @@ pdm run test-integration
 ```
 
 Keep shared-host execution bounded with `BIOEXTRACT_TEST_THREADS=1` or `4`.
+The repository launcher propagates this ceiling to known native-library pools
+before every validation child, but it does not cap total NLWP or serialize
+independent workers. AO or another host runner owns heavy-task admission and
+process-tree containment.
 External snapshot smoke is opt-in through `pdm run test-smoke` and explicit
 publication paths; it is never a reason to weaken the hermetic gate.
 

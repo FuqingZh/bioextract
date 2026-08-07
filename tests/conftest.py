@@ -1,38 +1,37 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import duckdb
 import pytest
 
-_TEST_THREADS_ENV = "BIOEXTRACT_TEST_THREADS"
-_DEFAULT_TEST_THREADS = 4
+from bioextract._runtime import (
+    bootstrap_duckdb_default_connection,
+    configure_validation_environment,
+)
 
+try:
+    _TEST_THREAD_LIMIT = configure_validation_environment()
+except ValueError as error:
+    raise pytest.UsageError(str(error)) from error
 
-def _test_thread_limit() -> int:
-    raw_limit = os.environ.get(_TEST_THREADS_ENV, str(_DEFAULT_TEST_THREADS))
-    try:
-        limit = int(raw_limit)
-    except ValueError as exc:
-        message = f"{_TEST_THREADS_ENV} must be a positive integer, got {raw_limit!r}"
-        raise pytest.UsageError(message) from exc
-    if limit < 1:
-        message = f"{_TEST_THREADS_ENV} must be a positive integer, got {raw_limit!r}"
-        raise pytest.UsageError(message)
-    return limit
+# Direct pytest does not pass through the repository launcher. Make its
+# interpreter and spawned Python children use the same bootstrap boundary.
+_SCRIPTS_PATH = str(Path(__file__).resolve().parents[1] / "scripts")
+if _SCRIPTS_PATH not in sys.path:
+    sys.path.insert(0, _SCRIPTS_PATH)
+_python_path = os.environ.get("PYTHONPATH")
+_python_path_entries = _python_path.split(os.pathsep) if _python_path else []
+if _SCRIPTS_PATH not in _python_path_entries:
+    _python_path_entries.insert(0, _SCRIPTS_PATH)
+os.environ["PYTHONPATH"] = os.pathsep.join(_python_path_entries)
+os.environ["BIOEXTRACT_RUNTIME_BOOTSTRAP"] = "1"
+bootstrap_duckdb_default_connection()
 
-
-_TEST_THREAD_LIMIT = _test_thread_limit()
-
-# Polars reads its thread limit at import time. Root conftest is loaded before
-# test modules, so direct `pytest` and repository-owned PDM commands share the
-# same bounded default. Callers may still choose a smaller explicit limit.
-os.environ.setdefault(_TEST_THREADS_ENV, str(_TEST_THREAD_LIMIT))
-os.environ.setdefault("POLARS_MAX_THREADS", str(_TEST_THREAD_LIMIT))
-os.environ.setdefault("RAYON_NUM_THREADS", str(_TEST_THREAD_LIMIT))
+import duckdb  # noqa: E402
 
 
 @pytest.fixture(scope="session", autouse=True)
