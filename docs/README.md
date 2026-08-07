@@ -21,7 +21,7 @@ when a domain does not yet have a dedicated architecture document.
 4. Read the repository-wide [Test Standard](testing/README.md), then the
    corresponding resource test standard and, where present, the real-snapshot
    benchmark before changing validation or publication behavior.
-5. Read the repository [AO and delivery norms](runbooks/ao-delivery.md)
+5. Read the repository [delivery boundaries](runbooks/repository-delivery.md)
    before starting PR-bound work or changing repository gates.
 
 ## Directory Map
