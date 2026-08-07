@@ -109,7 +109,7 @@ def test_release_tables_keep_official_headers_and_use_internal_metadata(
     _write_release(directory, gzip_compounds=True)
 
     path = tmp_path / "chebi.duckdb"
-    result = ChEBIDatabase.from_release(directory).write_duckdb(path)
+    result = ChEBIDatabase.from_table_files(directory).write_duckdb(path)
 
     assert result.tables == ("compound", "compound_name")
     with duckdb.connect(str(path), read_only=True) as connection:
@@ -144,7 +144,7 @@ def test_unsafe_release_archive_member_is_rejected(tmp_path: Path) -> None:
     with zipfile.ZipFile(file_archive, "w") as archive:
         archive.writestr("../compounds.tsv", COMPOUNDS)
     with pytest.raises(ValueError, match="Unsafe archive member"):
-        ChEBIDatabase.from_release(file_archive)
+        ChEBIDatabase.from_table_files(file_archive)
 
 
 def test_validation_issue_metadata_and_canonical_fail_fast(tmp_path: Path) -> None:

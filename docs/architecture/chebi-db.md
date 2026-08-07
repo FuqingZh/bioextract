@@ -12,9 +12,15 @@ adds molfile records, TSV remains a partial-build path, and the PostgreSQL dump
 is an audit or future advanced-source input rather than a runtime dependency.
 Optional ChemOnt OBO remains an independent `chemont_*` graph.
 
-`from_release(source)` discovers available OBO, SDF, and TSV files.
-`from_obo(path, sdf=..., chemont_obo=...)` selects explicit ontology sources.
-Compression and archive containers are detected internally.
+`from_obo(source, sdf=..., chemont_obo=...)` selects the ontology
+representation. `source` may be one exact OBO file, a directory containing
+exactly one OBO candidate, or an archive containing exactly one OBO member.
+Only directory and archive sources discover a matching SDF supplement; an
+exact OBO file never scans sibling files. `from_table_files(source=None, *,
+...)` selects the official TSV representation and accepts explicit role
+overlays that replace source-discovered files. A table source must contain
+`compounds.tsv` after overlays. Compression and archive containers are
+detected internally, and provenance records the retained source inventory.
 
 ## Canonical Relations
 
