@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -56,6 +57,17 @@ def _launch_python(
 
 
 def test_launcher_applies_environment_to_non_python_child() -> None:
+    pdm = shutil.which("pdm")
+    assert pdm is not None
+    probe = f"""
+import json
+import os
+print(json.dumps({{
+    "budget": os.environ["BIOEXTRACT_TEST_THREADS"],
+    "pools": {{name: os.environ[name] for name in {NATIVE_THREAD_ENV_VARS!r}}},
+    "bootstrap": os.environ.get("BIOEXTRACT_RUNTIME_BOOTSTRAP"),
+}}))
+"""
     result = subprocess.run(
         [
             sys.executable,
@@ -63,7 +75,11 @@ def test_launcher_applies_environment_to_non_python_child() -> None:
             "--default",
             "2",
             "--",
-            "/usr/bin/env",
+            pdm,
+            "run",
+            "python",
+            "-c",
+            probe,
         ],
         cwd=_ROOT,
         env=_clean_environment(),
@@ -71,13 +87,31 @@ def test_launcher_applies_environment_to_non_python_child() -> None:
         capture_output=True,
         text=True,
     )
-    child_environment = dict(
-        line.split("=", 1) for line in result.stdout.splitlines() if "=" in line
+    child_environment = json.loads(result.stdout)
+
+    assert child_environment["budget"] == "2"
+    assert child_environment["pools"] == dict.fromkeys(NATIVE_THREAD_ENV_VARS, "2")
+    assert child_environment["bootstrap"] is None
+
+
+def test_direct_pytest_bootstraps_current_duckdb_default_connection() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/unit/shared/test_runtime_limits.py::"
+            "test_analytical_engines_use_bounded_test_threads",
+            "-q",
+        ],
+        cwd=_ROOT,
+        env=_clean_environment() | {"BIOEXTRACT_TEST_THREADS": "1"},
+        check=True,
+        capture_output=True,
+        text=True,
     )
 
-    assert child_environment["BIOEXTRACT_TEST_THREADS"] == "2"
-    assert all(child_environment[name] == "2" for name in NATIVE_THREAD_ENV_VARS)
-    assert "BIOEXTRACT_RUNTIME_BOOTSTRAP" not in child_environment
+    assert "1 passed" in result.stdout
 
 
 def test_repository_validation_children_use_budget_launcher() -> None:

@@ -13,11 +13,11 @@ sys.path.insert(0, str(_ROOT / "src"))
 
 from bioextract._runtime import (  # noqa: E402
     DEFAULT_TEST_THREADS,
+    DUCKDB_BOOTSTRAP_PID_ENV,
     configure_validation_environment,
 )
 
 _BOOTSTRAP_ENABLED = "BIOEXTRACT_RUNTIME_BOOTSTRAP"
-_BOOTSTRAP_PID = "BIOEXTRACT_DUCKDB_BOOTSTRAPPED_PID"
 
 
 def _arguments() -> argparse.Namespace:
@@ -48,7 +48,7 @@ def _enable_python_bootstrap() -> None:
 
     # exec retains this PID but discards the current interpreter and its DuckDB
     # connection. The target interpreter must therefore bootstrap again.
-    os.environ.pop(_BOOTSTRAP_PID, None)
+    os.environ.pop(DUCKDB_BOOTSTRAP_PID_ENV, None)
 
 
 def main() -> int:

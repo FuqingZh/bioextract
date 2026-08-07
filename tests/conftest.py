@@ -8,7 +8,10 @@ from typing import Any
 
 import pytest
 
-from bioextract._runtime import configure_validation_environment
+from bioextract._runtime import (
+    bootstrap_duckdb_default_connection,
+    configure_validation_environment,
+)
 
 try:
     _TEST_THREAD_LIMIT = configure_validation_environment()
@@ -26,6 +29,7 @@ if _SCRIPTS_PATH not in _python_path_entries:
     _python_path_entries.insert(0, _SCRIPTS_PATH)
 os.environ["PYTHONPATH"] = os.pathsep.join(_python_path_entries)
 os.environ["BIOEXTRACT_RUNTIME_BOOTSTRAP"] = "1"
+bootstrap_duckdb_default_connection()
 
 import duckdb  # noqa: E402
 

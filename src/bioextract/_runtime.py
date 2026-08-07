@@ -19,6 +19,7 @@ NATIVE_THREAD_ENV_VARS: Final[tuple[str, ...]] = (
     "NUMEXPR_MAX_THREADS",
     "VECLIB_MAXIMUM_THREADS",
 )
+DUCKDB_BOOTSTRAP_PID_ENV: Final = "BIOEXTRACT_DUCKDB_BOOTSTRAPPED_PID"
 
 
 def _positive_integer(name: str, raw_value: str) -> int:
@@ -72,3 +73,27 @@ def configure_validation_environment(
             values[name] = str(min(_positive_integer(name, raw_value), budget))
 
     return budget
+
+
+def bootstrap_duckdb_default_connection(
+    *, environ: MutableMapping[str, str] | None = None
+) -> None:
+    """Bound DuckDB's default connection once in the current interpreter.
+
+    The process-local marker prevents duplicate setup after ordinary imports
+    while allowing spawned children, which have a different PID, to initialize
+    their own default connection.
+    """
+    values = os.environ if environ is None else environ
+    current_pid = str(os.getpid())
+    if values.get(DUCKDB_BOOTSTRAP_PID_ENV) == current_pid:
+        return
+
+    budget = _positive_integer(
+        "BIOEXTRACT_TEST_THREADS", values["BIOEXTRACT_TEST_THREADS"]
+    )
+
+    import _duckdb
+
+    _duckdb.set_default_connection(_duckdb.connect(config={"threads": str(budget)}))
+    values[DUCKDB_BOOTSTRAP_PID_ENV] = current_pid
