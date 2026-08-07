@@ -60,11 +60,13 @@ The active
 defines the repository validation thread-budget boundary, the separate
 host/AO resource-control ownership, gzip FASTA error normalization, the common
 `source` overlay contract, and the dependency-ordered Rhea, KEGG metabolic,
-and ChEBI constructor migrations.
+and ChEBI constructor migrations. The implementation slices and independent
+harness cleanup are merged; only documentation closeout remains, followed by
+the separately authorized `0.2.0` package-release handoff.
 
-The active
+The completed
 [Column Lineage And Public Schema Convergence Plan](implementation-plans/20260804-v1.0-column-lineage-public-schema-convergence.md)
-defines the official-header versus derived-column ownership rule, shared
+records the official-header versus derived-column ownership rule, shared
 `snake_case` selection protocol, `from_*` lifecycle naming, resource-specific
 migration slices, and the publication rebuild and verification boundary.
 
@@ -86,7 +88,7 @@ The completed
 [Test Suite Layering Plan](implementation-plans/20260731-v1.0-test-suite-layering.md)
 records the unit, contract, integration, and external-snapshot smoke
 boundaries, fixture ownership, migration slices, and the growth from its
-482-case pre-migration baseline to the current 598-case hermetic gate.
+482-case pre-migration baseline to its 598-case post-migration baseline.
 
 The completed
 [Public API And Grouped Selection Convergence Plan](implementation-plans/20260731-v1.0-public-api-grouped-selection-convergence.md)
