@@ -46,7 +46,7 @@
   concurrency.
 - Publication replacement, formal CephFS delivery, and deletion of old
   artifacts are explicit release actions. Stage and replace atomically.
-- For PR-bound work, read `docs/runbooks/ao-delivery.md`. It owns the detailed
-  AO lifecycle, single-writer, fallback, validation, and merge rules.
-- AO configuration, credentials, daemon state, and `CODEX_HOME` are host-owned.
-  Do not duplicate or persist them in this repository.
+- For PR-bound work, read `docs/runbooks/repository-delivery.md` for this
+  repository's validation, single-writer, and shared-storage boundaries.
+- AO lifecycle, configuration, credentials, daemon state, merge policy, and
+  `CODEX_HOME` are host-owned. Do not duplicate or persist them here.

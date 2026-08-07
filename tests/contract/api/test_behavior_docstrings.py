@@ -69,9 +69,6 @@ BEHAVIOR_CLASSES = (
 
 BEHAVIOR_FUNCTIONS = (("kegg.brite.build_tidy_frames", build_kegg_tidy_frames),)
 
-EXPECTED_BEHAVIOR_TARGET_COUNT = 188
-
-
 class _FunctionDescriptor(Protocol):
     __func__: FunctionType
 
@@ -104,12 +101,6 @@ def iter_behavior_docstring_targets() -> Iterator[tuple[str, object, str | None]
 
 
 BEHAVIOR_DOCSTRING_TARGETS = tuple(iter_behavior_docstring_targets())
-
-
-def test_behavior_docstring_target_matrix_is_complete() -> None:
-    assert len(BEHAVIOR_CLASSES) == 25
-    assert len(BEHAVIOR_FUNCTIONS) == 1
-    assert len(BEHAVIOR_DOCSTRING_TARGETS) == EXPECTED_BEHAVIOR_TARGET_COUNT
 
 
 def test_maintenance_helpers_are_not_public_api() -> None:

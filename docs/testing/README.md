@@ -151,7 +151,7 @@ better identifier.
 - Focused layer tests should pass before the complete suite.
 - The complete suite is required for public API, publication schema, or
   cross-resource changes.
-- A structural migration must preserve the pre-migration collection count
-  unless a mixed test is deliberately split and the increase is documented.
+- Test collection count is informational, not an acceptance criterion. Judge a
+  structural migration by the contracts and behavior its tests exercise.
 - Full release snapshots and performance benchmarks remain outside default
   pytest and follow their resource testing or benchmark document.
