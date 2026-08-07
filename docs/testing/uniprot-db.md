@@ -12,6 +12,8 @@ The focused suite verifies:
 - strict reviewed DAT grammar and mandatory `ID`, `AC`, `OX`, and `SQ` facts;
 - SQ length, molecular weight, CRC64, and sequence parity;
 - exact canonical FASTA equality and varsplic-to-DAT isoform resolution;
+- canonical and isoform FASTA plain/gzip equivalence, gzip content without a
+  `.gz` suffix, and path-specific errors for corrupt gzip streams;
 - multi-IsoId products retain one main product row plus ordered old-ID rows;
 - repeated External/owned product contexts remain distinct, while varsplic
   materializes only the unique Alternative owner;

@@ -8,6 +8,7 @@ import lzma
 import re
 import sqlite3
 import tempfile
+import zlib
 from collections.abc import Generator, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -1043,7 +1044,7 @@ def _write_isoform_fasta(
 
 
 def _iter_fasta(path: Path, *, role: str) -> Iterator[tuple[str, str]]:
-    with _open_text(path) as handle:
+    with _open_fasta_text(path, role=role) as handle:
         identifier: str | None = None
         parts: list[str] = []
         for line in handle:
@@ -1088,6 +1089,19 @@ def _iter_fasta(path: Path, *, role: str) -> Iterator[tuple[str, str]]:
             )
         else:
             raise ValueError("Declared FASTA input contains no records")
+
+
+@contextmanager
+def _open_fasta_text(path: Path, *, role: str) -> Generator[IO[str]]:
+    try:
+        with _open_text(path) as handle:
+            yield handle
+    except (gzip.BadGzipFile, EOFError, UnicodeDecodeError, zlib.error) as exc:
+        if _media_type(path) == "application/gzip":
+            raise ValueError(
+                f"UniProt {role} FASTA input has an invalid gzip stream: {path}"
+            ) from exc
+        raise
 
 
 def _validated_fasta_sequence(
