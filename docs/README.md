@@ -55,14 +55,14 @@ when a domain does not yet have a dedicated architecture document.
 
 ## Plans And History
 
-The active
+The completed
 [Runtime And Constructor Convergence Plan](implementation-plans/20260805-v1.0-runtime-and-constructor-convergence.md)
-defines the repository validation thread-budget boundary, the separate
-host/AO resource-control ownership, gzip FASTA error normalization, the common
-`source` overlay contract, and the dependency-ordered Rhea, KEGG metabolic,
-and ChEBI constructor migrations. The implementation slices and independent
-harness cleanup are merged; only documentation closeout remains, followed by
-the separately authorized `0.2.0` package-release handoff.
+records the repository validation thread-budget boundary, the separate host/AO
+resource-control ownership, gzip FASTA error normalization, the common
+`source` overlay contract, and the completed Rhea, KEGG metabolic, and ChEBI
+constructor migrations. The implementation slices, independent harness
+cleanup, and documentation closeout are merged; the separately authorized
+`0.2.0` package-release handoff remains outside the plan.
 
 The completed
 [Column Lineage And Public Schema Convergence Plan](implementation-plans/20260804-v1.0-column-lineage-public-schema-convergence.md)
