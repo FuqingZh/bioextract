@@ -116,16 +116,26 @@ suite must not skip because of external state.
 
 ## Resource Limits
 
-The test harness defaults DuckDB, Polars, and Rayon-backed work to four
-threads. Override the common ceiling when a smaller shared-host budget is
-required:
+Repository-owned validation defaults DuckDB, Polars, Rayon, BLAS, and OpenMP
+worker pools to a common ceiling of four threads. The launcher applies that
+environment before each `lock-check`, format check, lint, typecheck, or pytest
+child starts. External-publication smoke defaults to two. Override the common
+ceiling when a smaller shared-host budget is required:
 
 ```console
-BIOEXTRACT_TEST_THREADS=1 pdm run test
+BIOEXTRACT_TEST_THREADS=1 pdm run check
 ```
 
-The limit belongs to the test harness only. It does not change bioextract
-runtime defaults for real publication builds.
+`BIOEXTRACT_TEST_THREADS` accepts any positive integer. Invalid budgets fail
+before the validation child starts. An unset native-pool variable receives the
+budget, a smaller positive caller value is preserved, and a larger positive
+value is clamped. Invalid native-pool values also fail before validation.
+
+The ceiling bounds known native worker pools; helper threads mean it is not an
+exact cap on total process threads or NLWP. It belongs to repository validation
+only and does not change bioextract runtime defaults for real publication
+builds. Host-wide validation admission and process-tree containment remain the
+responsibility of the host runner.
 
 ## Naming
 
