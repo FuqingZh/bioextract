@@ -1,17 +1,22 @@
 # KEGG Metabolic Database Test Standard
 
 Version: v0.1
-Date: 2026-07-30
+Date: 2026-08-07
 Status: current
 
 The focused suites are `tests/unit/kegg/test_metabolic_parsers.py`,
 `tests/contract/resources/kegg/test_metabolic_publication_contract.py`, and
-`tests/integration/kegg/test_metabolic.py`. They use temporary local
-fixtures only and verifies:
+`tests/integration/kegg/test_metabolic.py`. They use temporary local fixtures
+only and verify:
 
 - streaming multi-record compound, reaction, enzyme, and module parsing;
-- directory, single-file, nested zip/tar/gzip, and archive release discovery,
-  including original-archive provenance;
+- partial explicit profiles and `source` discovery from a release root, `raw`,
+  nested `raw`, zip, and tar;
+- zero/one/multiple layout handling, whole-role overlays, required-role
+  completeness, empty-fileset rejection, deterministic entry-batch order, and
+  duplicate physical-file rejection;
+- optional-list discovery and conditional list/entry parity;
+- final directory provenance and archive-plus-overlay provenance;
 - symbolic/numeric coefficients and C/G equation participants;
 - polymer/side suffix qualifiers without corrupting stoichiometric coefficients;
 - active and real `ENTRY EC ... Obsolete Enzyme` records, recursive replacement

@@ -201,7 +201,7 @@ A compound/reaction/enzyme/module snapshot is a multi-relation metabolic
 publication:
 
 ```python
-database = KEGGDatabase.from_metabolic_release("kegg/metabolic/2026-07")
+database = KEGGDatabase.from_metabolic_files("kegg/metabolic/2026-07")
 database.write_duckdb("out/kegg.duckdb")
 
 published = KEGGDatabase.from_duckdb("out/kegg.duckdb")

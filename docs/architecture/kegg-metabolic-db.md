@@ -1,7 +1,7 @@
 # KEGG Metabolic Database
 
 Version: v0.1
-Date: 2026-07-30
+Date: 2026-08-07
 Status: current
 
 ## Purpose
@@ -14,10 +14,23 @@ scopes.
 
 ## Construction And Publication
 
-Use `from_metabolic_release()` for a complete release directory, its `raw`
-directory, or a zip/tar archive. Use the explicit keyword-only
-`from_metabolic_files()` roles for partial fixtures and nonstandard layouts.
-Both constructors accept optional `release_version`. It records only a
+Use `from_metabolic_files(source=None, ...)`. Without `source`, explicit roles
+retain partial-profile behavior and missing roles become absent capabilities.
+With `source`, the constructor accepts one release directory, its `raw`
+directory, a parent containing one nested `raw` layout, or a zip/tar archive.
+Zero plausible layouts reject as incomplete and multiple layouts reject as
+ambiguous.
+
+Every explicit non-`None` role replaces the complete matching discovery;
+`None` alone permits discovery. Entry roles accept one batch, a directory, or
+a sequence. Scalar list and relation roles accept one file or a directory.
+Every explicit value must resolve to at least one file, and the final inventory
+must not reuse one physical file across roles. Source-backed construction
+requires all four entry collections and every relation role after overlays.
+The four `*_list` roles are optional; list/entry parity is checked when a list
+is present.
+
+The constructor accepts optional `release_version`. It records only a
 caller-declared official release identity with
 `release_version_source=caller`; directory, file, and archive names never
 supply or validate release identity.
@@ -26,10 +39,11 @@ published. The writer stages locally beside the requested destination,
 publishes metadata schema v1, verifies inventory and row counts read-only, and
 then atomically commits the requested DuckDB destination.
 
-When a release is supplied as an archive, provenance records the original
-archive display path and media type rather than an ephemeral extraction path.
-Archive members remain subject to the shared safe-path and supported-format
-checks.
+Directory-backed provenance contains only the final retained or replacement
+files. When an archive contributes at least one retained role, provenance
+records its original display path and each explicit overlay rather than
+ephemeral extraction paths. A fully replaced archive is omitted. Archive
+members remain subject to safe-path and supported-format checks.
 
 The resource schema is `kegg-metabolic-v0.1`. Biological relations live in
 `main`; `_bioextract` contains metadata, sources, table inventory, column
