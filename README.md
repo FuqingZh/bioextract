@@ -112,7 +112,7 @@ Build one query-ready database from a complete extracted release or archive:
 ```python
 from bioextract import RheaDatabase
 
-result = RheaDatabase.from_release("rhea-release.zip").write_duckdb(
+result = RheaDatabase.from_files("rhea-release.zip").write_duckdb(
     "out/rhea.duckdb"
 )
 print(result.tables)
