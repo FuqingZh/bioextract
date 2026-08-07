@@ -64,6 +64,20 @@ def _write_fasta(
     return path
 
 
+def _knowledgebase_with_fasta_role(
+    entries: Path, role: str, fasta: Path
+) -> UniProtDatabase:
+    if role == "canonical_sequences":
+        return UniProtDatabase.from_knowledgebase(
+            entries=entries, canonical_sequences=fasta
+        )
+    if role == "isoform_sequences":
+        return UniProtDatabase.from_knowledgebase(
+            entries=entries, isoform_sequences=fasta
+        )
+    raise AssertionError(f"Unsupported FASTA role: {role}")
+
+
 def _write_idmapping(path: Path) -> Path:
     rows = [
         [
@@ -371,12 +385,10 @@ def test_fasta_plain_and_gzip_inputs_are_equivalent(
     plain_publication = tmp_path / f"{role}-plain.duckdb"
     compressed_publication = tmp_path / f"{role}-compressed.duckdb"
 
-    UniProtDatabase.from_knowledgebase(entries=entries, **{role: plain}).write_duckdb(
-        plain_publication
+    _knowledgebase_with_fasta_role(entries, role, plain).write_duckdb(plain_publication)
+    _knowledgebase_with_fasta_role(entries, role, compressed).write_duckdb(
+        compressed_publication
     )
-    UniProtDatabase.from_knowledgebase(
-        entries=entries, **{role: compressed}
-    ).write_duckdb(compressed_publication)
 
     for table in ("protein_sequence", "protein_isoform"):
         with (
@@ -406,9 +418,9 @@ def test_corrupt_gzip_fasta_error_includes_role_and_path(
     corrupt.write_bytes(b"\x1f\x8b\x08\x00not-a-valid-gzip")
 
     with pytest.raises(ValueError) as raised:
-        UniProtDatabase.from_knowledgebase(
-            entries=entries, **{role: corrupt}
-        ).write_duckdb(tmp_path / f"{role}-corrupt.duckdb")
+        _knowledgebase_with_fasta_role(entries, role, corrupt).write_duckdb(
+            tmp_path / f"{role}-corrupt.duckdb"
+        )
 
     message = str(raised.value)
     assert f"UniProt {role_label} FASTA input" in message
