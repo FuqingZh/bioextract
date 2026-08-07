@@ -54,11 +54,28 @@ SQ   SEQUENCE   10 AA;  1132 MW;  81FC3551E879CB1A CRC64;
     return path
 
 
-def _write_fasta(path: Path, records: dict[str, str]) -> Path:
-    with gzip.open(path, "wt", encoding="utf-8") as handle:
+def _write_fasta(
+    path: Path, records: dict[str, str], *, compressed: bool = True
+) -> Path:
+    opener = gzip.open if compressed else Path.open
+    with opener(path, "wt", encoding="utf-8") as handle:
         for identifier, sequence in records.items():
             handle.write(f">sp|{identifier}|fixture\n{sequence}\n")
     return path
+
+
+def _knowledgebase_with_fasta_role(
+    entries: Path, role: str, fasta: Path
+) -> UniProtDatabase:
+    if role == "canonical_sequences":
+        return UniProtDatabase.from_knowledgebase(
+            entries=entries, canonical_sequences=fasta
+        )
+    if role == "isoform_sequences":
+        return UniProtDatabase.from_knowledgebase(
+            entries=entries, isoform_sequences=fasta
+        )
+    raise AssertionError(f"Unsupported FASTA role: {role}")
 
 
 def _write_idmapping(path: Path) -> Path:
@@ -350,6 +367,65 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
         )
         with pytest.raises(duckdb.Error):
             connection.execute("CREATE TABLE forbidden(value INTEGER)")
+
+
+@pytest.mark.parametrize(
+    ("role", "records"),
+    [
+        ("canonical_sequences", {"P12345": "ACDEFGHIKL"}),
+        ("isoform_sequences", {"P12345-2": "ACGGFGHIKL"}),
+    ],
+)
+def test_fasta_plain_and_gzip_inputs_are_equivalent(
+    tmp_path: Path, role: str, records: dict[str, str]
+) -> None:
+    entries = _write_dat(tmp_path / "entries.dat.gz")
+    plain = _write_fasta(tmp_path / f"{role}.fasta", records, compressed=False)
+    compressed = _write_fasta(tmp_path / f"{role}.compressed", records)
+    plain_publication = tmp_path / f"{role}-plain.duckdb"
+    compressed_publication = tmp_path / f"{role}-compressed.duckdb"
+
+    _knowledgebase_with_fasta_role(entries, role, plain).write_duckdb(plain_publication)
+    _knowledgebase_with_fasta_role(entries, role, compressed).write_duckdb(
+        compressed_publication
+    )
+
+    for table in ("protein_sequence", "protein_isoform"):
+        with (
+            duckdb.connect(str(plain_publication), read_only=True) as plain_connection,
+            duckdb.connect(
+                str(compressed_publication), read_only=True
+            ) as compressed_connection,
+        ):
+            plain_rows = plain_connection.execute(
+                f"SELECT * FROM {table} ORDER BY ALL"
+            ).fetchall()
+            compressed_rows = compressed_connection.execute(
+                f"SELECT * FROM {table} ORDER BY ALL"
+            ).fetchall()
+        assert plain_rows == compressed_rows
+
+
+@pytest.mark.parametrize(
+    ("role", "role_label"),
+    [("canonical_sequences", "canonical"), ("isoform_sequences", "isoform")],
+)
+def test_corrupt_gzip_fasta_error_includes_role_and_path(
+    tmp_path: Path, role: str, role_label: str
+) -> None:
+    entries = _write_dat(tmp_path / "entries.dat.gz")
+    corrupt = tmp_path / f"{role}.fasta.gz"
+    corrupt.write_bytes(b"\x1f\x8b\x08\x00not-a-valid-gzip")
+
+    with pytest.raises(ValueError) as raised:
+        _knowledgebase_with_fasta_role(entries, role, corrupt).write_duckdb(
+            tmp_path / f"{role}-corrupt.duckdb"
+        )
+
+    message = str(raised.value)
+    assert f"UniProt {role_label} FASTA input" in message
+    assert "invalid gzip stream" in message
+    assert str(corrupt) in message
 
 
 def test_shared_secondary_accession_selects_every_canonical_match(

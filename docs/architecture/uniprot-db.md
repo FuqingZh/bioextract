@@ -42,7 +42,9 @@ or upstream schema label, so release identity is caller-only and
 The streaming publisher uses temporary relation spools plus a disk-backed
 sequence/isoform index and commits atomically. DAT is authoritative. Optional
 canonical FASTA must match every DAT primary accession and sequence. Optional
-varsplic FASTA identifiers must resolve to DAT isoform definitions.
+varsplic FASTA identifiers must resolve to DAT isoform definitions. Corrupt
+gzip FASTA streams raise a path-specific `ValueError` naming the logical FASTA
+role and caller-supplied input path.
 
 ## Published Relations
 
