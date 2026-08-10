@@ -290,3 +290,256 @@ def test_go_db_select_terms_keeps_one_row_per_term_for_subset(tmp_path: Path) ->
         "GO:0005737",
     ]
     assert df_terms["subset_id"].to_list() == ["goslim_generic"] * 4
+
+
+def test_go_db_selects_ancestors_and_reports_unmatched(tmp_path: Path) -> None:
+    file_in = tmp_path / "go-basic.obo"
+    write_minimal_obo(file_in)
+
+    selection = GODatabase.from_obo(file_in).select_ancestors(
+        [" GO:1234567 ", "GO:0000003", "GO:0000004", "GO:9999999"],
+        target_subset_id=GoSubsetId.GOSLIM_GENERIC,
+        include_self=True,
+    )
+
+    assert selection.extract_ancestors().to_dicts() == [
+        {
+            "input_go_id": "GO:1234567",
+            "go_id": "GO:0000002",
+            "ancestor_go_id": "GO:0000002",
+            "ancestor_term_name": "child process",
+            "ancestor_namespace": "biological_process",
+            "min_distance": 0,
+            "target_subset_id": "goslim_generic",
+        },
+        {
+            "input_go_id": "GO:1234567",
+            "go_id": "GO:0000002",
+            "ancestor_go_id": "GO:0000001",
+            "ancestor_term_name": "root process",
+            "ancestor_namespace": "biological_process",
+            "min_distance": 1,
+            "target_subset_id": "goslim_generic",
+        },
+        {
+            "input_go_id": "GO:0000003",
+            "go_id": "GO:0000003",
+            "ancestor_go_id": "GO:0000002",
+            "ancestor_term_name": "child process",
+            "ancestor_namespace": "biological_process",
+            "min_distance": 1,
+            "target_subset_id": "goslim_generic",
+        },
+        {
+            "input_go_id": "GO:0000003",
+            "go_id": "GO:0000003",
+            "ancestor_go_id": "GO:0000001",
+            "ancestor_term_name": "root process",
+            "ancestor_namespace": "biological_process",
+            "min_distance": 2,
+            "target_subset_id": "goslim_generic",
+        },
+    ]
+    assert selection.extract_unmatched_ids().to_dicts() == [
+        {
+            "input_go_id": "GO:0000004",
+            "resolved_go_id": "GO:0000004",
+            "reason": "obsolete_excluded",
+        },
+        {
+            "input_go_id": "GO:9999999",
+            "resolved_go_id": None,
+            "reason": "not_found",
+        },
+    ]
+
+
+def test_go_db_ancestor_selection_handles_no_match_and_invalid_input(
+    tmp_path: Path,
+) -> None:
+    file_in = tmp_path / "go-basic.obo"
+    write_minimal_obo(file_in)
+    database = GODatabase.from_obo(file_in)
+
+    unmatched = database.select_ancestors(
+        ["GO:0000001"],
+        target_subset_id="missing_subset",
+    ).extract_unmatched_ids()
+    assert unmatched.to_dicts() == [
+        {
+            "input_go_id": "GO:0000001",
+            "resolved_go_id": "GO:0000001",
+            "reason": "no_matching_ancestor",
+        }
+    ]
+
+    with pytest.raises(ValueError, match="Invalid GO identifier"):
+        database.select_ancestors(["not-a-go-id"])
+
+
+def test_go_ancestor_selection_empty_schema(tmp_path: Path) -> None:
+    file_in = tmp_path / "go-basic.obo"
+    write_minimal_obo(file_in)
+
+    selection = GODatabase.from_obo(file_in).select_ancestors([])
+
+    assert selection.extract_ancestors().schema == {
+        "input_go_id": pl.String,
+        "go_id": pl.String,
+        "ancestor_go_id": pl.String,
+        "ancestor_term_name": pl.String,
+        "ancestor_namespace": pl.String,
+        "min_distance": pl.Int32,
+        "target_subset_id": pl.String,
+    }
+    assert selection.extract_unmatched_ids().schema == {
+        "input_go_id": pl.String,
+        "resolved_go_id": pl.String,
+        "reason": pl.Enum(["not_found", "obsolete_excluded", "no_matching_ancestor"]),
+    }
+
+
+@pytest.mark.parametrize(
+    (
+        "term_ids",
+        "target_subset_id",
+        "include_self",
+        "resolve_alt_ids",
+        "include_obsolete",
+    ),
+    [
+        (["GO:1234567"], None, False, True, False),
+        (["GO:1234567"], "goslim_generic", True, False, False),
+        (["GO:0000004"], "goslim_generic", True, True, True),
+        (["GO:0000004"], "missing_subset", False, True, True),
+        ([], "goslim_generic", True, True, False),
+    ],
+)
+def test_go_ancestor_selection_policy_parity(
+    tmp_path: Path,
+    term_ids: list[str],
+    target_subset_id: str | None,
+    include_self: bool,
+    resolve_alt_ids: bool,
+    include_obsolete: bool,
+) -> None:
+    source_path = tmp_path / "go-basic.obo"
+    publication = tmp_path / "go.duckdb"
+    write_minimal_obo(source_path)
+    source = GODatabase.from_obo(source_path)
+    source.write_duckdb(publication)
+    published = GODatabase.from_duckdb(publication)
+
+    source_selection = source.select_ancestors(
+        term_ids,
+        target_subset_id=target_subset_id,
+        include_self=include_self,
+        resolve_alt_ids=resolve_alt_ids,
+        include_obsolete=include_obsolete,
+    )
+    publication_selection = published.select_ancestors(
+        term_ids,
+        target_subset_id=target_subset_id,
+        include_self=include_self,
+        resolve_alt_ids=resolve_alt_ids,
+        include_obsolete=include_obsolete,
+    )
+    assert publication_selection.extract_ancestors().equals(
+        source_selection.extract_ancestors()
+    )
+    assert publication_selection.extract_unmatched_ids().equals(
+        source_selection.extract_unmatched_ids()
+    )
+
+
+def test_go_duckdb_ancestor_selection_matches_source_and_avoids_full_frame_loader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_path = tmp_path / "go-basic.obo"
+    publication = tmp_path / "go.duckdb"
+    write_minimal_obo(source_path)
+    source = GODatabase.from_obo(source_path)
+    source.write_duckdb(publication)
+    published = GODatabase.from_duckdb(publication)
+
+    def fail_class_full_frame_loader(
+        database: GODatabase, *args: object, **kwargs: object
+    ) -> None:
+        del database, args, kwargs
+        raise AssertionError("domain query loaded complete GO frames")
+
+    monkeypatch.setattr(
+        GODatabase,
+        "_read_publication_frames",
+        fail_class_full_frame_loader,
+    )
+
+    source_selection = source.select_ancestors(
+        ["GO:1234567", "GO:0000003", "GO:9999999"],
+        target_subset_id="goslim_generic",
+        include_self=True,
+    )
+    publication_selection = published.select_ancestors(
+        ["GO:1234567", "GO:0000003", "GO:9999999"],
+        target_subset_id="goslim_generic",
+        include_self=True,
+    )
+    assert publication_selection.extract_ancestors().equals(
+        source_selection.extract_ancestors()
+    )
+    assert publication_selection.extract_unmatched_ids().equals(
+        source_selection.extract_unmatched_ids()
+    )
+
+
+def test_go_publication_domain_queries_do_not_use_full_frame_loader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_path = tmp_path / "go-basic.obo"
+    publication = tmp_path / "go.duckdb"
+    write_minimal_obo(source_path)
+    source = GODatabase.from_obo(source_path)
+    source.write_duckdb(publication)
+    published = GODatabase.from_duckdb(publication)
+
+    def fail_class_full_frame_loader(
+        database: GODatabase, *args: object, **kwargs: object
+    ) -> None:
+        del database, args, kwargs
+        raise AssertionError("domain query loaded complete GO frames")
+
+    monkeypatch.setattr(
+        GODatabase,
+        "_read_publication_frames",
+        fail_class_full_frame_loader,
+    )
+    assert published.select_terms(term_ids=["GO:1234567"]).height == 1
+    assert published.list_subsets().height == 2
+
+
+def test_go_ancestor_selection_reuses_one_publication_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_path = tmp_path / "go-basic.obo"
+    publication = tmp_path / "go.duckdb"
+    write_minimal_obo(source_path)
+    source = GODatabase.from_obo(source_path)
+    source.write_duckdb(publication)
+    published = GODatabase.from_duckdb(publication)
+
+    calls = 0
+    connect = GODatabase.connect
+
+    def counted_connect(database: GODatabase) -> duckdb.DuckDBPyConnection:
+        nonlocal calls
+        calls += 1
+        return connect(database)
+
+    monkeypatch.setattr(GODatabase, "connect", counted_connect)
+    selection = published.select_ancestors(["GO:1234567"])
+    selection.extract_ancestors()
+    selection.extract_unmatched_ids()
+    assert calls == 1

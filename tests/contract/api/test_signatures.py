@@ -227,3 +227,29 @@ def test_phase_2_constructor_parameter_kinds_are_explicit() -> None:
         for name in ("species", "glob")
     )
     assert parameters["glob"].default is True
+
+
+def test_go_ancestor_selection_signature_is_explicit() -> None:
+    parameters = inspect.signature(go.GODatabase.select_ancestors).parameters
+    assert tuple(parameters) == (
+        "self",
+        "term_ids",
+        "target_subset_id",
+        "include_self",
+        "resolve_alt_ids",
+        "include_obsolete",
+    )
+    assert parameters["term_ids"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert all(
+        parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+        for name in (
+            "target_subset_id",
+            "include_self",
+            "resolve_alt_ids",
+            "include_obsolete",
+        )
+    )
+    assert parameters["target_subset_id"].default is None
+    assert parameters["include_self"].default is False
+    assert parameters["resolve_alt_ids"].default is True
+    assert parameters["include_obsolete"].default is False

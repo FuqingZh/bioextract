@@ -21,6 +21,11 @@ from bioextract._publication import (
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
 from bioextract.errors import CapabilityError, IntegrityError
 
+from ._query import (
+    GOAncestorSelection,
+    list_subsets_from_publication,
+    select_terms_from_publication,
+)
 from .ontology.constant import (
     ASSET_SPECS,
     GO_SUBSET_GOSLIM_GENERIC,
@@ -342,6 +347,23 @@ class GODatabase:
             ... ).to_dicts()
             [{'input_go_id': 'GO:1234567', 'go_id': 'GO:0000002'}]
         """
+        namespace_value = (
+            None if namespace is None else normalize_go_namespace(namespace)
+        )
+        subset_id_value = None if subset_id is None else normalize_subset_id(subset_id)
+        if self._publication_path is not None:
+            df_input_terms = (
+                None if term_ids is None else create_go_term_input_frame(term_ids)
+            )
+            return select_terms_from_publication(
+                self,
+                df_input_terms=df_input_terms,
+                namespace=namespace_value,
+                subset_id=subset_id_value,
+                include_obsolete=include_obsolete,
+                resolve_alt_ids=resolve_alt_ids,
+            )
+
         frame_names = {"term"}
         if term_ids is not None and resolve_alt_ids:
             frame_names.add("alt_id")
@@ -410,6 +432,9 @@ class GODatabase:
             >>> db.list_subsets().row(0, named=True)
             {'subset_id': 'goslim_generic', 'subset_name': 'Generic GO slim', 'num_terms': 5}
         """
+        if self._publication_path is not None:
+            return list_subsets_from_publication(self)
+
         frames = self._collect_frames({"subset_membership", "subset_definition"})
         df_membership = frames["subset_membership"]
         df_definition = frames["subset_definition"]
@@ -431,6 +456,55 @@ class GODatabase:
             pl.col("num_terms").fill_null(0),
         )
         return df_subsets.sort("subset_id")
+
+    def select_ancestors(
+        self,
+        term_ids: Iterable[str],
+        *,
+        target_subset_id: str | GoSubsetId | None = None,
+        include_self: bool = False,
+        resolve_alt_ids: bool = True,
+        include_obsolete: bool = False,
+    ) -> GOAncestorSelection:
+        """Create a deferred selection of GO ancestors and subset terms.
+
+        Args:
+            term_ids: GO IDs to resolve and project through the ontology.
+            target_subset_id: Optional OBO subset filter such as
+                ``"goslim_generic"``.
+            include_self: Whether an accepted input term is returned with
+                distance zero when it satisfies the target policy.
+            resolve_alt_ids: Whether alternate GO IDs resolve to primary IDs.
+            include_obsolete: Whether obsolete input and ancestor terms are
+                eligible for matches.
+
+        Returns:
+            A deferred selection exposing ``extract_ancestors()`` and
+            ``extract_unmatched_ids()`` terminals.
+
+        Examples:
+            Project an alternate GO ID into the generic GO slim subset:
+
+            >>> db = GODatabase.from_obo("data/go-basic.obo")
+            >>> selection = db.select_ancestors(
+            ...     ["GO:1234567"], target_subset_id="goslim_generic"
+            ... )
+            >>> selection.extract_ancestors().select(
+            ...     "input_go_id", "go_id", "ancestor_go_id"
+            ... ).to_dicts()
+            [{'input_go_id': 'GO:1234567', 'go_id': 'GO:0000002', 'ancestor_go_id': 'GO:0000001'}]
+        """
+        subset_id_value = (
+            None if target_subset_id is None else normalize_subset_id(target_subset_id)
+        )
+        return GOAncestorSelection(
+            database=self,
+            _df_input_terms=create_go_term_input_frame(term_ids),
+            target_subset_id=subset_id_value,
+            include_self=include_self,
+            resolve_alt_ids=resolve_alt_ids,
+            include_obsolete=include_obsolete,
+        )
 
     def write_duckdb(
         self,

@@ -1,7 +1,7 @@
 # bioextract Documentation
 
-Version: v1.0
-Date: 2026-08-05
+Version: v1.1
+Date: 2026-08-10
 Status: current
 
 This directory contains durable architecture, data contracts, test standards,
@@ -54,6 +54,14 @@ when a domain does not yet have a dedicated architecture document.
 | OmniPath | [OmniPath architecture](architecture/omnipath-db.md) | [OmniPath test standard](testing/omnipath-db.md) | — |
 
 ## Plans And History
+
+The implemented
+[GO Ancestor Projection And Publication Query Pushdown Plan](implementation-plans/20260810-v1.0-go-ancestor-query-implementation-plan.md)
+records the additive GO term-to-ancestor and GO subset projection API, the
+parameterized DuckDB query-pushdown path for publication-backed GO domain
+reads, source/publication parity, unchanged nine-table publication contract,
+and the boundary that leaves protein membership and enrichment analysis to
+downstream applications.
 
 The completed
 [Runtime And Constructor Convergence Plan](implementation-plans/20260805-v1.0-runtime-and-constructor-convergence.md)

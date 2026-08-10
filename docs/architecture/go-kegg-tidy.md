@@ -1,7 +1,7 @@
 # GO and KEGG Tidy Architecture
 
-Version: v1.0
-Date: 2026-07-14
+Version: v1.1
+Date: 2026-08-10
 Status: current
 
 ## Goal
@@ -15,6 +15,8 @@ The implemented MVP covers:
 - GO OBO to ontology tidy tables
 - GO OBO subset membership and subset definition tables
 - GO term selection by ID, namespace, and subset membership
+- GO ancestor selection with optional OBO subset projection and unmatched-ID
+  accounting
 - KEGG BRITE JSON to pathway tidy tables
 - in-memory use through `build_tidy().frames`
 - persisted GO use through `write_duckdb(path)`, `from_duckdb(path)`, and a
@@ -27,7 +29,7 @@ The MVP intentionally does not cover:
 - GO GAF or GPAD annotation
 - protein or gene identifier selection for GO
 - ORA, GSEA, or clusterProfiler replacement logic
-- projecting arbitrary GO annotations to GO slim ancestors
+- GO GAF/GPAD annotation projection and protein-to-GO mapping
 
 ## Public API
 
@@ -41,6 +43,13 @@ df_subsets = go.list_subsets()
 df_goslim_generic = go.select_terms(
     subset_id="goslim_generic",
 )
+ancestor_selection = go.select_ancestors(
+    ["GO:0008150", "GO:1234567"],
+    target_subset_id="goslim_generic",
+    include_self=True,
+)
+df_ancestors = ancestor_selection.extract_ancestors()
+df_unmatched = ancestor_selection.extract_unmatched_ids()
 go_result = go.write_duckdb("out/go.duckdb")
 published_go = GODatabase.from_duckdb(go_result.path)
 with published_go.connect() as connection:
@@ -70,6 +79,14 @@ The `edge` frame preserves parsed OBO parent and relationship edges. Derived
 `ancestor_all` and `depth` frames use hierarchical relation types only
 (`is_a`, `part_of`) so non-hierarchical relationships such as `has_part` do not
 create graph cycles in subset OBO snapshots.
+
+`select_terms()` and `list_subsets()` on a reopened publication execute their
+resource-owned filters and aggregation in DuckDB. `select_ancestors()` also
+pushes canonical/alternate ID resolution, hierarchical joins, optional self
+rows, subset membership, and obsolete policy into DuckDB, then materializes
+only the final eager Polars results. `build_tidy()` remains the explicit
+complete-frame path. Source-backed and publication-backed handles expose the
+same result schemas and ordering even though their execution mechanisms differ.
 
 KEGG BRITE JSON currently uses the standard library JSON parser, so the JSON
 tree is loaded before row traversal. The traversal and frame construction are

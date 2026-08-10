@@ -1,7 +1,7 @@
 # GO And KEGG Tidy Test Standard
 
-Version: v1.0
-Date: 2026-07-14
+Version: v1.1
+Date: 2026-08-10
 Status: current
 
 ## Scope
@@ -18,10 +18,14 @@ verifies:
 - ontology, relation, synonym, subset, ancestor, and depth frame contracts
 - subset discovery and term selection by namespace, subset, primary ID, and
   alternate ID
+- ancestor selection with canonical/alternate IDs, self rows, subset
+  projection, obsolete policy, deterministic distance, and unmatched reasons
 - obsolete-term defaults and official cellular-component term selection
 - source-backed `write_duckdb(path)` publication
 - source-build to DuckDB reopen parity for term selection, subset discovery,
-  fresh native SQL connections, and read-only enforcement
+  ancestor selection, fresh native SQL connections, and read-only enforcement
+- publication domain queries that avoid complete-frame materialization and use
+  parameterized DuckDB input relations
 - bounded metadata-v1 GO identity, profile, exact inventory, physical-schema,
   and pinned-file validation
 
@@ -43,6 +47,8 @@ Run the focused contract with:
 
 ```bash
 pdm run pytest tests/contract/resources/go tests/integration/go \
+  tests/contract/api/test_signatures.py \
+  tests/contract/api/test_behavior_docstrings.py \
   tests/unit/kegg/brite tests/integration/kegg/brite \
   tests/contract/resources/kegg/test_mapping_brite_publication_contract.py
 ```
