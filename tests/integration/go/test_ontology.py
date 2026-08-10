@@ -411,6 +411,7 @@ def test_go_ancestor_selection_empty_schema(tmp_path: Path) -> None:
         (["GO:1234567"], None, False, True, False),
         (["GO:1234567"], "goslim_generic", True, False, False),
         (["GO:0000004"], "goslim_generic", True, True, True),
+        (["GO:0000004"], "missing_subset", False, True, True),
         ([], "goslim_generic", True, True, False),
     ],
 )

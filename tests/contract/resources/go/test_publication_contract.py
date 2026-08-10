@@ -123,6 +123,22 @@ def test_reopened_handle_rejects_replaced_publication(tmp_path: Path) -> None:
         reopened.build_tidy()
 
 
+def test_reopened_handle_rejects_replaced_publication_for_empty_selection(
+    tmp_path: Path,
+) -> None:
+    publication = _write_publication(tmp_path)
+    reopened = GODatabase.from_duckdb(publication)
+    replacement_dir = tmp_path / "replacement"
+    replacement_dir.mkdir()
+    replacement = _write_publication(replacement_dir)
+    replacement.replace(publication)
+
+    with pytest.raises(IntegrityError, match="replaced"):
+        reopened.select_terms(term_ids=[])
+    with pytest.raises(IntegrityError, match="replaced"):
+        reopened.select_ancestors([]).extract_ancestors()
+
+
 def test_reopened_handle_translates_vanished_publication_to_integrity_error(
     tmp_path: Path,
 ) -> None:

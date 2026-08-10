@@ -73,6 +73,7 @@ def select_terms_from_publication(
 ) -> pl.DataFrame:
     """Select GO terms with publication-side filtering and joins."""
     if df_input_terms is not None and df_input_terms.is_empty():
+        database._assert_publication_identity()  # pyright: ignore[reportPrivateUsage]
         schema: SchemaDict = dict(_GO_TERM_SCHEMA)
         schema = {
             **{"input_go_id": pl.String},
@@ -251,6 +252,8 @@ class GOAncestorSelection:
         if self._df_matches is not None and self._df_unmatched is not None:
             return
         if self._df_input_terms.is_empty():
+            if self.database._publication_path is not None:  # pyright: ignore[reportPrivateUsage]
+                self.database._assert_publication_identity()  # pyright: ignore[reportPrivateUsage]
             self._df_matches = empty_ancestor_matches()
             self._df_unmatched = empty_ancestor_unmatched()
             return
@@ -300,6 +303,12 @@ def _resolve_publication(
             " AND membership.subset_id = ?)"
         )
         params.append(selection.target_subset_id)
+
+    obsolete_reason_sql = (
+        " WHEN resolved.is_obsolete THEN 'obsolete_excluded'"
+        if not selection.include_obsolete
+        else ""
+    )
 
     query = (
         "WITH input AS ("
@@ -358,8 +367,8 @@ def _resolve_publication(
         " resolved.input_go_id, resolved.go_id, NULL::VARCHAR, NULL::VARCHAR,"
         " NULL::VARCHAR, NULL::INTEGER,"
         " CASE WHEN resolved.go_id IS NULL THEN 'not_found'"
-        " WHEN NOT resolved.is_obsolete THEN 'no_matching_ancestor'"
-        " ELSE 'obsolete_excluded' END AS reason"
+        + obsolete_reason_sql
+        + " ELSE 'no_matching_ancestor' END AS reason"
         " FROM resolved"
         " LEFT JOIN matched_inputs USING (input_go_id)"
         " WHERE matched_inputs.input_go_id IS NULL"
