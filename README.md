@@ -173,11 +173,22 @@ from bioextract import GODatabase
 go = GODatabase.from_obo("go-basic.obo")
 df_terms = go.select_terms(subset_id="goslim_generic")
 df_cellular_components = go.select_terms(namespace="cellular_component")
+selection = go.select_ancestors(
+    ["GO:0008150", "GO:1234567"],
+    target_subset_id="goslim_generic",
+    include_self=True,
+)
+df_ancestors = selection.extract_ancestors()
+df_unmatched = selection.extract_unmatched_ids()
 result = go.write_duckdb("out/go.duckdb")
 ```
 
 Tables include `term`, `term_relation`, `term_synonym`, `term_xref`,
 `term_alternate_id`, `term_ancestor`, and `term_depth`.
+
+GO ancestor selection resolves canonical or alternate GO IDs and can project
+their `is_a`/`part_of` ancestors into an OBO subset. Protein membership and
+enrichment analysis remain downstream application responsibilities.
 
 ## KEGG
 

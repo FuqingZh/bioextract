@@ -24,6 +24,7 @@ from bioextract import (
 from bioextract._tidy import TidyDataset
 from bioextract.chebi._query import ChEBICompoundSelection
 from bioextract.eggnog.eggnog import EggnogSelection
+from bioextract.go._query import GOAncestorSelection
 from bioextract.go.go import GoSubsetId
 from bioextract.interpro.interpro import InterProSelection
 from bioextract.kegg.brite.tidy import (
@@ -43,6 +44,7 @@ BEHAVIOR_CLASSES = (
     ChEBIDatabase,
     ChEBICompoundSelection,
     GODatabase,
+    GOAncestorSelection,
     GoSubsetId,
     KEGGDatabase,
     KeggSelection,
