@@ -12,7 +12,15 @@ dependencies = [
 ]
 requires-python = ">=3.13"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
+
+[project.urls]
+Homepage = "https://github.com/FuqingZh/bioextract"
+Documentation = "https://github.com/FuqingZh/bioextract/blob/main/docs/README.md"
+Repository = "https://github.com/FuqingZh/bioextract"
+Issues = "https://github.com/FuqingZh/bioextract/issues"
+Changelog = "https://github.com/FuqingZh/bioextract/releases"
 
 [build-system]
 requires = ["pdm-backend"]
