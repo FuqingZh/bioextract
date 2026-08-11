@@ -1,3 +1,8 @@
+<p align="center">
+  <strong>English</strong> |
+  <a href="https://github.com/FuqingZh/bioextract/blob/main/README.zh-CN.md">简体中文</a>
+</p>
+
 # bioextract
 
 Stable, provenance-aware domain access to official biological database
