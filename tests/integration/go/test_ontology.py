@@ -302,7 +302,7 @@ def test_go_db_selects_ancestors_and_reports_unmatched(tmp_path: Path) -> None:
         include_self=True,
     )
 
-    assert selection.extract_ancestors().to_dicts() == [
+    assert selection.ancestors().collect().to_dicts() == [
         {
             "input_go_id": "GO:1234567",
             "go_id": "GO:0000002",
@@ -340,7 +340,7 @@ def test_go_db_selects_ancestors_and_reports_unmatched(tmp_path: Path) -> None:
             "target_subset_id": "goslim_generic",
         },
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [
+    assert selection.unmatched_ids().collect().to_dicts() == [
         {
             "input_go_id": "GO:0000004",
             "resolved_go_id": "GO:0000004",
@@ -361,10 +361,14 @@ def test_go_db_ancestor_selection_handles_no_match_and_invalid_input(
     write_minimal_obo(file_in)
     database = GODatabase.from_obo(file_in)
 
-    unmatched = database.select_ancestors(
-        ["GO:0000001"],
-        target_subset_id="missing_subset",
-    ).extract_unmatched_ids()
+    unmatched = (
+        database.select_ancestors(
+            ["GO:0000001"],
+            target_subset_id="missing_subset",
+        )
+        .unmatched_ids()
+        .collect()
+    )
     assert unmatched.to_dicts() == [
         {
             "input_go_id": "GO:0000001",
@@ -383,7 +387,7 @@ def test_go_ancestor_selection_empty_schema(tmp_path: Path) -> None:
 
     selection = GODatabase.from_obo(file_in).select_ancestors([])
 
-    assert selection.extract_ancestors().schema == {
+    assert selection.ancestors().collect().schema == {
         "input_go_id": pl.String,
         "go_id": pl.String,
         "ancestor_go_id": pl.String,
@@ -392,7 +396,7 @@ def test_go_ancestor_selection_empty_schema(tmp_path: Path) -> None:
         "min_distance": pl.Int32,
         "target_subset_id": pl.String,
     }
-    assert selection.extract_unmatched_ids().schema == {
+    assert selection.unmatched_ids().collect().schema == {
         "input_go_id": pl.String,
         "resolved_go_id": pl.String,
         "reason": pl.Enum(["not_found", "obsolete_excluded", "no_matching_ancestor"]),
@@ -444,11 +448,15 @@ def test_go_ancestor_selection_policy_parity(
         resolve_alt_ids=resolve_alt_ids,
         include_obsolete=include_obsolete,
     )
-    assert publication_selection.extract_ancestors().equals(
-        source_selection.extract_ancestors()
+    assert (
+        publication_selection.ancestors()
+        .collect()
+        .equals(source_selection.ancestors().collect())
     )
-    assert publication_selection.extract_unmatched_ids().equals(
-        source_selection.extract_unmatched_ids()
+    assert (
+        publication_selection.unmatched_ids()
+        .collect()
+        .equals(source_selection.unmatched_ids().collect())
     )
 
 
@@ -485,11 +493,15 @@ def test_go_duckdb_ancestor_selection_matches_source_and_avoids_full_frame_loade
         target_subset_id="goslim_generic",
         include_self=True,
     )
-    assert publication_selection.extract_ancestors().equals(
-        source_selection.extract_ancestors()
+    assert (
+        publication_selection.ancestors()
+        .collect()
+        .equals(source_selection.ancestors().collect())
     )
-    assert publication_selection.extract_unmatched_ids().equals(
-        source_selection.extract_unmatched_ids()
+    assert (
+        publication_selection.unmatched_ids()
+        .collect()
+        .equals(source_selection.unmatched_ids().collect())
     )
 
 
@@ -540,6 +552,6 @@ def test_go_ancestor_selection_reuses_one_publication_resolution(
 
     monkeypatch.setattr(GODatabase, "connect", counted_connect)
     selection = published.select_ancestors(["GO:1234567"])
-    selection.extract_ancestors()
-    selection.extract_unmatched_ids()
-    assert calls == 1
+    selection.ancestors().collect()
+    selection.unmatched_ids().collect()
+    assert calls == 2

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -10,6 +11,7 @@ from typing import Literal, cast, overload
 import duckdb
 import polars as pl
 
+from bioextract._lazy import register_replayable_source
 from bioextract._publication import (
     DuckDBWriteResult,
     validate_duckdb_metadata_v1,
@@ -127,7 +129,7 @@ class KEGGDatabase:
         ... )
         >>> mapping.select_ids(
         ...     ["P12345"], namespace="uniprot"
-        ... ).extract_mapping()["kegg_gene_id"].to_list()
+        ... ).mappings().select("kegg_gene_id").collect().to_series().to_list()
         ['hsa:1', 'hsa:1']
     """
 
@@ -325,9 +327,9 @@ class KEGGDatabase:
             ...     gene_pathway="data/kegg/gene_pathway.tsv",
             ...     organism_code="hsa",
             ... )
-            >>> db.extract_mapping().select(
+            >>> db.mappings().select(
             ...     "kegg_gene_id", "uniprot_id", "ko_id"
-            ... ).row(0, named=True)
+            ... ).collect().row(0, named=True)
             {'kegg_gene_id': 'hsa:1', 'uniprot_id': 'P12345', 'ko_id': 'K00001'}
         """
         organism_code = str(organism_code).strip()
@@ -371,7 +373,22 @@ class KEGGDatabase:
             ),
         )
 
-    def extract_mapping(self) -> pl.DataFrame:
+    def mappings(self) -> pl.LazyFrame:
+        """Return the normalized many-to-many organism mapping lazily.
+
+        Examples:
+            >>> db.mappings().select("kegg_gene_id").collect()  # doctest: +SKIP
+            shape: (..., 1)
+        """
+        snapshot = copy.copy(self)
+        return register_replayable_source(
+            schema=SCHEMA_MAPPING,
+            batches=lambda batch_size: _iter_kegg_frame(
+                snapshot._eager_mappings(), batch_size
+            ),
+        )
+
+    def _eager_mappings(self) -> pl.DataFrame:
         """Extract the normalized many-to-many organism mapping.
 
         Returns:
@@ -392,9 +409,9 @@ class KEGGDatabase:
             ...     gene_pathway="data/kegg/gene_pathway.tsv",
             ...     organism_code="hsa",
             ... )
-            >>> db.extract_mapping().filter(
+            >>> db.mappings().filter(
             ...     pl.col("kegg_gene_id") == "hsa:1"
-            ... ).select("uniprot_id", "kegg_pathway_id").to_dicts()
+            ... ).select("uniprot_id", "kegg_pathway_id").collect().to_dicts()
             [{'uniprot_id': 'P12345', 'kegg_pathway_id': 'hsa00010'}, {'uniprot_id': 'P12345', 'kegg_pathway_id': 'hsa01100'}]
         """
         self._require_mapping_snapshot("extract KEGG mapping")
@@ -482,9 +499,9 @@ class KEGGDatabase:
             >>> selection = db.select_ids(
             ...     ["sp|P12345|GENE1_HUMAN"], namespace="uniprot"
             ... )
-            >>> selection.extract_mapping().select(
+            >>> selection.mappings().select(
             ...     "input_id", "kegg_gene_id"
-            ... ).unique().to_dicts()
+            ... ).unique().collect().to_dicts()
             [{'input_id': 'P12345', 'kegg_gene_id': 'hsa:1'}]
         """
         if self.snapshot.kind == _KeggSnapshotKind.METABOLIC_PUBLICATION:
@@ -564,9 +581,9 @@ class KEGGDatabase:
             >>> selection = db.select_groups(
             ...     {"up": ["P12345"]}, namespace="uniprot"
             ... )
-            >>> selection.extract_mapping().select(
+            >>> selection.mappings().select(
             ...     "group_id", "input_id"
-            ... ).unique().to_dicts()
+            ... ).unique().collect().to_dicts()
             [{'group_id': 'up', 'input_id': 'P12345'}]
         """
         if self.snapshot.kind == _KeggSnapshotKind.METABOLIC_PUBLICATION:
@@ -649,7 +666,7 @@ class KEGGDatabase:
 
         self._require_mapping_snapshot("build KEGG mapping tidy dataset")
         return TidyDataset(
-            frames={"mapping": self.extract_mapping().lazy()},
+            frames={"mapping": self.mappings()},
             source=self._mapping_tidy_sources(),
             resource_schema_version=MAPPING_SCHEMA_VERSION,
             source_schema_profile="kegg-organism-mapping-files-v1",
@@ -808,9 +825,9 @@ class KeggSelection:
         >>> selection = db.select_ids(
         ...     ["P12345", "MISSING"], namespace="uniprot"
         ... )
-        >>> selection.extract_mapping()["kegg_gene_id"].unique().to_list()
+        >>> selection.mappings().select("kegg_gene_id").collect().unique().to_series().to_list()
         ['hsa:1']
-        >>> selection.extract_unmatched_ids().to_dicts()
+        >>> selection.unmatched_ids().collect().to_dicts()
         [{'input_id': 'MISSING'}]
     """
 
@@ -843,7 +860,28 @@ class KeggSelection:
         """
         return self._df_groups is not None
 
-    def extract_mapping(self) -> pl.DataFrame:
+    def mappings(self) -> pl.LazyFrame:
+        """Return selected KEGG mapping rows lazily.
+
+        Examples:
+            >>> selection.mappings().select("kegg_gene_id").collect()  # doctest: +SKIP
+            shape: (..., 1)
+        """
+        snapshot = copy.copy(self)
+        columns = (["group_id"] if self._df_group_membership is not None else []) + [
+            "input_id",
+            "input_namespace",
+            *SCHEMA_MAPPING,
+        ]
+        schema = {column: SCHEMA_MAPPING.get(column, pl.String) for column in columns}
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda batch_size: _iter_kegg_frame(
+                snapshot._eager_mapping_selection(), batch_size
+            ),
+        )
+
+    def _eager_mapping_selection(self) -> pl.DataFrame:
         """Extract every KEGG mapping row matched by the selected input IDs.
 
         Examples:
@@ -856,12 +894,12 @@ class KeggSelection:
             ...     organism_code="hsa",
             ... )
             >>> selection = db.select_ids(["P12345"], namespace="uniprot")
-            >>> selection.extract_mapping()["kegg_gene_id"].to_list()
+            >>> selection.mappings().select("kegg_gene_id").collect().to_series().to_list()
             ['hsa:1', 'hsa:1']
         """
         if self._df_mapping is None:
             mapping = extract_mapping_frame(
-                self.dataset.extract_mapping(),
+                self.dataset._eager_mappings(),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
                 self._df_input_ids,
                 namespace=self.namespace,
                 cols_group_id=(),
@@ -881,7 +919,27 @@ class KeggSelection:
             self._df_mapping = mapping
         return self._df_mapping
 
-    def extract_unmatched_ids(self) -> pl.DataFrame:
+    def unmatched_ids(self) -> pl.LazyFrame:
+        """Return selected KEGG IDs without a mapping row lazily.
+
+        Examples:
+            >>> selection.unmatched_ids().collect()  # doctest: +SKIP
+            shape: (..., 1)
+        """
+        snapshot = copy.copy(self)
+        columns = (
+            ["group_id", "input_id"]
+            if self._df_group_membership is not None
+            else ["input_id"]
+        )
+        return register_replayable_source(
+            schema=dict.fromkeys(columns, pl.String),
+            batches=lambda batch_size: _iter_kegg_frame(
+                snapshot._eager_unmatched_ids(), batch_size
+            ),
+        )
+
+    def _eager_unmatched_ids(self) -> pl.DataFrame:
         """Extract normalized input IDs with no KEGG mapping row.
 
         Grouped selections report an ID as unmapped independently within each
@@ -899,11 +957,11 @@ class KeggSelection:
             >>> selection = db.select_ids(
             ...     ["P12345", "MISSING"], namespace="uniprot"
             ... )
-            >>> selection.extract_unmatched_ids().to_dicts()
+            >>> selection.unmatched_ids().collect().to_dicts()
             [{'input_id': 'MISSING'}]
         """
         if self._df_unmapped is None:
-            mapping = self.extract_mapping()
+            mapping = self._eager_mapping_selection()
             if self._df_group_membership is None:
                 self._df_unmapped = extract_unmatched_ids_frame(
                     self._df_input_ids,
@@ -922,6 +980,11 @@ class KeggSelection:
                     .sort("group_id", "input_id")
                 )
         return self._df_unmapped
+
+
+def _iter_kegg_frame(frame: pl.DataFrame, batch_size: int):
+    for offset in range(0, frame.height, batch_size):
+        yield frame.slice(offset, batch_size)
 
 
 def _validate_file(

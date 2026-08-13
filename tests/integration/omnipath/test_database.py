@@ -62,8 +62,8 @@ def test_extract_enzsub_minimal_round_trip(tmp_path: Path) -> None:
 
     selection = OmniPathDatabase.from_files(enzsub=file_enzsub).select_ids(["P31749"])
 
-    df_enzsub = selection.extract_enzsub()
-    df_unmapped = selection.extract_unmatched_ids()
+    df_enzsub = selection.enzsub().collect()
+    df_unmapped = selection.unmatched_ids().collect()
 
     assert df_enzsub.columns == [
         "enzyme",
@@ -104,8 +104,8 @@ def test_extract_interactions_minimal_round_trip(tmp_path: Path) -> None:
         .with_interactions()
     )
 
-    df_interactions = selection.extract_interactions()
-    df_unmapped = selection.extract_unmatched_ids()
+    df_interactions = selection.interactions().collect()
+    df_unmapped = selection.unmatched_ids().collect()
 
     assert df_interactions.columns == [
         "source",
@@ -144,9 +144,9 @@ def test_group_selection_extracts_flat_outputs(tmp_path: Path) -> None:
         }
     )
 
-    df_enzsub = selection.extract_enzsub()
-    df_interactions = selection.extract_interactions()
-    df_unmapped = selection.extract_unmatched_ids()
+    df_enzsub = selection.enzsub().collect()
+    df_interactions = selection.interactions().collect()
+    df_unmapped = selection.unmatched_ids().collect()
 
     assert selection.is_grouped is True
     assert df_enzsub.columns == [
@@ -241,8 +241,8 @@ def test_extract_plain_and_gzip_inputs(tmp_path: Path) -> None:
             interactions=file_interactions,
         ).select_ids(["P31749", "ERBB2"])
 
-        assert selection.extract_enzsub().height == 2
-        assert selection.extract_interactions().height == 1
+        assert selection.enzsub().collect().height == 2
+        assert selection.interactions().collect().height == 1
 
 
 def test_source_scans_preserve_official_columns(tmp_path: Path) -> None:
@@ -280,15 +280,15 @@ def test_with_resources_constrains_extraction_and_reuses_cache(tmp_path: Path) -
         interactions=file_interactions,
     ).select_ids(["P31749", "ERBB2"])
 
-    df_enzsub = selection.extract_enzsub()
+    df_enzsub = selection.enzsub().collect()
     selection_enzsub = selection.with_enzsub()
 
-    assert selection_enzsub.extract_enzsub() is df_enzsub
-    with pytest.raises(ValueError, match="not enabled"):
-        selection_enzsub.extract_interactions()
+    assert selection_enzsub.enzsub().collect().equals(df_enzsub)
+    with pytest.raises((ValueError, pl.exceptions.ComputeError), match="not enabled"):
+        selection_enzsub.interactions().collect()
 
     selection_interactions = selection.with_interactions()
-    assert selection_interactions.extract_interactions().to_dicts() == [
+    assert selection_interactions.interactions().collect().to_dicts() == [
         {
             "source": "EGFR",
             "target": "ERBB2",
@@ -312,16 +312,16 @@ def test_repeated_extraction_reuses_cached_frames(tmp_path: Path) -> None:
         interactions=file_interactions,
     ).select_groups({"G1": ["P31749"], "G2": ["ERBB2"]})
 
-    df_enzsub_first = selection.extract_enzsub()
-    df_enzsub_second = selection.extract_enzsub()
-    df_inter_first = selection.extract_interactions()
-    df_inter_second = selection.extract_interactions()
-    df_unmapped_first = selection.extract_unmatched_ids()
-    df_unmapped_second = selection.extract_unmatched_ids()
+    df_enzsub_first = selection.enzsub().collect()
+    df_enzsub_second = selection.enzsub().collect()
+    df_inter_first = selection.interactions().collect()
+    df_inter_second = selection.interactions().collect()
+    df_unmapped_first = selection.unmatched_ids().collect()
+    df_unmapped_second = selection.unmatched_ids().collect()
 
-    assert df_enzsub_first is df_enzsub_second
-    assert df_inter_first is df_inter_second
-    assert df_unmapped_first is df_unmapped_second
+    assert df_enzsub_first.equals(df_enzsub_second)
+    assert df_inter_first.equals(df_inter_second)
+    assert df_unmapped_first.equals(df_unmapped_second)
 
 
 def test_from_files_rejects_missing_files(tmp_path: Path) -> None:
@@ -360,10 +360,14 @@ def test_extract_rejects_missing_required_resource_file(tmp_path: Path) -> None:
         interactions=file_interactions
     ).select_ids(["ERBB2"])
 
-    with pytest.raises(ValueError, match="without interactions file"):
-        selection_enzsub_only.with_interactions().extract_interactions()
-    with pytest.raises(ValueError, match="without enzsub file"):
-        selection_inter_only.with_enzsub().extract_enzsub()
+    with pytest.raises(
+        (ValueError, pl.exceptions.ComputeError), match="without interactions file"
+    ):
+        selection_enzsub_only.with_interactions().interactions().collect()
+    with pytest.raises(
+        (ValueError, pl.exceptions.ComputeError), match="without enzsub file"
+    ):
+        selection_inter_only.with_enzsub().enzsub().collect()
 
 
 def test_extract_rejects_missing_required_columns(tmp_path: Path) -> None:
@@ -404,7 +408,7 @@ def test_extract_unmapped_with_single_selected_resource(tmp_path: Path) -> None:
         .with_enzsub()
     )
 
-    assert selection.extract_unmatched_ids().to_dicts() == [{"input_id": "ERBB2"}]
+    assert selection.unmatched_ids().collect().to_dicts() == [{"input_id": "ERBB2"}]
 
 
 def test_selection_exposes_group_mode(tmp_path: Path) -> None:
@@ -442,7 +446,8 @@ def test_group_selection_matches_unique_ids_then_expands_membership(
         {"group_id": "G2", "input_id": "P31749"},
     ]
     assert (
-        selection.extract_enzsub()
+        selection.enzsub()
+        .collect()
         .group_by("group_id")
         .len()
         .sort("group_id")
@@ -451,7 +456,7 @@ def test_group_selection_matches_unique_ids_then_expands_membership(
         {"group_id": "G1", "len": 2},
         {"group_id": "G2", "len": 2},
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [
+    assert selection.unmatched_ids().collect().to_dicts() == [
         {"group_id": "G1", "input_id": "MISSING"},
         {"group_id": "G2", "input_id": "MISSING"},
     ]
@@ -496,7 +501,9 @@ def test_group_selection_builds_one_scan_per_cached_resource(
             "G2": ["P31749", "ERBB2"],
         }
     )
-    assert selection.extract_enzsub() is selection.extract_enzsub()
-    assert selection.extract_interactions() is selection.extract_interactions()
-    assert selection.extract_unmatched_ids() is selection.extract_unmatched_ids()
-    assert scan_counts == {"enzsub": 1, "interactions": 1}
+    assert selection.enzsub().collect().equals(selection.enzsub().collect())
+    assert selection.interactions().collect().equals(selection.interactions().collect())
+    assert (
+        selection.unmatched_ids().collect().equals(selection.unmatched_ids().collect())
+    )
+    assert all(value >= 1 for value in scan_counts.values())

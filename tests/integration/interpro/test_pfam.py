@@ -8,6 +8,7 @@ import polars as pl
 import pytest
 
 import bioextract.interpro as interpro
+from bioextract.errors import CapabilityError
 from bioextract.interpro import InterProDatabase
 
 
@@ -120,6 +121,79 @@ def test_write_pfam_duckdb_emits_compact_relations(tmp_path: Path) -> None:
             "interpro_type": "Homologous_superfamily",
         },
     ]
+
+
+def test_public_pfam_annotations_preserve_exact_trace_and_lazy_execution(
+    tmp_path: Path,
+) -> None:
+    file_protein2ipr, file_xml = write_interpro_snapshot(tmp_path)
+    database = InterProDatabase.from_mapping_files(
+        protein_to_interpro=file_protein2ipr,
+        interpro_xml=file_xml,
+    )
+
+    full = database.pfam_annotations()
+    assert isinstance(full, pl.LazyFrame)
+    assert full.collect_schema().names() == [
+        "uniprot_id",
+        "pfam_id",
+        "pfam_name",
+        "interpro_id",
+        "interpro_name",
+        "interpro_type",
+    ]
+    assert full.collect().to_dicts() == [
+        {
+            "uniprot_id": "P12345",
+            "pfam_id": "PF00051",
+            "pfam_name": "Kringle",
+            "interpro_id": "IPR000001",
+            "interpro_name": "InterPro Kringle domain",
+            "interpro_type": "Domain",
+        },
+        {
+            "uniprot_id": "P12345",
+            "pfam_id": "PF00069",
+            "pfam_name": "Pkinase",
+            "interpro_id": "IPR000002",
+            "interpro_name": "Protein kinase domain",
+            "interpro_type": "Homologous_superfamily",
+        },
+        {
+            "uniprot_id": "Q9Y243",
+            "pfam_id": "PF00069",
+            "pfam_name": "Pkinase",
+            "interpro_id": "IPR000002",
+            "interpro_name": "Protein kinase domain",
+            "interpro_type": "Homologous_superfamily",
+        },
+    ]
+
+    selected = database.select_ids(["sp|P12345|TEST_HUMAN"]).pfam_annotations()
+    assert selected.collect().select("input_id", "pfam_id").to_dicts() == [
+        {"input_id": "P12345", "pfam_id": "PF00051"},
+        {"input_id": "P12345", "pfam_id": "PF00069"},
+    ]
+
+    publication = tmp_path / "interpro-pfam.duckdb"
+    database.write_duckdb(publication)
+    reopened = InterProDatabase.from_duckdb(publication)
+    assert reopened.pfam_annotations().collect().equals(full.collect())
+    assert (
+        reopened.select_ids(["P12345"])
+        .pfam_annotations()
+        .collect()
+        .equals(database.select_ids(["P12345"]).pfam_annotations().collect())
+    )
+
+
+def test_pfam_annotations_require_xml_or_publication_capability(tmp_path: Path) -> None:
+    file_protein2ipr, _file_xml = write_interpro_snapshot(tmp_path)
+    database = InterProDatabase.from_mapping_files(
+        protein_to_interpro=file_protein2ipr,
+    )
+    with pytest.raises(CapabilityError, match="require an InterPro XML"):
+        database.pfam_annotations()
 
 
 def test_build_pfam_tidy_keeps_lazy_frames(tmp_path: Path) -> None:

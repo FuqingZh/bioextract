@@ -117,8 +117,8 @@ def test_mapping_publication_preserves_selection_semantics(tmp_path: Path) -> No
         namespace="uniprot",
     )
 
-    assert actual.extract_mapping().equals(expected.extract_mapping())
-    assert actual.extract_unmatched_ids().equals(expected.extract_unmatched_ids())
+    assert actual.mappings().collect().equals(expected.mappings().collect())
+    assert actual.unmatched_ids().collect().equals(expected.unmatched_ids().collect())
 
 
 def test_empty_mapping_publication_reopens_with_stable_schema(tmp_path: Path) -> None:
@@ -128,8 +128,8 @@ def test_empty_mapping_publication_reopens_with_stable_schema(tmp_path: Path) ->
     publication = tmp_path / "empty.duckdb"
     source.write_duckdb(publication)
 
-    reopened = KEGGDatabase.from_duckdb(publication).extract_mapping()
-    assert reopened.schema == source.extract_mapping().schema
+    reopened = KEGGDatabase.from_duckdb(publication).mappings().collect()
+    assert reopened.schema == source.mappings().collect().schema
     assert reopened.is_empty()
 
 

@@ -479,8 +479,8 @@ class GODatabase:
                 eligible for matches.
 
         Returns:
-            A deferred selection exposing ``extract_ancestors()`` and
-            ``extract_unmatched_ids()`` terminals.
+            A deferred selection exposing lazy ``ancestors()`` and
+            ``unmatched_ids()`` relations.
 
         Examples:
             Project an alternate GO ID into the generic GO slim subset:
@@ -489,9 +489,9 @@ class GODatabase:
             >>> selection = db.select_ancestors(
             ...     ["GO:1234567"], target_subset_id="goslim_generic"
             ... )
-            >>> selection.extract_ancestors().select(
+            >>> selection.ancestors().select(
             ...     "input_go_id", "go_id", "ancestor_go_id"
-            ... ).to_dicts()
+            ... ).collect().to_dicts()
             [{'input_go_id': 'GO:1234567', 'go_id': 'GO:0000002', 'ancestor_go_id': 'GO:0000001'}]
         """
         subset_id_value = (

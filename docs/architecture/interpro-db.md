@@ -54,11 +54,12 @@ db = InterProDatabase.from_mapping_files(
     interpro_xml="interpro.xml.gz",
 )
 
-df_mapping = db.extract_mapping()
+lf_mapping = db.mappings()
 
 selection = db.select_ids(["P04637"], namespace="uniprot")
-df_selected = selection.extract_mapping()
-df_unmapped = selection.extract_unmatched_ids()
+lf_selected = selection.mappings()
+lf_unmapped = selection.unmatched_ids()
+lf_pfam = selection.pfam_annotations()
 ```
 
 Grouped selections mirror the other DB contracts by prepending `group_id`.
@@ -124,7 +125,10 @@ The write path is lazy:
 This keeps the main publication path aligned with the shared tidy contract
 without forcing a full materialized DataFrame before write.
 
-`build_tidy()` exposes the capability-driven lazy relation plan.
+`build_tidy()` exposes the capability-driven lazy relation plan. Relation
+methods (`mappings()`, `pfam_annotations()`, and `unmatched_ids()`) return
+native `polars.LazyFrame` objects; callers choose `.collect()`,
+`.collect_batches()`, or `sink_*()`.
 
 `from_duckdb()` accepts only metadata v1 publications with exact InterPro
 resource identity, resource schema version, source profile, capability list,
@@ -146,6 +150,28 @@ changes rather than serving stale enrichment.
 
 Pfam publication reads `protein2ipr.dat.gz` and `interpro.xml.gz` directly.
 It does not consume or require a prior mapping publication.
+
+The public Pfam extractor is available from both the database and a selection:
+
+```python
+pfam = db.pfam_annotations()
+selected_pfam = selection.pfam_annotations()
+```
+
+Both return rows with caller lineage followed by the trace fields:
+
+```text
+input_id
+input_namespace
+uniprot_id
+pfam_id
+pfam_name
+interpro_id
+interpro_name
+interpro_type
+```
+
+The publication relations remain normalized:
 
 `protein_term`:
 
@@ -213,7 +239,7 @@ input_id
 input_namespace
 ```
 
-`extract_unmatched_ids()` follows the same single/grouped shape as the
+`unmatched_ids()` follows the same single/grouped shape as the
 other DBs.
 
 ## Real Snapshot Status

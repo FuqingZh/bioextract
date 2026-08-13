@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import copy
 import json
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import duckdb
 import polars as pl
+from polars._typing import SchemaDict
 
+from bioextract._lazy import register_deferred_frame_source
 from bioextract._publication import validate_duckdb_metadata_v1
 
 from ._knowledgebase import (
@@ -35,7 +38,7 @@ _NAMESPACES = {
 
 @dataclass(frozen=True, slots=True)
 class UniProtSelection:
-    """A reusable identifier selection with stable domain extractors.
+    """A reusable identifier selection with stable lazy domain relations.
 
     Examples:
         Resolve one accession, then extract its ordered accession relation:
@@ -43,7 +46,7 @@ class UniProtSelection:
         >>> selection = database.select_ids(  # doctest: +SKIP
         ...     ["P04637"], namespace="uniprot", taxon_ids=["9606"]
         ... )
-        >>> selection.extract_accessions().select(  # doctest: +SKIP
+        >>> selection.accessions().select(  # doctest: +SKIP
         ...     "primary_accession", "accession", "is_primary"
         ... )
         shape: (...)
@@ -60,16 +63,31 @@ class UniProtSelection:
         default=None, init=False, repr=False, compare=False
     )
 
-    def extract_proteins(self) -> pl.DataFrame:
-        """Return matched protein facts in stable selection/accession order.
+    def proteins(self) -> pl.LazyFrame:
+        """Return matched protein facts lazily.
 
         Examples:
-            >>> selection.extract_proteins().select(  # doctest: +SKIP
+            >>> selection.proteins().select(  # doctest: +SKIP
             ...     "primary_accession", "entry_name", "taxon_id"
-            ... ).columns
+            ... ).collect_schema().names()
             ['primary_accession', 'entry_name', 'taxon_id']
         """
-        return self._extract(
+        return self._lazy_relation(
+            [
+                "entry_name",
+                "is_reviewed",
+                "taxon_id",
+                "protein_existence",
+                "sequence_length",
+                "molecular_weight",
+                "sequence_version",
+                "entry_version",
+            ],
+            lambda snapshot: snapshot._eager_proteins(),
+        )
+
+    def _eager_proteins(self) -> pl.DataFrame:
+        return self._eager_extract(
             "protein",
             "p.entry_name AS entry_name, p.is_reviewed AS is_reviewed, "
             "p.taxon_id AS taxon_id, p.protein_existence AS protein_existence, "
@@ -81,16 +99,22 @@ class UniProtSelection:
             order_by="p.primary_accession",
         )
 
-    def extract_accessions(self) -> pl.DataFrame:
-        """Return ordered primary and secondary accessions for every match.
+    def accessions(self) -> pl.LazyFrame:
+        """Return ordered primary and secondary accessions lazily.
 
         Examples:
-            >>> selection.extract_accessions().select(  # doctest: +SKIP
+            >>> selection.accessions().select(  # doctest: +SKIP
             ...     "accession", "is_primary"
-            ... ).columns
+            ... ).collect_schema().names()
             ['accession', 'is_primary']
         """
-        return self._extract(
+        return self._lazy_relation(
+            ["accession", "accession_order", "is_primary"],
+            lambda snapshot: snapshot._eager_accessions(),
+        )
+
+    def _eager_accessions(self) -> pl.DataFrame:
+        return self._eager_extract(
             "protein_accession",
             "r.accession AS accession, r.accession_order AS accession_order, "
             "r.is_primary AS is_primary",
@@ -98,62 +122,86 @@ class UniProtSelection:
             order_by="r.accession_order, r.accession",
         )
 
-    def extract_protein_names(self) -> pl.DataFrame:
-        """Return official protein names in source-defined name order.
+    def protein_names(self) -> pl.LazyFrame:
+        """Return official protein names lazily.
 
         Examples:
-            >>> selection.extract_protein_names().select(  # doctest: +SKIP
+            >>> selection.protein_names().select(  # doctest: +SKIP
             ...     "name_type", "name"
-            ... ).columns
+            ... ).collect_schema().names()
             ['name_type', 'name']
         """
-        return self._extract(
+        return self._lazy_relation(
+            ["name_type", "name", "name_order"],
+            lambda snapshot: snapshot._eager_protein_names(),
+        )
+
+    def _eager_protein_names(self) -> pl.DataFrame:
+        return self._eager_extract(
             "protein_name",
             "r.name_type AS name_type, r.name AS name, r.name_order AS name_order",
             "JOIN protein_name r USING (primary_accession)",
             order_by="r.name_order, r.name",
         )
 
-    def extract_gene_names(self) -> pl.DataFrame:
-        """Return parsed gene names in source-defined name order.
+    def gene_names(self) -> pl.LazyFrame:
+        """Return parsed gene names lazily.
 
         Examples:
-            >>> selection.extract_gene_names().select(  # doctest: +SKIP
+            >>> selection.gene_names().select(  # doctest: +SKIP
             ...     "name_type", "name"
-            ... ).columns
+            ... ).collect_schema().names()
             ['name_type', 'name']
         """
-        return self._extract(
+        return self._lazy_relation(
+            ["name_type", "name", "name_order"],
+            lambda snapshot: snapshot._eager_gene_names(),
+        )
+
+    def _eager_gene_names(self) -> pl.DataFrame:
+        return self._eager_extract(
             "gene_name",
             "r.name_type AS name_type, r.name AS name, r.name_order AS name_order",
             "JOIN gene_name r USING (primary_accession)",
             order_by="r.name_order, r.name",
         )
 
-    def extract_ec_numbers(self) -> pl.DataFrame:
-        """Return distinct EC annotations ordered by EC number.
+    def ec_numbers(self) -> pl.LazyFrame:
+        """Return distinct EC annotations lazily.
 
         Examples:
-            >>> selection.extract_ec_numbers().select("ec_number").columns  # doctest: +SKIP
+            >>> selection.ec_numbers().select("ec_number").collect_schema().names()  # doctest: +SKIP
             ['ec_number']
         """
-        return self._extract(
+        return self._lazy_relation(
+            ["ec_number"],
+            lambda snapshot: snapshot._eager_ec_numbers(),
+        )
+
+    def _eager_ec_numbers(self) -> pl.DataFrame:
+        return self._eager_extract(
             "protein_ec_number",
             "r.ec_number AS ec_number",
             "JOIN protein_ec_number r USING (primary_accession)",
             order_by="r.ec_number",
         )
 
-    def extract_go_annotations(self) -> pl.DataFrame:
-        """Return GO annotations ordered by GO identifier and aspect.
+    def go_annotations(self) -> pl.LazyFrame:
+        """Return GO annotations lazily.
 
         Examples:
-            >>> selection.extract_go_annotations().select(  # doctest: +SKIP
+            >>> selection.go_annotations().select(  # doctest: +SKIP
             ...     "go_id", "aspect", "evidence_code"
-            ... ).columns
+            ... ).collect_schema().names()
             ['go_id', 'aspect', 'evidence_code']
         """
-        return self._extract(
+        return self._lazy_relation(
+            ["go_id", "aspect", "term_name", "evidence_code", "evidence_source"],
+            lambda snapshot: snapshot._eager_go_annotations(),
+        )
+
+    def _eager_go_annotations(self) -> pl.DataFrame:
+        return self._eager_extract(
             "protein_go_annotation",
             "r.go_id AS go_id, r.aspect AS aspect, r.term_name AS term_name, "
             "r.evidence_code AS evidence_code, r.evidence_source AS evidence_source",
@@ -161,24 +209,28 @@ class UniProtSelection:
             order_by="r.go_id, r.aspect",
         )
 
-    def extract_cross_references(
-        self, databases: Iterable[str] | None = None
-    ) -> pl.DataFrame:
-        """Return cross-references, optionally limited to database names.
+    def cross_references(self, databases: Iterable[str] | None = None) -> pl.LazyFrame:
+        """Return cross-references lazily, optionally filtered by database.
 
         Examples:
-            >>> selection.extract_cross_references(["PDB"]).select(  # doctest: +SKIP
+            >>> selection.cross_references(["PDB"]).select(  # doctest: +SKIP
             ...     "database", "external_id"
-            ... ).columns
+            ... ).collect_schema().names()
             ['database', 'external_id']
         """
         values = tuple(dict.fromkeys(databases or ()))
+        return self._lazy_relation(
+            ["database", "external_id", "properties", "isoform_id"],
+            lambda snapshot: snapshot._eager_cross_references(values),
+        )
+
+    def _eager_cross_references(self, values: tuple[str, ...] = ()) -> pl.DataFrame:
         condition = ""
         parameters: list[object] = []
         if values:
             condition = f" WHERE r.database IN ({','.join('?' for _ in values)})"
             parameters.extend(values)
-        return self._extract(
+        return self._eager_extract(
             "protein_cross_reference",
             "r.database AS database, r.external_id AS external_id, "
             "r.properties AS properties, r.isoform_id AS isoform_id",
@@ -188,24 +240,28 @@ class UniProtSelection:
             order_by="r.database, r.external_id, r.isoform_id",
         )
 
-    def extract_comments(
-        self, comment_types: Iterable[str] | None = None
-    ) -> pl.DataFrame:
-        """Return comments, optionally limited to exact comment types.
+    def comments(self, comment_types: Iterable[str] | None = None) -> pl.LazyFrame:
+        """Return comments lazily, optionally filtered by comment type.
 
         Examples:
-            >>> selection.extract_comments(["FUNCTION"]).select(  # doctest: +SKIP
+            >>> selection.comments(["FUNCTION"]).select(  # doctest: +SKIP
             ...     "comment_type", "comment_text"
-            ... ).columns
+            ... ).collect_schema().names()
             ['comment_type', 'comment_text']
         """
         values = tuple(dict.fromkeys(comment_types or ()))
+        return self._lazy_relation(
+            ["comment_id", "comment_type", "comment_text"],
+            lambda snapshot: snapshot._eager_comments(values),
+        )
+
+    def _eager_comments(self, values: tuple[str, ...] = ()) -> pl.DataFrame:
         condition = ""
         parameters: list[object] = []
         if values:
             condition = f" WHERE r.comment_type IN ({','.join('?' for _ in values)})"
             parameters.extend(values)
-        return self._extract(
+        return self._eager_extract(
             "protein_comment",
             "r.comment_id AS comment_id, r.comment_type AS comment_type, "
             "r.comment_text AS comment_text",
@@ -215,52 +271,70 @@ class UniProtSelection:
             order_by="r.comment_id",
         )
 
-    def extract_subcellular_locations(self) -> pl.DataFrame:
-        """Return individually parsed locations and their optional notes.
+    def subcellular_locations(self) -> pl.LazyFrame:
+        """Return individually parsed locations lazily.
 
         Examples:
-            >>> selection.extract_subcellular_locations().select(  # doctest: +SKIP
+            >>> selection.subcellular_locations().select(  # doctest: +SKIP
             ...     "location", "note"
-            ... ).columns
+            ... ).collect_schema().names()
             ['location', 'note']
         """
-        return self._extract(
+        return self._lazy_relation(
+            ["location", "note"],
+            lambda snapshot: snapshot._eager_subcellular_locations(),
+        )
+
+    def _eager_subcellular_locations(self) -> pl.DataFrame:
+        return self._eager_extract(
             "protein_subcellular_location",
             "r.location AS location, r.note AS note",
             "JOIN protein_subcellular_location r USING (primary_accession)",
             order_by="r.comment_id, r.location",
         )
 
-    def extract_keywords(self) -> pl.DataFrame:
-        """Return keywords in source-defined keyword order.
+    def keywords(self) -> pl.LazyFrame:
+        """Return keywords lazily in source-defined order.
 
         Examples:
-            >>> selection.extract_keywords().select(  # doctest: +SKIP
+            >>> selection.keywords().select(  # doctest: +SKIP
             ...     "keyword", "keyword_order"
-            ... ).columns
+            ... ).collect_schema().names()
             ['keyword', 'keyword_order']
         """
-        return self._extract(
+        return self._lazy_relation(
+            ["keyword", "keyword_order"],
+            lambda snapshot: snapshot._eager_keywords(),
+        )
+
+    def _eager_keywords(self) -> pl.DataFrame:
+        return self._eager_extract(
             "protein_keyword",
             "r.keyword AS keyword, r.keyword_order AS keyword_order",
             "JOIN protein_keyword r USING (primary_accession)",
             order_by="r.keyword_order, r.keyword",
         )
 
-    def extract_sequences(self, sequence_type: str = "canonical") -> pl.DataFrame:
-        """Return canonical, isoform, or all sequences in stable type order.
+    def sequences(self, sequence_type: str = "canonical") -> pl.LazyFrame:
+        """Return canonical, isoform, or all sequences lazily.
 
         Examples:
-            >>> selection.extract_sequences("all").select(  # doctest: +SKIP
+            >>> selection.sequences("all").select(  # doctest: +SKIP
             ...     "sequence_id", "sequence_type", "sha256"
-            ... ).columns
+            ... ).collect_schema().names()
             ['sequence_id', 'sequence_type', 'sha256']
         """
         if sequence_type not in {"canonical", "isoform", "all"}:
             raise ValueError("sequence_type must be canonical, isoform, or all")
+        return self._lazy_relation(
+            ["sequence_id", "sequence_type", "sequence", "length", "crc64", "sha256"],
+            lambda snapshot: snapshot._eager_sequences(sequence_type),
+        )
+
+    def _eager_sequences(self, sequence_type: str = "canonical") -> pl.DataFrame:
         condition = "" if sequence_type == "all" else " WHERE r.sequence_type = ?"
         parameters: list[object] = [] if sequence_type == "all" else [sequence_type]
-        return self._extract(
+        return self._eager_extract(
             "protein_sequence",
             "r.sequence_id AS sequence_id, r.sequence_type AS sequence_type, "
             "r.sequence AS sequence, r.length AS length, r.crc64 AS crc64, "
@@ -273,16 +347,22 @@ class UniProtSelection:
             ),
         )
 
-    def extract_isoforms(self) -> pl.DataFrame:
-        """Return isoform definitions with normalized status and sequence link.
+    def isoforms(self) -> pl.LazyFrame:
+        """Return isoform definitions lazily.
 
         Examples:
-            >>> selection.extract_isoforms().select(  # doctest: +SKIP
+            >>> selection.isoforms().select(  # doctest: +SKIP
             ...     "isoform_id", "sequence_status", "sequence_id"
-            ... ).columns
+            ... ).collect_schema().names()
             ['isoform_id', 'sequence_status', 'sequence_id']
         """
-        return self._extract(
+        return self._lazy_relation(
+            ["isoform_id", "name", "isoform_order", "sequence_status", "sequence_id"],
+            lambda snapshot: snapshot._eager_isoforms(),
+        )
+
+    def _eager_isoforms(self) -> pl.DataFrame:
+        return self._eager_extract(
             "protein_isoform",
             "r.isoform_id AS isoform_id, r.name AS name, "
             "r.isoform_order AS isoform_order, "
@@ -291,16 +371,22 @@ class UniProtSelection:
             order_by="r.isoform_order, r.isoform_id",
         )
 
-    def extract_isoform_identifiers(self) -> pl.DataFrame:
-        """Return every current or old official IsoId for each product.
+    def isoform_identifiers(self) -> pl.LazyFrame:
+        """Return every current or old official IsoId lazily.
 
         Examples:
-            >>> selection.extract_isoform_identifiers().select(  # doctest: +SKIP
+            >>> selection.isoform_identifiers().select(  # doctest: +SKIP
             ...     "isoform_id", "identifier", "is_main"
-            ... ).columns
+            ... ).collect_schema().names()
             ['isoform_id', 'identifier', 'is_main']
         """
-        return self._extract(
+        return self._lazy_relation(
+            ["isoform_id", "identifier", "identifier_order", "is_main"],
+            lambda snapshot: snapshot._eager_isoform_identifiers(),
+        )
+
+    def _eager_isoform_identifiers(self) -> pl.DataFrame:
+        return self._eager_extract(
             "protein_isoform_identifier",
             "r.isoform_id AS isoform_id, r.identifier AS identifier, "
             "r.identifier_order AS identifier_order, r.is_main AS is_main",
@@ -308,16 +394,22 @@ class UniProtSelection:
             order_by="r.isoform_id, r.identifier_order",
         )
 
-    def extract_sequence_variations(self) -> pl.DataFrame:
-        """Return DAT VAR_SEQ features ordered by coordinates and VSP ID.
+    def sequence_variations(self) -> pl.LazyFrame:
+        """Return DAT VAR_SEQ features lazily.
 
         Examples:
-            >>> selection.extract_sequence_variations().select(  # doctest: +SKIP
+            >>> selection.sequence_variations().select(  # doctest: +SKIP
             ...     "variation_id", "start_position", "end_position"
-            ... ).columns
+            ... ).collect_schema().names()
             ['variation_id', 'start_position', 'end_position']
         """
-        return self._extract(
+        return self._lazy_relation(
+            ["variation_id", "start_position", "end_position", "note"],
+            lambda snapshot: snapshot._eager_sequence_variations(),
+        )
+
+    def _eager_sequence_variations(self) -> pl.DataFrame:
+        return self._eager_extract(
             "protein_sequence_variation",
             "r.variation_id AS variation_id, r.start_position AS start_position, "
             "r.end_position AS end_position, r.note AS note",
@@ -325,16 +417,22 @@ class UniProtSelection:
             order_by="r.start_position, r.end_position, r.variation_id",
         )
 
-    def extract_isoform_variations(self) -> pl.DataFrame:
-        """Return ordered isoform-to-VSP relationships.
+    def isoform_variations(self) -> pl.LazyFrame:
+        """Return ordered isoform-to-VSP relationships lazily.
 
         Examples:
-            >>> selection.extract_isoform_variations().select(  # doctest: +SKIP
+            >>> selection.isoform_variations().select(  # doctest: +SKIP
             ...     "isoform_id", "variation_id", "variation_order"
-            ... ).columns
+            ... ).collect_schema().names()
             ['isoform_id', 'variation_id', 'variation_order']
         """
-        return self._extract(
+        return self._lazy_relation(
+            ["isoform_id", "variation_id", "variation_order"],
+            lambda snapshot: snapshot._eager_isoform_variations(),
+        )
+
+    def _eager_isoform_variations(self) -> pl.DataFrame:
+        return self._eager_extract(
             "protein_isoform_variation",
             "r.isoform_id AS isoform_id, r.variation_id AS variation_id, "
             "r.variation_order AS variation_order",
@@ -342,15 +440,25 @@ class UniProtSelection:
             order_by="r.isoform_id, r.variation_order, r.variation_id",
         )
 
-    def extract_unmatched_ids(self) -> pl.DataFrame:
-        """Return requested identifiers that matched no protein after filtering.
+    def unmatched_ids(self) -> pl.LazyFrame:
+        """Return requested identifiers that matched no protein lazily.
 
         Examples:
-            >>> selection.extract_unmatched_ids().select(  # doctest: +SKIP
+            >>> selection.unmatched_ids().select(  # doctest: +SKIP
             ...     "input_id", "input_namespace", "reason"
-            ... ).columns
+            ... ).collect_schema().names()
             ['input_id', 'input_namespace', 'reason']
         """
+        snapshot = copy.copy(self)
+        columns = ["input_id", "input_namespace", "reason"]
+        if self._is_grouped:
+            columns.insert(0, "group_id")
+        return register_deferred_frame_source(
+            schema=dict.fromkeys(columns, pl.String),
+            frame=lambda: snapshot._eager_unmatched_ids(),
+        )
+
+    def _eager_unmatched_ids(self) -> pl.DataFrame:
         frame = self._identifier_matches()
         matched: set[str] = (
             set(frame["input_id"].cast(pl.String).to_list()) if frame.height else set()
@@ -376,7 +484,37 @@ class UniProtSelection:
         )
         return frame if self._is_grouped else frame.drop("group_id")
 
-    def _extract(
+    def _lazy_relation(
+        self,
+        relation_columns: Iterable[str],
+        reader: Callable[[UniProtSelection], pl.DataFrame],
+    ) -> pl.LazyFrame:
+        snapshot = copy.copy(self)
+        columns = ["input_id", "input_namespace", "primary_accession"]
+        if self._is_grouped:
+            columns.insert(0, "group_id")
+        return register_deferred_frame_source(
+            schema=self._schema_for_relation([*columns, *relation_columns]),
+            frame=lambda: reader(snapshot),
+        )
+
+    @staticmethod
+    def _schema_for_relation(columns: Iterable[str]) -> SchemaDict:
+        """Return stable Polars types for selection and domain columns."""
+        relation_types: dict[str, Any] = {
+            "group_id": pl.String,
+            "input_id": pl.String,
+            "input_namespace": pl.String,
+            "primary_accession": pl.String,
+            "reason": pl.String,
+        }
+        for table_schema in TABLE_SCHEMAS.values():
+            for name, dtype in table_schema.items():
+                if name not in relation_types:
+                    relation_types[name] = dtype
+        return {column: relation_types[column] for column in columns}
+
+    def _eager_extract(
         self,
         table: str,
         columns: str,

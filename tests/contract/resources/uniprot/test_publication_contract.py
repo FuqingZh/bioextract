@@ -91,7 +91,7 @@ def test_idmapping_relative_source_is_pinned_for_lazy_reads(
         os.chdir(tmp_path)
         database = UniProtDatabase.from_idmapping(source.name)
         os.chdir(previous)
-        assert database.read_mapping(taxon_ids=["9606"]).height == 1
+        assert database.scan_mapping(taxon_ids=["9606"]).collect().height == 1
     finally:
         os.chdir(previous)
 
@@ -140,12 +140,12 @@ def test_idmapping_duckdb_contract_and_reopen_parity(tmp_path: Path) -> None:
     assert not path.with_suffix(".json").exists()
     reopened = UniProtDatabase.from_duckdb(path)
     assert reopened.release_version == "2026_01"
-    assert reopened.read_mapping(taxon_ids=["9606"]).equals(
-        source.read_mapping(taxon_ids=["9606"])
+    assert (
+        reopened.scan_mapping(taxon_ids=["9606"])
+        .collect()
+        .equals(source.scan_mapping(taxon_ids=["9606"]).collect())
     )
-    with pytest.raises(ValueError, match="allow_all_taxa"):
-        reopened.read_mapping()
-    assert reopened.read_mapping(allow_all_taxa=True).height == 1
+    assert reopened.scan_mapping().collect().height == 1
     first = reopened.connect()
     second = reopened.connect()
     try:
@@ -215,8 +215,8 @@ def test_profile_capabilities_and_selection_honor_pinned_identity(
     knowledgebase = UniProtDatabase.from_duckdb(knowledgebase_path)
     os.replace(replacement, knowledgebase_path)
 
-    with pytest.raises(IntegrityError, match="replaced"):
-        knowledgebase.select_ids(["P12345"], namespace="uniprot").extract_proteins()
+    with pytest.raises((IntegrityError, pl.exceptions.ComputeError), match="replaced"):
+        knowledgebase.select_ids(["P12345"], namespace="uniprot").proteins().collect()
 
     vanished = UniProtDatabase.from_duckdb(mapping_path)
     mapping_path.unlink()

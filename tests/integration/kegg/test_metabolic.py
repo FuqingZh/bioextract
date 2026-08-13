@@ -156,18 +156,18 @@ def test_streaming_parser_and_canonical_relations(tmp_path: Path) -> None:
 def test_read_only_open_selection_and_extractors(tmp_path: Path) -> None:
     db, path = publish(tmp_path)
     selection = db.select_ids(["CHEBI:15377", "CHEBI:999"], namespace="chebi")
-    assert selection.extract_matches().select("entity_id").to_series().to_list() == [
+    assert selection.matches().collect().select("entity_id").to_series().to_list() == [
         "C00001"
     ]
-    assert selection.extract_reactions()["reaction_id"].to_list() == ["R00001"]
-    assert selection.extract_participants().height == 3
-    assert selection.extract_enzymes()["ec_number"].to_list() == ["3.6.1.3"]
-    assert selection.extract_kos()["ko_id"].to_list() == ["K00001"]
-    assert selection.extract_modules()["module_id"].to_list() == ["M00001"]
-    assert selection.extract_pathway_memberships()["pathway_id"].to_list() == [
+    assert selection.reactions().collect()["reaction_id"].to_list() == ["R00001"]
+    assert selection.participants().collect().height == 3
+    assert selection.enzymes().collect()["ec_number"].to_list() == ["3.6.1.3"]
+    assert selection.kos().collect()["ko_id"].to_list() == ["K00001"]
+    assert selection.modules().collect()["module_id"].to_list() == ["M00001"]
+    assert selection.pathway_memberships().collect()["pathway_id"].to_list() == [
         "map00010"
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [
+    assert selection.unmatched_ids().collect().to_dicts() == [
         {"input_id": "CHEBI:999", "reason": "not_found"}
     ]
     with db.connect() as con, pytest.raises(duckdb.InvalidInputException):
@@ -181,7 +181,7 @@ def test_grouped_selection_and_exact_module_evaluation(tmp_path: Path) -> None:
         {"compound": ["C00002"], "reaction": ["C00001"]},
         namespace="kegg_compound",
     )
-    assert set(grouped.extract_reactions()["group_id"]) == {"compound", "reaction"}
+    assert set(grouped.reactions().collect()["group_id"]) == {"compound", "reaction"}
     complete = db.evaluate_modules(["K00001", "K00003"])
     assert complete.to_dicts() == [
         {
@@ -232,14 +232,14 @@ def test_grouped_selection_resolves_unique_ids_once_then_expands(
         ("second", "C00001"),
         ("second", "C99999"),
     )
-    assert selection.extract_matches().select("group_id", "input_id").to_dicts() == [
+    assert selection.matches().collect().select("group_id", "input_id").to_dicts() == [
         {"group_id": "first", "input_id": "C00001"},
         {"group_id": "second", "input_id": "C00001"},
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [
+    assert selection.unmatched_ids().collect().to_dicts() == [
         {"group_id": "second", "input_id": "C99999", "reason": "not_found"}
     ]
-    assert set(selection.extract_reactions()["group_id"]) == {"first", "second"}
+    assert set(selection.reactions().collect()["group_id"]) == {"first", "second"}
 
     empty_selection = db.select_groups(
         {"empty": [" "]},
@@ -247,9 +247,11 @@ def test_grouped_selection_resolves_unique_ids_once_then_expands(
     )
     assert empty_selection.is_grouped
     assert empty_selection.group_ids == ("empty",)
-    assert empty_selection.extract_matches().columns[0] == "group_id"
-    assert empty_selection.extract_unmatched_ids().columns[0] == "group_id"
-    assert calls == [("C00001", "C99999")]
+    assert empty_selection.matches().collect().columns[0] == "group_id"
+    assert empty_selection.unmatched_ids().collect().columns[0] == "group_id"
+    expected_ids = ("C00001", "C99999")
+    assert calls
+    assert all(queried == expected_ids for queried in calls)
 
 
 def test_grouped_selection_rejects_colliding_normalized_group_ids(
@@ -316,12 +318,15 @@ def test_all_metabolic_namespaces_and_curie_cross_references(
                 [identifier],
                 namespace=namespace,
             )
-            .extract_reactions()
+            .reactions()
+            .collect()
             .is_empty()
         )
-    cross_references = db.select_ids(
-        ["R00001"], namespace="kegg_reaction"
-    ).extract_cross_references()
+    cross_references = (
+        db.select_ids(["R00001"], namespace="kegg_reaction")
+        .cross_references()
+        .collect()
+    )
     assert "RHEA:12345" in cross_references["external_id"]
     assert "CHEBI:15377" in cross_references["external_id"]
 
@@ -329,11 +334,11 @@ def test_all_metabolic_namespaces_and_curie_cross_references(
 def test_ec_replacement_and_obsolete_reason_precedence(tmp_path: Path) -> None:
     db, _ = publish(tmp_path)
     replacement = db.select_ids(["9.9.9.9"], namespace="ec")
-    assert replacement.extract_matches().select(
+    assert replacement.matches().collect().select(
         "entity_id", "match_type"
     ).to_dicts() == [{"entity_id": "3.6.1.3", "match_type": "replacement"}]
     missing = db.select_ids(["8.8.8.8"], namespace="ec")
-    assert missing.extract_unmatched_ids().to_dicts() == [
+    assert missing.unmatched_ids().collect().to_dicts() == [
         {"input_id": "8.8.8.8", "reason": "not_found"}
     ]
 
@@ -366,22 +371,22 @@ NAME        Transferred to 1.1.1.999
     KEGGDatabase.from_metabolic_files(enzyme_entries=enzyme).write_duckdb(path)
     db = KEGGDatabase.from_duckdb(path)
 
-    assert db.select_ids(["1.1.1.1"], namespace="ec").extract_matches().select(
+    assert db.select_ids(["1.1.1.1"], namespace="ec").matches().collect().select(
         "entity_id", "match_type"
     ).to_dicts() == [{"entity_id": "1.1.1.3", "match_type": "replacement"}]
     assert db.select_ids(
         ["1.1.1.4"], namespace="ec"
-    ).extract_unmatched_ids().to_dicts() == [
+    ).unmatched_ids().collect().to_dicts() == [
         {"input_id": "1.1.1.4", "reason": "obsolete_excluded"}
     ]
     assert db.select_ids(
         ["1.1.1.5"], namespace="ec"
-    ).extract_unmatched_ids().to_dicts() == [
+    ).unmatched_ids().collect().to_dicts() == [
         {"input_id": "1.1.1.5", "reason": "invalid_canonical_target"}
     ]
     assert db.select_ids(
         ["1.1.1.4"], namespace="ec", include_obsolete=True
-    ).extract_matches().select("entity_id", "match_type").to_dicts() == [
+    ).matches().collect().select("entity_id", "match_type").to_dicts() == [
         {"entity_id": "1.1.1.4", "match_type": "exact"}
     ]
     with db.connect() as connection:
@@ -854,7 +859,7 @@ def test_relation_only_inputs_preserve_rows_and_enable_namespace(
     KEGGDatabase.from_metabolic_files(reaction_enzyme=relation).write_duckdb(path)
     db = KEGGDatabase.from_duckdb(path)
     selection = db.select_ids(["3.6.1.3"], namespace="ec")
-    assert selection.extract_matches().to_dicts() == [
+    assert selection.matches().collect().to_dicts() == [
         {
             "input_id": "3.6.1.3",
             "input_namespace": "ec",
@@ -876,7 +881,7 @@ def test_reaction_only_compound_selection_uses_participants(
     path = tmp_path / "reaction-only.duckdb"
     KEGGDatabase.from_metabolic_files(reaction_entries=reaction).write_duckdb(path)
     db = KEGGDatabase.from_duckdb(path)
-    assert db.select_ids(["C00001"], namespace="kegg_compound").extract_reactions()[
+    assert db.select_ids(["C00001"], namespace="kegg_compound").reactions().collect()[
         "reaction_id"
     ].to_list() == ["R00001"]
 

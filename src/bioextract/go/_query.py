@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import polars as pl
 from polars._typing import SchemaDict
+
+from bioextract._lazy import register_replayable_source
 
 if TYPE_CHECKING:
     from .go import GODatabase
@@ -207,7 +210,7 @@ class GOAncestorSelection:
     Examples:
         Extract projected ancestor rows from a selection:
 
-        >>> selection.extract_ancestors().columns  # doctest: +SKIP
+        >>> selection.ancestors().collect_schema().names()  # doctest: +SKIP
         ['input_go_id', 'go_id', 'ancestor_go_id', 'ancestor_term_name', 'ancestor_namespace', 'min_distance', 'target_subset_id']
     """
 
@@ -220,13 +223,28 @@ class GOAncestorSelection:
     _df_matches: pl.DataFrame | None = field(default=None, init=False, repr=False)
     _df_unmatched: pl.DataFrame | None = field(default=None, init=False, repr=False)
 
-    def extract_ancestors(self) -> pl.DataFrame:
+    def ancestors(self) -> pl.LazyFrame:
+        """Return accepted ancestor and optional self mappings lazily.
+
+        Examples:
+            >>> selection.ancestors().collect()  # doctest: +SKIP
+            shape: (..., 7)
+        """
+        snapshot = copy.copy(self)
+        return register_replayable_source(
+            schema=GO_ANCESTOR_MATCH_SCHEMA,
+            batches=lambda batch_size: _iter_single_frame(
+                snapshot._eager_ancestors(), batch_size
+            ),
+        )
+
+    def _eager_ancestors(self) -> pl.DataFrame:
         """Return accepted ancestor and optional self mappings.
 
         Examples:
             Read the canonical ancestor ID from a selection:
 
-            >>> selection.extract_ancestors().get_column("ancestor_go_id")  # doctest: +SKIP
+            >>> selection.ancestors().collect().get_column("ancestor_go_id")  # doctest: +SKIP
             shape: (1,)
             Series: 'ancestor_go_id' [str]
             ["GO:0000001"]
@@ -235,13 +253,28 @@ class GOAncestorSelection:
         assert self._df_matches is not None
         return self._df_matches
 
-    def extract_unmatched_ids(self) -> pl.DataFrame:
+    def unmatched_ids(self) -> pl.LazyFrame:
+        """Return inputs without an accepted ancestor lazily.
+
+        Examples:
+            >>> selection.unmatched_ids().collect()  # doctest: +SKIP
+            shape: (..., 3)
+        """
+        snapshot = copy.copy(self)
+        return register_replayable_source(
+            schema=GO_ANCESTOR_UNMATCHED_SCHEMA,
+            batches=lambda batch_size: _iter_single_frame(
+                snapshot._eager_unmatched_ids(), batch_size
+            ),
+        )
+
+    def _eager_unmatched_ids(self) -> pl.DataFrame:
         """Return inputs without an accepted ancestor and their reason.
 
         Examples:
             Inspect the reason for an absent input:
 
-            >>> selection.extract_unmatched_ids().columns  # doctest: +SKIP
+            >>> selection.unmatched_ids().collect_schema().names()  # doctest: +SKIP
             ['input_go_id', 'resolved_go_id', 'reason']
         """
         self._resolve()
@@ -263,6 +296,11 @@ class GOAncestorSelection:
             df_matches, df_unmatched = _resolve_source(self)
         self._df_matches = df_matches
         self._df_unmatched = df_unmatched
+
+
+def _iter_single_frame(frame: pl.DataFrame, batch_size: int):
+    for offset in range(0, frame.height, batch_size):
+        yield frame.slice(offset, batch_size)
 
 
 def _resolve_publication(

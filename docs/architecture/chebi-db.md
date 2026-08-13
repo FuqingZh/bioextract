@@ -33,8 +33,10 @@ ChemOnt uses `chemont_term`, `chemont_term_relation`,
 All public ChEBI keys are complete `CHEBI:<number>` CURIE strings. Scalar
 chemical representations such as SMILES, InChI, and InChIKey live on
 `compound`; the potentially large molfile stays in `compound_structure`.
-One-to-many names, xrefs, relations, structures, and WURCS values are extracted
-separately so `extract_compounds()` remains one row per canonical compound.
+One-to-many names, xrefs, relations, structures, and WURCS values are exposed
+as separate lazy noun relations (`names()`, `cross_references()`,
+`relations()`, `structures()`, and `wurcs()`) so `compounds()` remains one row
+per canonical compound.
 
 ## Domain And Native Access
 
@@ -43,9 +45,14 @@ CURIE typing, table inventory, and row counts. `select_compounds()` and
 `select_groups()` resolve primary/secondary ChEBI IDs, exact InChI/InChIKey,
 and dynamic external prefixes such as `kegg.compound` or `hmdb`.
 
-Selections defer DuckDB work until an eager `extract_*()` terminal. They retain
+Selections return native `polars.LazyFrame` relations such as `matches()`,
+`compounds()`, `names()`, `cross_references()`, `relations()`, `structures()`,
+`wurcs()`, `ancestors()`, `descendants()`, and `unmatched_ids()`. They retain
 caller and group lineage, support star/obsolete policy, return direct
 relations, and traverse cycle-safe `is_a` ancestry or descendants.
+
+DuckDB work starts when callers execute a returned frame with `collect()`,
+`collect_batches()`, or `sink_*()`.
 
 `connect()` is the advanced escape hatch: every call returns a new native
 `DuckDBPyConnection` opened with `read_only=True`. The library does not expose

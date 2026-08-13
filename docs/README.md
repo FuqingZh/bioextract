@@ -1,7 +1,7 @@
 # bioextract Documentation
 
-Version: v1.1
-Date: 2026-08-10
+Version: v1.2
+Date: 2026-08-12
 Status: current
 
 This directory contains durable architecture, data contracts, test standards,
@@ -48,12 +48,20 @@ when a domain does not yet have a dedicated architecture document.
 | WikiPathways | [WikiPathwaysDatabase](architecture/wikipathways-db.md) | [WikiPathwaysDatabase](testing/wikipathways-db.md) | — |
 | eggNOG | [EggNOGDatabase](architecture/eggnog-db.md) | [EggNOGDatabase](testing/eggnog-db.md) | [5.0.2 baseline](benchmarks/20260608-v1.0-eggnog-5.0.2-benchmark.md) |
 | InterPro and Pfam | [InterProDatabase](architecture/interpro-db.md) | [InterProDatabase](testing/interpro-db.md) | [108.0 baseline](benchmarks/20260714-v1.0-interpro-108-benchmark.md) |
-| UniProt | [UniProtDatabase](architecture/uniprot-db.md) | [UniProtDatabase](testing/uniprot-db.md) | [2026_01 baseline](benchmarks/20260731-uniprot-kb-2026_01-benchmark.md) |
+| UniProt | [UniProtDatabase](architecture/uniprot-db.md) | [UniProtDatabase](testing/uniprot-db.md) | [KB 2026_01 baseline](benchmarks/20260731-uniprot-kb-2026_01-benchmark.md); [idmapping scan decision](benchmarks/20260812-uniprot-idmapping-scan-benchmark.md) |
 | Rhea | [RheaDatabase](architecture/rhea-db.md) | [RheaDatabase](testing/rhea-db.md) | — |
 | STRINGdb | Root [README](../README.md), source code, and tests | [`STRINGdb integration`](../tests/integration/stringdb/test_database.py) | — |
 | OmniPath | [OmniPath architecture](architecture/omnipath-db.md) | [OmniPath test standard](testing/omnipath-db.md) | — |
 
 ## Plans And History
+
+The completed
+[Lazy Domain Query Convergence Plan](implementation-plans/20260812-v1.0-lazy-domain-query-convergence-implementation-plan.md)
+defines the repository-wide native `LazyFrame` relation contract, replayable
+DuckDB execution ownership, non-Cartesian Rhea `List(Struct)` neighborhoods,
+species-safe WikiPathways access, public InterPro Pfam annotations, and the
+benchmark gate that precedes any UniProt idmapping selected-ID API. Its final
+repository gate passed with 781 tests.
 
 The implemented
 [GO Ancestor Projection And Publication Query Pushdown Plan](implementation-plans/20260810-v1.0-go-ancestor-query-implementation-plan.md)
@@ -70,7 +78,7 @@ resource-control ownership, gzip FASTA error normalization, the common
 `source` overlay contract, and the completed Rhea, KEGG metabolic, and ChEBI
 constructor migrations. The implementation slices, independent harness
 cleanup, and documentation closeout are merged; the separately authorized
-`0.2.0` package-release handoff remains outside the plan.
+`0.4.0` package-release handoff remains outside the plan.
 
 The completed
 [Column Lineage And Public Schema Convergence Plan](implementation-plans/20260804-v1.0-column-lineage-public-schema-convergence.md)

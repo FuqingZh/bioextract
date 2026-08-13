@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import duckdb
+import polars as pl
 import pytest
 
 from bioextract import GODatabase
@@ -135,8 +136,8 @@ def test_reopened_handle_rejects_replaced_publication_for_empty_selection(
 
     with pytest.raises(IntegrityError, match="replaced"):
         reopened.select_terms(term_ids=[])
-    with pytest.raises(IntegrityError, match="replaced"):
-        reopened.select_ancestors([]).extract_ancestors()
+    with pytest.raises((IntegrityError, pl.exceptions.ComputeError), match="replaced"):
+        reopened.select_ancestors([]).ancestors().collect()
 
 
 def test_reopened_handle_translates_vanished_publication_to_integrity_error(

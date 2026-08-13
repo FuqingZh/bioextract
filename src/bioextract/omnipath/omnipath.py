@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -7,15 +8,20 @@ from pathlib import Path
 
 import polars as pl
 
+from .._lazy import register_deferred_frame_source
 from .._shared import (
     create_group_input_frames,
     create_input_id_frame,
     validate_required_cols,
 )
 from .constant import (
+    SCHEMA_ENZSUB,
     SCHEMA_ENZSUB_RAW,
+    SCHEMA_GROUP_ENZSUB,
     SCHEMA_GROUP_INPUT_IDS,
+    SCHEMA_GROUP_INTERACTIONS,
     SCHEMA_GROUPS,
+    SCHEMA_INTERACTIONS,
     SCHEMA_INTERACTIONS_RAW,
     SCHEMA_UNMAPPED,
     OmniPathNamespace,
@@ -55,7 +61,7 @@ class OmniPathDatabase:
         ... )
         >>> (
         ...     db.select_ids(["P31749"])
-        ...     .extract_enzsub()
+        ...     .enzsub().collect()
         ...     .select("substrate", "target_site")
         ...     .to_dicts()
         ... )
@@ -208,7 +214,7 @@ class OmniPathDatabase:
             >>> db = OmniPathDatabase.from_files(
             ...     enzsub="fixtures/omnipath/enzsub.tsv"
             ... )
-            >>> db.select_ids(["P31749"]).extract_enzsub()["substrate"].to_list()
+            >>> db.select_ids(["P31749"]).enzsub().collect()["substrate"].to_list()
             ['BAD', 'FOXO3']
         """
         if namespace != "protein":
@@ -247,10 +253,11 @@ class OmniPathDatabase:
             ... )
             >>> (
             ...     db.select_groups({"up": ["P31749"], "down": ["MAPK1"]})
-            ...     .extract_enzsub()
+            ...     .enzsub()
             ...     .select("group_id", "enzyme")
             ...     .unique()
             ...     .sort("group_id")
+            ...     .collect()
             ...     .to_dicts()
             ... )
             [{'group_id': 'down', 'enzyme': 'MAPK1'}, {'group_id': 'up', 'enzyme': 'P31749'}]
@@ -283,7 +290,7 @@ class OmniPathSelection:
         ...     enzsub="fixtures/omnipath/enzsub.tsv"
         ... )
         >>> selection = db.select_ids(["P31749"])
-        >>> selection.extract_enzsub()["substrate"].to_list()
+        >>> selection.enzsub().collect()["substrate"].to_list()
         ['BAD', 'FOXO3']
     """
 
@@ -322,7 +329,7 @@ class OmniPathSelection:
         """Create a selection constrained to enzsub and/or interactions.
 
         Existing cached frames are retained only for resources that remain
-        selected. File availability is checked when extraction is requested.
+        selected. File availability is checked when the lazy relation executes.
 
         Args:
             resources: Non-empty iterable containing ``"enzsub"``,
@@ -344,7 +351,8 @@ class OmniPathSelection:
             >>> selection = db.select_ids(["P31749", "ERBB2"])
             >>> (
             ...     selection.with_resources(["enzsub"])
-            ...     .extract_unmatched_ids()
+            ...     .unmatched_ids()
+            ...     .collect()
             ...     .to_dicts()
             ... )
             [{'input_id': 'ERBB2'}]
@@ -382,7 +390,8 @@ class OmniPathSelection:
             >>> (
             ...     db.select_ids(["P31749"])
             ...     .with_enzsub()
-            ...     .extract_enzsub()["substrate"]
+            ...     .enzsub()
+            ...     .collect()["substrate"]
             ...     .to_list()
             ... )
             ['BAD', 'FOXO3']
@@ -400,19 +409,20 @@ class OmniPathSelection:
             >>> (
             ...     db.select_ids(["ERBB2"])
             ...     .with_interactions()
-            ...     .extract_interactions()
+            ...     .interactions()
             ...     .select("source", "target")
+            ...     .collect()
             ...     .to_dicts()
             ... )
             [{'source': 'EGFR', 'target': 'ERBB2'}]
         """
         return self.with_resources(["interactions"])
 
-    def extract_enzsub(self) -> pl.DataFrame:
-        """Extract matched OmniPath enzyme-substrate relations.
+    def enzsub(self) -> pl.LazyFrame:
+        """Return matched OmniPath enzyme-substrate relations lazily.
 
         Returns:
-            A materialized table with one of these schemas:
+            A lazy frame with one of these schemas:
 
             - single selection: official `enzyme`, `substrate`, `residue_type`,
               `residue_offset`, `modification`, plus derived `target_site`
@@ -430,9 +440,16 @@ class OmniPathSelection:
             >>> db = OmniPathDatabase.from_files(
             ...     enzsub="fixtures/omnipath/enzsub.tsv"
             ... )
-            >>> db.select_ids(["P31749"]).extract_enzsub().head(1).to_dicts()
+            >>> db.select_ids(["P31749"]).enzsub().head(1).collect().to_dicts()
             [{'enzyme': 'P31749', 'substrate': 'BAD', 'residue_type': 'S', 'residue_offset': '136', 'modification': 'phosphorylation', 'target_site': 'S136'}]
         """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=SCHEMA_GROUP_ENZSUB if self.is_grouped else SCHEMA_ENZSUB,
+            frame=lambda: snapshot._eager_enzsub(),
+        )
+
+    def _eager_enzsub(self) -> pl.DataFrame:
         if "enzsub" not in self.resources_selected:
             raise ValueError(
                 "OmniPath resource 'enzsub' is not enabled for this selection"
@@ -447,11 +464,11 @@ class OmniPathSelection:
             )
         return self._df_enzsub
 
-    def extract_interactions(self) -> pl.DataFrame:
-        """Extract matched OmniPath interaction relations.
+    def interactions(self) -> pl.LazyFrame:
+        """Return matched OmniPath interaction relations lazily.
 
         Returns:
-            A materialized table with one of these schemas:
+            A lazy frame with one of these schemas:
 
             - single selection: official `source`, `target`, `is_directed`,
               `is_stimulation`, `is_inhibition`
@@ -469,9 +486,18 @@ class OmniPathSelection:
             >>> db = OmniPathDatabase.from_files(
             ...     interactions="fixtures/omnipath/interactions.tsv"
             ... )
-            >>> db.select_ids(["ERBB2"]).extract_interactions().to_dicts()
+            >>> db.select_ids(["ERBB2"]).interactions().collect().to_dicts()
             [{'source': 'EGFR', 'target': 'ERBB2', 'is_directed': False, 'is_stimulation': True, 'is_inhibition': False}]
         """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=(
+                SCHEMA_GROUP_INTERACTIONS if self.is_grouped else SCHEMA_INTERACTIONS
+            ),
+            frame=lambda: snapshot._eager_interactions(),
+        )
+
+    def _eager_interactions(self) -> pl.DataFrame:
         if "interactions" not in self.resources_selected:
             raise ValueError(
                 "OmniPath resource 'interactions' is not enabled for this selection"
@@ -488,11 +514,11 @@ class OmniPathSelection:
             )
         return self._df_interactions
 
-    def extract_unmatched_ids(self) -> pl.DataFrame:
-        """Extract normalized input IDs not found in the selected resources.
+    def unmatched_ids(self) -> pl.LazyFrame:
+        """Return normalized input IDs not found in selected resources lazily.
 
         Returns:
-            A materialized table with one of these schemas:
+            A lazy frame with one of these schemas:
 
             - single selection: `input_id`
             - grouped selection: `group_id`, `input_id`
@@ -504,9 +530,16 @@ class OmniPathSelection:
             ...     interactions="fixtures/omnipath/interactions.tsv"
             ... )
             >>> selection = db.select_ids(["MISSING"]).with_interactions()
-            >>> selection.extract_unmatched_ids().to_dicts()
+            >>> selection.unmatched_ids().collect().to_dicts()
             [{'input_id': 'MISSING'}]
         """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=SCHEMA_GROUP_INPUT_IDS if self.is_grouped else SCHEMA_UNMAPPED,
+            frame=lambda: snapshot._eager_unmatched_ids(),
+        )
+
+    def _eager_unmatched_ids(self) -> pl.DataFrame:
         if self._df_unmapped is None:
             col_group_id = list(self._col_group_id)
             cols_index = col_group_id + ["input_id"]
@@ -520,7 +553,7 @@ class OmniPathSelection:
 
             df_matched_parts: list[pl.DataFrame] = []
             if "enzsub" in self.resources_selected:
-                df_enzsub = self.extract_enzsub()
+                df_enzsub = self._eager_enzsub()
                 df_matched_parts.extend(
                     [
                         df_enzsub.select(
@@ -533,7 +566,7 @@ class OmniPathSelection:
                 )
 
             if "interactions" in self.resources_selected:
-                df_interactions = self.extract_interactions()
+                df_interactions = self._eager_interactions()
                 df_matched_parts.extend(
                     [
                         df_interactions.select(

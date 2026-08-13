@@ -365,7 +365,7 @@ class ChEBIDatabase:
             ...     ["CHEBI:15377", "CHEBI:10743"],
             ...     namespace="chebi",
             ... )
-            >>> selection.extract_matches()["chebi_id"].unique().to_list()  # doctest: +SKIP
+            >>> selection.matches().select("chebi_id").collect().unique().to_list()  # doctest: +SKIP
             ['CHEBI:15377']
         """
         return create_selection(
@@ -393,7 +393,7 @@ class ChEBIDatabase:
             ...     {"solvent": ["CHEBI:15377"]},
             ...     namespace="chebi",
             ... )
-            >>> selection.extract_matches()["group_id"].to_list()  # doctest: +SKIP
+            >>> selection.matches().select("group_id").collect().to_list()  # doctest: +SKIP
             ['solvent']
         """
         return create_group_selection(

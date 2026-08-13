@@ -12,7 +12,7 @@ from typing import Literal
 
 import duckdb
 
-from bioextract.errors import CapabilityError
+from bioextract.errors import CapabilityError, IntegrityError
 
 from ._query import (
     RheaReactionSelection,
@@ -268,7 +268,8 @@ class RheaDatabase:
             include_obsolete: Include obsolete reaction records when available.
 
         Returns:
-            An immutable query plan with eager ``extract_*`` terminals.
+            An immutable query plan whose relation methods return native
+            ``polars.LazyFrame`` objects.
 
         Raises:
             CapabilityError: If this is not a publication-backed handle or
@@ -316,7 +317,7 @@ class RheaDatabase:
             ...     {"glycolysis": ["1.2.1.12"]},
             ...     namespace="ec",
             ... )
-            >>> selection.extract_matches().columns[:2]  # doctest: +SKIP
+            >>> selection.matches().collect().columns[:2]  # doctest: +SKIP
             ['group_id', 'input_id']
         """
         return create_group_selection(
@@ -393,7 +394,22 @@ class RheaDatabase:
             True
         """
         publication = self._require_publication()
-        return duckdb.connect(str(publication.path), read_only=True)
+        if _file_identity(publication.path) != publication.identity:
+            raise IntegrityError(
+                "Rhea publication was replaced; reopen it with from_duckdb()"
+            )
+        try:
+            connection = duckdb.connect(str(publication.path), read_only=True)
+        except duckdb.Error as error:
+            raise IntegrityError(
+                "Rhea publication became unavailable; reopen it with from_duckdb()"
+            ) from error
+        if _file_identity(publication.path) != publication.identity:
+            connection.close()
+            raise IntegrityError(
+                "Rhea publication was replaced; reopen it with from_duckdb()"
+            )
+        return connection
 
     def _require_publication(self) -> _RheaPublication:
         if self._publication is None:
@@ -465,6 +481,17 @@ def _validate_path(value: os.PathLike[str] | str) -> Path:
     if not path.exists():
         raise FileNotFoundError(path)
     return path
+
+
+def _file_identity(path: Path) -> tuple[int, int, int, int, int]:
+    stat = path.stat()
+    return (
+        int(stat.st_dev),
+        int(stat.st_ino),
+        int(stat.st_size),
+        int(stat.st_mtime_ns),
+        int(stat.st_ctime_ns),
+    )
 
 
 def _merge_release_sources(

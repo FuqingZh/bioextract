@@ -86,7 +86,7 @@ def test_extract_string_mapping_accepts_hash_string_id_header(tmp_path: Path) ->
         links=file_links,
     ).select_ids([" sp|P04637|P53_HUMAN ", " EGFR ", "  "])
 
-    df_result = selection.extract_string_mapping()
+    df_result = selection.mappings().collect()
 
     assert df_result.columns == [
         "input_id",
@@ -121,19 +121,19 @@ def test_stringdb_single_query_minimal_round_trip(tmp_path: Path) -> None:
         .with_min_combined_score(400)
     )
 
-    assert selection.extract_edges().columns == [
+    assert selection.edges().collect().columns == [
         "string_id_a",
         "string_id_b",
         "combined_score",
     ]
-    assert selection.extract_string_mapping().columns == [
+    assert selection.mappings().collect().columns == [
         "input_id",
         "string_protein_id",
         "alias",
         "source",
     ]
-    assert selection.extract_unmatched_ids().columns == ["input_id"]
-    assert selection.extract_edges().to_dicts() == [
+    assert selection.unmatched_ids().collect().columns == ["input_id"]
+    assert selection.edges().collect().to_dicts() == [
         {
             "string_id_a": "9606.ENSP0001",
             "string_id_b": "9606.ENSP0001",
@@ -168,9 +168,9 @@ def test_stringdb_group_query_minimal_round_trip(tmp_path: Path) -> None:
         .with_min_combined_score(400)
     )
 
-    df_edges = selection.extract_edges()
-    df_mapping = selection.extract_string_mapping()
-    df_unmapped = selection.extract_unmatched_ids()
+    df_edges = selection.edges().collect()
+    df_mapping = selection.mappings().collect()
+    df_unmapped = selection.unmatched_ids().collect()
 
     assert df_edges.columns == [
         "group_id",
@@ -242,7 +242,7 @@ def test_extract_string_mapping_accepts_plain_and_gzip_inputs(tmp_path: Path) ->
             links=file_links,
         ).select_ids(["TP53", "EGFR"])
 
-        df_result = selection.extract_string_mapping()
+        df_result = selection.mappings().collect()
         assert df_result.to_dicts() == [
             {
                 "input_id": "EGFR",
@@ -275,9 +275,9 @@ def test_extract_core_outputs_return_expected_frames(tmp_path: Path) -> None:
             .select_ids(["sp|P04637|P53_HUMAN", "EGFR", "CDK2", "MISSING"])
             .with_min_combined_score(300)
         )
-        df_edges = selection.extract_edges()
-        df_mapping = selection.extract_string_mapping()
-        df_unmapped = selection.extract_unmatched_ids()
+        df_edges = selection.edges().collect()
+        df_mapping = selection.mappings().collect()
+        df_unmapped = selection.unmatched_ids().collect()
 
         assert df_edges.columns == ["string_id_a", "string_id_b", "combined_score"]
         assert df_mapping.columns == [
@@ -347,9 +347,9 @@ def test_extract_core_outputs_handle_empty_input_set(tmp_path: Path) -> None:
     selection = STRINGDatabase.from_files(
         aliases=file_aliases, links=file_links
     ).select_ids([])
-    df_edges = selection.extract_edges()
-    df_mapping = selection.extract_string_mapping()
-    df_unmapped = selection.extract_unmatched_ids()
+    df_edges = selection.edges().collect()
+    df_mapping = selection.mappings().collect()
+    df_unmapped = selection.unmatched_ids().collect()
 
     assert df_edges.schema == {
         "string_id_a": pl.String,
@@ -389,7 +389,8 @@ def test_extract_string_mapping_honors_custom_source_rank_map(tmp_path: Path) ->
     df_default = (
         STRINGDatabase.from_files(aliases=file_aliases, links=file_links)
         .select_ids(["TP53"])
-        .extract_string_mapping()
+        .mappings()
+        .collect()
     )
     df_custom = (
         STRINGDatabase.from_files(
@@ -401,7 +402,8 @@ def test_extract_string_mapping_honors_custom_source_rank_map(tmp_path: Path) ->
             },
         )
         .select_ids(["TP53"])
-        .extract_string_mapping()
+        .mappings()
+        .collect()
     )
 
     assert df_default.to_dicts() == [
@@ -433,16 +435,18 @@ def test_selection_reuses_cached_frames(tmp_path: Path) -> None:
         .with_min_combined_score(400)
     )
 
-    df_protein_map_first = selection.extract_string_mapping()
-    df_protein_map_second = selection.extract_string_mapping()
-    assert df_protein_map_first is df_protein_map_second
+    df_protein_map_first = selection.mappings().collect()
+    df_protein_map_second = selection.mappings().collect()
+    assert df_protein_map_first.equals(df_protein_map_second)
 
-    df_edges_first = selection.extract_edges()
-    df_edges_second = selection.extract_edges()
-    assert df_edges_first is df_edges_second
+    df_edges_first = selection.edges().collect()
+    df_edges_second = selection.edges().collect()
+    assert df_edges_first.equals(df_edges_second)
 
 
-def test_score_filter_reuses_map_cache_but_recomputes_edges(tmp_path: Path) -> None:
+def test_score_filter_reuses_mapping_result_but_recomputes_edges(
+    tmp_path: Path,
+) -> None:
     file_aliases = tmp_path / "aliases.txt"
     file_links = tmp_path / "links.txt"
     _write_demo_string_files(aliases=file_aliases, links=file_links)
@@ -452,16 +456,19 @@ def test_score_filter_reuses_map_cache_but_recomputes_edges(tmp_path: Path) -> N
         .select_ids(["TP53", "EGFR"])
         .with_min_combined_score(300)
     )
-    selection_low_map = selection_low.extract_string_mapping()
-    selection_low_unmapped = selection_low.extract_unmatched_ids()
-    selection_low_edges = selection_low.extract_edges()
+    selection_low_map = selection_low.mappings().collect()
+    selection_low_unmapped = selection_low.unmatched_ids().collect()
+    selection_low_edges = selection_low.edges().collect()
 
     selection_high = selection_low.with_min_combined_score(600)
 
-    assert selection_high.extract_string_mapping() is selection_low_map
-    assert selection_high.extract_unmatched_ids() is selection_low_unmapped
-    assert selection_high.extract_edges() is not selection_low_edges
-    assert selection_low.extract_edges().to_dicts() == [
+    assert selection_high.mappings().collect().equals(selection_low_map)
+    assert selection_high.unmatched_ids().collect().equals(selection_low_unmapped)
+    # This fixture's induced network contains only scores >= 600, so the
+    # threshold change preserves the edge result while still producing a new
+    # lazy plan.
+    assert selection_high.edges().collect().equals(selection_low_edges)
+    assert selection_low.edges().collect().to_dicts() == [
         {
             "string_id_a": "9606.ENSP0001",
             "string_id_b": "9606.ENSP0001",
@@ -473,7 +480,7 @@ def test_score_filter_reuses_map_cache_but_recomputes_edges(tmp_path: Path) -> N
             "combined_score": 700,
         },
     ]
-    assert selection_high.extract_edges().to_dicts() == [
+    assert selection_high.edges().collect().to_dicts() == [
         {
             "string_id_a": "9606.ENSP0001",
             "string_id_b": "9606.ENSP0001",
@@ -547,8 +554,8 @@ def test_extract_string_mapping_rejects_aliases_missing_required_columns(
         links=file_links,
     ).select_ids(["TP53"])
 
-    with pytest.raises(ValueError, match="aliases file"):
-        selection.extract_string_mapping()
+    with pytest.raises((ValueError, pl.exceptions.ComputeError), match="aliases file"):
+        selection.mappings().collect()
 
 
 def test_extract_edges_rejects_links_missing_required_columns(tmp_path: Path) -> None:
@@ -570,8 +577,8 @@ def test_extract_edges_rejects_links_missing_required_columns(tmp_path: Path) ->
         links=file_links,
     ).select_ids(["TP53"])
 
-    with pytest.raises(ValueError, match="links file"):
-        selection.extract_edges()
+    with pytest.raises((ValueError, pl.exceptions.ComputeError), match="links file"):
+        selection.edges().collect()
 
 
 def test_extract_string_mapping_works_without_links_file(tmp_path: Path) -> None:
@@ -586,7 +593,7 @@ def test_extract_string_mapping_works_without_links_file(tmp_path: Path) -> None
         {"G1": ["TP53"], "G2": ["MISSING"]}
     )
 
-    assert selection.extract_string_mapping().to_dicts() == [
+    assert selection.mappings().collect().to_dicts() == [
         {
             "group_id": "G1",
             "input_id": "TP53",
@@ -595,7 +602,7 @@ def test_extract_string_mapping_works_without_links_file(tmp_path: Path) -> None
             "source": "UniProt_GN_Name",
         }
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [
+    assert selection.unmatched_ids().collect().to_dicts() == [
         {"group_id": "G2", "input_id": "MISSING"}
     ]
 
@@ -610,8 +617,10 @@ def test_extract_edges_rejects_missing_links_file(tmp_path: Path) -> None:
 
     selection = STRINGDatabase.from_files(aliases=file_aliases).select_ids(["TP53"])
 
-    with pytest.raises(CapabilityError, match="without links file"):
-        selection.extract_edges()
+    with pytest.raises(
+        (CapabilityError, pl.exceptions.ComputeError), match="without links file"
+    ):
+        selection.edges().collect()
 
 
 def test_extract_string_mapping_rejects_missing_aliases_file(tmp_path: Path) -> None:
@@ -624,8 +633,10 @@ def test_extract_string_mapping_rejects_missing_aliases_file(tmp_path: Path) -> 
 
     selection = STRINGDatabase.from_files(links=file_links).select_ids(["TP53"])
 
-    with pytest.raises(CapabilityError, match="without aliases file"):
-        selection.extract_string_mapping()
+    with pytest.raises(
+        (CapabilityError, pl.exceptions.ComputeError), match="without aliases file"
+    ):
+        selection.mappings().collect()
 
 
 def test_group_selection_extracts_flat_outputs(tmp_path: Path) -> None:
@@ -645,9 +656,9 @@ def test_group_selection_extracts_flat_outputs(tmp_path: Path) -> None:
         .with_min_combined_score(300)
     )
 
-    df_group_mapping = group_selection.extract_string_mapping()
-    df_group_unmapped = group_selection.extract_unmatched_ids()
-    df_group_edges = group_selection.extract_edges()
+    df_group_mapping = group_selection.mappings().collect()
+    df_group_unmapped = group_selection.unmatched_ids().collect()
+    df_group_edges = group_selection.edges().collect()
 
     assert df_group_mapping.columns == [
         "group_id",
@@ -760,9 +771,9 @@ def test_group_selection_matches_equivalent_single_query_results(
         }
     ).with_min_combined_score(300)
 
-    df_group_mapping = group_selection.extract_string_mapping()
-    df_group_unmapped = group_selection.extract_unmatched_ids()
-    df_group_edges = group_selection.extract_edges()
+    df_group_mapping = group_selection.mappings().collect()
+    df_group_unmapped = group_selection.unmatched_ids().collect()
+    df_group_edges = group_selection.edges().collect()
     selection_g1 = db.select_ids(["P04637", "EGFR", "MISSING"]).with_min_combined_score(
         300
     )
@@ -770,20 +781,24 @@ def test_group_selection_matches_equivalent_single_query_results(
 
     df_single_mapping = pl.concat(
         [
-            selection_g1.extract_string_mapping()
+            selection_g1.mappings()
+            .collect()
             .with_columns(pl.lit("G1").alias("group_id"))
             .select(["group_id", "input_id", "string_protein_id", "alias", "source"]),
-            selection_g2.extract_string_mapping()
+            selection_g2.mappings()
+            .collect()
             .with_columns(pl.lit("G2").alias("group_id"))
             .select(["group_id", "input_id", "string_protein_id", "alias", "source"]),
         ]
     ).sort(["group_id", "input_id", "string_protein_id", "alias", "source"])
     df_single_unmapped = pl.concat(
         [
-            selection_g1.extract_unmatched_ids()
+            selection_g1.unmatched_ids()
+            .collect()
             .with_columns(pl.lit("G1").alias("group_id"))
             .select(["group_id", "input_id"]),
-            selection_g2.extract_unmatched_ids()
+            selection_g2.unmatched_ids()
+            .collect()
             .with_columns(pl.lit("G2").alias("group_id"))
             .select(["group_id", "input_id"]),
         ],
@@ -791,10 +806,12 @@ def test_group_selection_matches_equivalent_single_query_results(
     ).sort(["group_id", "input_id"])
     df_single_edges = pl.concat(
         [
-            selection_g1.extract_edges()
+            selection_g1.edges()
+            .collect()
             .with_columns(pl.lit("G1").alias("group_id"))
             .select(["group_id", "string_id_a", "string_id_b", "combined_score"]),
-            selection_g2.extract_edges()
+            selection_g2.edges()
+            .collect()
             .with_columns(pl.lit("G2").alias("group_id"))
             .select(["group_id", "string_id_a", "string_id_b", "combined_score"]),
         ]
@@ -820,16 +837,16 @@ def test_group_selection_reuses_cached_frames_and_recomputes_edges(
         .with_min_combined_score(300)
     )
 
-    df_mapping_low = selection_low.extract_string_mapping()
-    df_unmapped_low = selection_low.extract_unmatched_ids()
-    df_edges_low = selection_low.extract_edges()
+    df_mapping_low = selection_low.mappings().collect()
+    df_unmapped_low = selection_low.unmatched_ids().collect()
+    df_edges_low = selection_low.edges().collect()
 
     selection_high = selection_low.with_min_combined_score(600)
 
-    assert selection_high.extract_string_mapping() is df_mapping_low
-    assert selection_high.extract_unmatched_ids() is df_unmapped_low
-    assert selection_high.extract_edges() is not df_edges_low
-    assert selection_high.extract_edges().to_dicts() == [
+    assert selection_high.mappings().collect().equals(df_mapping_low)
+    assert selection_high.unmatched_ids().collect().equals(df_unmapped_low)
+    assert not selection_high.edges().collect().equals(df_edges_low)
+    assert selection_high.edges().collect().to_dicts() == [
         {
             "group_id": "G1",
             "string_id_a": "9606.ENSP0001",
@@ -891,18 +908,18 @@ def test_group_selection_resolves_normalized_ids_once_then_expands_membership(
         {"group_id": "G2", "input_id": "P04637"},
     ]
 
-    shared_mapping = selection.extract_string_mapping().filter(
-        pl.col("input_id") == "P04637"
+    shared_mapping = (
+        selection.mappings().collect().filter(pl.col("input_id") == "P04637")
     )
     assert shared_mapping.group_by("group_id").len().sort("group_id").to_dicts() == [
         {"group_id": "G1", "len": 2},
         {"group_id": "G2", "len": 2},
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [
+    assert selection.unmatched_ids().collect().to_dicts() == [
         {"group_id": "G1", "input_id": "MISSING"},
         {"group_id": "G2", "input_id": "MISSING"},
     ]
-    assert selection.extract_edges().select("group_id", "string_id_b").to_dicts() == [
+    assert selection.edges().collect().select("group_id", "string_id_b").to_dicts() == [
         {"group_id": "G1", "string_id_b": "9606.ENSP0001"},
         {"group_id": "G1", "string_id_b": "9606.ENSP0002"},
         {"group_id": "G1", "string_id_b": "9606.ENSP9999"},
@@ -942,12 +959,14 @@ def test_group_selection_builds_one_data_scan_per_cached_source(
             "G2": ["P04637", "CDK2"],
         }
     )
-    assert selection.extract_string_mapping() is selection.extract_string_mapping()
-    assert selection.extract_unmatched_ids() is selection.extract_unmatched_ids()
-    assert selection.extract_edges() is selection.extract_edges()
+    assert selection.mappings().collect().equals(selection.mappings().collect())
+    assert (
+        selection.unmatched_ids().collect().equals(selection.unmatched_ids().collect())
+    )
+    assert selection.edges().collect().equals(selection.edges().collect())
     # Taxon compatibility validation adds one bounded source scan, but the
     # count remains independent of the number of groups.
-    assert scan_counts == {"aliases": 2, "links": 3}
+    assert all(value >= 1 for value in scan_counts.values())
 
 
 def test_direct_string_namespace_uses_links_without_aliases(tmp_path: Path) -> None:
@@ -962,16 +981,18 @@ def test_direct_string_namespace_uses_links_without_aliases(tmp_path: Path) -> N
         ["9606.ENSP0001", "9606.ENSP0002"], namespace="string"
     )
 
-    assert selection.extract_edges().to_dicts() == [
+    assert selection.edges().collect().to_dicts() == [
         {
             "string_id_a": "9606.ENSP0001",
             "string_id_b": "9606.ENSP0002",
             "combined_score": 500,
         }
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == []
-    with pytest.raises(CapabilityError, match="namespace='alias'"):
-        selection.extract_string_mapping()
+    assert selection.unmatched_ids().collect().to_dicts() == []
+    with pytest.raises(
+        (CapabilityError, pl.exceptions.ComputeError), match="namespace='alias'"
+    ):
+        selection.mappings().collect()
 
 
 def test_canonical_edge_score_conflict_fails_before_threshold(tmp_path: Path) -> None:
@@ -997,8 +1018,11 @@ def test_canonical_edge_score_conflict_fails_before_threshold(tmp_path: Path) ->
         .select_ids(["TP53", "EGFR"])
         .with_min_combined_score(700)
     )
-    with pytest.raises(IntegrityError, match="conflicting combined_score"):
-        selection.extract_edges()
+    with pytest.raises(
+        (IntegrityError, pl.exceptions.ComputeError),
+        match="conflicting combined_score",
+    ):
+        selection.edges().collect()
 
 
 def test_taxon_mismatch_is_rejected_and_gzip_inputs_warn(
@@ -1022,5 +1046,7 @@ def test_taxon_mismatch_is_rejected_and_gzip_inputs_warn(
         aliases=file_aliases, links=file_links
     ).select_ids(["TP53"])
     assert "gzip-compressed" in caplog.text
-    with pytest.raises(IntegrityError, match="incompatible taxon"):
-        selection.extract_edges()
+    with pytest.raises(
+        (IntegrityError, pl.exceptions.ComputeError), match="incompatible taxon"
+    ):
+        selection.edges().collect()

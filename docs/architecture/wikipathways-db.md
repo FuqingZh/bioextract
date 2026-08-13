@@ -58,18 +58,16 @@ Glutathione metabolism%WikiPathways_20260510%WP100%Homo sapiens	https://www.wiki
 ```python
 from bioextract import WikiPathwaysDatabase
 
-db = WikiPathwaysDatabase.from_gmt(
-    "wikipathways-20260510-gmt-*.gmt",
-    species="Homo sapiens",
-)
+db = WikiPathwaysDatabase.from_gmt("wikipathways-20260510-gmt-*.gmt")
+human = db.with_species("Homo sapiens")
 
-df_pathway = db.extract_pathway()
-df_term2gene = db.extract_term2gene()
-df_term2name = db.extract_term2name()
+lf_pathways = human.pathways()
+lf_pathway_genes = human.pathway_genes()
+lf_pathway_names = human.pathway_names()
 
-selection = db.select_ids(["2687", "2678", "MISSING"])
-df_mapping = selection.extract_mapping()
-df_unmapped = selection.extract_unmatched_ids()
+selection = human.select_ids(["2687", "2678", "MISSING"])
+lf_mapping = selection.mappings()
+lf_unmapped = selection.unmatched_ids()
 ```
 
 Canonical publications can be reopened without the original GMT files:
@@ -98,18 +96,25 @@ Grouped selections mirror the STRINGdb and Reactome style:
 
 ```python
 df_mapping = (
-    db.select_groups({"A": ["2687"], "B": ["435", "MISSING"]})
-    .extract_mapping()
+    human.select_groups({"A": ["2687"], "B": ["435", "MISSING"]})
+    .mappings()
 )
+df_mapping = df_mapping.collect()
 ```
 
 ## Source Resolution And Dataset Identity
 
-`from_gmt(source, *, species=None, glob=True)` accepts one local string or
+`from_gmt(source, *, glob=True)` accepts one local string or
 path-like path, a sequence of them, or glob expressions. `**` expressions
 recurse into nested directories. With `glob=False`, each scalar or sequence
 entry is literal. Empty sources, unmatched expressions, missing paths,
 directories, and other non-files are rejected.
+
+`with_species(species)` creates a view over the same source or reopened
+publication. It applies the exact normalized species to `pathway`, then
+semi-joins `pathway_gene` through the retained pathway IDs. This is the
+species boundary that prevents an Entrez Gene ID shared by multiple species
+from carrying a pathway across species.
 
 Resolution is private to the WikiPathways package. Every match is normalized to
 its actual physical file, duplicate physical files are rejected even when
@@ -139,7 +144,7 @@ other resolved files contain valid records.
 
 ## Output Contract
 
-`extract_pathway()` returns:
+`pathways()` returns a native `polars.LazyFrame` with:
 
 ```text
 wiki_pathways_id
@@ -151,14 +156,14 @@ url
 gene_count
 ```
 
-`extract_term2gene()` returns:
+`pathway_genes()` returns a native `polars.LazyFrame` with:
 
 ```text
 wiki_pathways_id
 gene_id
 ```
 
-`extract_term2name()` returns:
+`pathway_names()` returns a native `polars.LazyFrame` with:
 
 ```text
 wiki_pathways_id
@@ -169,7 +174,7 @@ version
 url
 ```
 
-`extract_mapping()` returns:
+`mappings()` returns a native `polars.LazyFrame` with:
 
 ```text
 input_id
@@ -206,8 +211,8 @@ owns pathway names.
 
 ## Species Filtering
 
-`species=` is an exact row/content filter, not a source discovery or file
+`with_species()` is an exact row/content filter, not a source discovery or file
 identity rule. When provided, pathway metadata is filtered by exact species
-string, and `term2gene` is filtered through the retained pathway IDs. Parsing,
+string, and `pathway_genes()` is filtered through the retained pathway IDs. Parsing,
 Collection/Version validation, ID uniqueness checks, and provenance inventory
 always cover every resolved file before this filter is applied.

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import copy
+import json
 import os
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, cast
 
 import duckdb
 import polars as pl
 
+from bioextract._lazy import register_replayable_source
 from bioextract._publication import (
     BIOEXTRACT_RELATIONS,
     DuckDBWriteResult,
@@ -24,7 +28,12 @@ from .constant import (
     ASSET_SPECS,
     MEDIA_TYPE_GMT,
     SCHEMA_GROUP_INPUT_IDS,
+    SCHEMA_GROUP_MAPPING,
     SCHEMA_GROUPS,
+    SCHEMA_MAPPING,
+    SCHEMA_PATHWAY,
+    SCHEMA_TERM2GENE,
+    SCHEMA_TERM2NAME,
     SCHEMA_UNMAPPED,
     SCHEMA_VERSION,
 )
@@ -80,16 +89,15 @@ class WikiPathwaysDatabase:
 
         >>> db = WikiPathwaysDatabase.from_gmt(
         ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt",
-        ...     species="Homo sapiens",
-        ... )
+        ... ).with_species("Homo sapiens")
         >>> selection = db.select_ids(["2687", "MISSING"])
         >>> (
-        ...     selection.extract_mapping()
+        ...     selection.mappings().collect()
         ...     .select("input_id", "wiki_pathways_id")
         ...     .to_dicts()
         ... )
         [{'input_id': '2687', 'wiki_pathways_id': 'WP100'}]
-        >>> selection.extract_unmatched_ids().to_dicts()
+        >>> selection.unmatched_ids().collect().to_dicts()
         [{'input_id': 'MISSING'}]
     """
 
@@ -108,7 +116,6 @@ class WikiPathwaysDatabase:
         cls,
         source: os.PathLike[str] | str | Sequence[os.PathLike[str] | str],
         *,
-        species: str | None = None,
         glob: bool = True,
     ) -> WikiPathwaysDatabase:
         """Create a dataset handle from one or more local WikiPathways GMT files.
@@ -116,8 +123,6 @@ class WikiPathwaysDatabase:
         Args:
             source: One local path, a sequence of local paths, or glob
                 expressions. Every resolved physical file must be unique.
-            species: Optional species display name used as an exact metadata
-                filter after parsing.
             glob: Expand each source entry as a glob expression. If false,
                 treat every entry literally.
 
@@ -129,8 +134,7 @@ class WikiPathwaysDatabase:
             FileNotFoundError: If a literal file does not exist or a glob
                 expression has no matches.
             ValueError: At construction, if the source is empty, resolves to a
-                directory, repeats a physical file, or the species string is
-                empty after normalization. GMT content parsing is deferred;
+                directory, or repeats a physical file. GMT content parsing is deferred;
                 malformed content, inconsistent Collection or Version values,
                 and duplicate WikiPathways IDs raise when a frame is first
                 extracted, built, or written.
@@ -140,10 +144,9 @@ class WikiPathwaysDatabase:
 
             >>> db = WikiPathwaysDatabase.from_gmt(
             ...     "data/wikipathways/*.gmt",
-            ...     species="Homo sapiens",
-            ... )
+            ... ).with_species("Homo sapiens")
             >>> (
-            ...     db.extract_pathway()
+            ...     db.pathways().collect()
             ...     .select("wiki_pathways_id", "pathway_name")
             ...     .head(1)
             ...     .to_dicts()
@@ -151,17 +154,7 @@ class WikiPathwaysDatabase:
             [{'wiki_pathways_id': 'WP100', 'pathway_name': 'Glutathione metabolism'}]
         """
         files_gmt = resolve_gmt_sources(source, glob=glob)
-        species_normalized = None if species is None else str(species).strip()
-        if species is not None and not species_normalized:
-            raise ValueError(
-                "WikiPathways species must be non-empty after normalization"
-            )
-        return cls(
-            snapshot=_WikiPathwaysSnapshot(
-                files_gmt=files_gmt,
-                species=species_normalized,
-            ),
-        )
+        return cls(snapshot=_WikiPathwaysSnapshot(files_gmt=files_gmt))
 
     @classmethod
     def from_duckdb(cls, path: os.PathLike[str] | str) -> WikiPathwaysDatabase:
@@ -187,13 +180,15 @@ class WikiPathwaysDatabase:
             >>> db = WikiPathwaysDatabase.from_duckdb(  # doctest: +SKIP
             ...     "tidy/wikipathways.duckdb"
             ... )
-            >>> db.extract_pathway().height > 0  # doctest: +SKIP
+            >>> db.pathways().collect().height > 0  # doctest: +SKIP
             True
         """
         publication_path = Path(path).absolute()
         identity_before = _file_identity(publication_path)
         try:
-            release_version = _validate_wikipathways_publication(publication_path)
+            release_version, declared_species = _validate_wikipathways_publication(
+                publication_path
+            )
             identity_after = _file_identity(publication_path)
         except (KeyError, TypeError, ValueError) as error:
             raise IntegrityError(str(error)) from error
@@ -203,7 +198,12 @@ class WikiPathwaysDatabase:
             ) from error
         if identity_after != identity_before:
             raise IntegrityError("WikiPathways publication changed during validation")
-        result = cls(snapshot=_WikiPathwaysSnapshot(files_gmt=()))
+        result = cls(
+            snapshot=_WikiPathwaysSnapshot(
+                files_gmt=(),
+                species=declared_species,
+            )
+        )
         result._release_version = release_version
         result._publication_path = publication_path
         result._publication_identity = identity_after
@@ -266,7 +266,7 @@ class WikiPathwaysDatabase:
             ... )
             >>> (
             ...     db.select_ids(["2687"])
-            ...     .extract_mapping()
+            ...     .mappings().collect()
             ...     .select("input_id", "wiki_pathways_id")
             ...     .to_dicts()
             ... )
@@ -280,6 +280,89 @@ class WikiPathwaysDatabase:
             _df_groups=None,
             _df_group_membership=None,
         )
+
+    @property
+    def species(self) -> str | None:
+        """Return the exact species scope of this resource view.
+
+        Examples:
+            >>> db.species  # doctest: +SKIP
+            'Homo sapiens'
+        """
+
+        return self.snapshot.species
+
+    def with_species(self, species: str) -> WikiPathwaysDatabase:
+        """Create a species-scoped view sharing this snapshot identity.
+
+        The scope is applied to ``pathway`` first and then semi-joins
+        ``pathway_gene`` by pathway ID. This prevents an Entrez Gene ID shared
+        by two species from carrying a pathway across species boundaries.
+
+        Examples:
+            >>> human = db.with_species(" Homo sapiens ")  # doctest: +SKIP
+            >>> human.species  # doctest: +SKIP
+            'Homo sapiens'
+        """
+
+        normalized = str(species).strip()
+        if not normalized:
+            raise ValueError(
+                "WikiPathways species must be non-empty after normalization"
+            )
+        if (
+            self._publication_path is not None
+            and self.snapshot.species is not None
+            and normalized != self.snapshot.species
+        ):
+            raise CapabilityError(
+                "WikiPathways publication is scoped to "
+                f"{self.snapshot.species!r}; reopen an unscoped publication "
+                "to query another species"
+            )
+        result = WikiPathwaysDatabase(
+            snapshot=_WikiPathwaysSnapshot(
+                files_gmt=self.snapshot.files_gmt,
+                species=normalized,
+            )
+        )
+        result._release_version = self._release_version
+        result._publication_path = self._publication_path
+        result._publication_identity = self._publication_identity
+        return result
+
+    def pathways(self) -> pl.LazyFrame:
+        """Return one lazy metadata row per pathway in the current scope.
+
+        Examples:
+            >>> lf = db.pathways()  # doctest: +SKIP
+            >>> lf.collect().head(1)  # doctest: +SKIP
+            shape: (1, ...)
+        """
+
+        return self._relation("pathway")
+
+    def pathway_genes(self) -> pl.LazyFrame:
+        """Return lazy pathway-to-Entrez membership in the current scope.
+
+        Examples:
+            >>> lf = db.pathway_genes()  # doctest: +SKIP
+            >>> lf.select("term", "gene").collect()  # doctest: +SKIP
+            shape: (..., 2)
+        """
+
+        return self._relation("term2gene")
+
+    def pathway_names(self) -> pl.LazyFrame:
+        """Return lazy display metadata for pathways in the current scope.
+
+        Examples:
+            >>> lf = db.pathway_names()  # doctest: +SKIP
+            >>> lf.collect().head(1)  # doctest: +SKIP
+            shape: (1, ...)
+        """
+
+        return self._relation("term2name")
 
     def select_groups(
         self,
@@ -304,7 +387,7 @@ class WikiPathwaysDatabase:
             ... )
             >>> (
             ...     db.select_groups({"case": ["2687"], "control": ["435"]})
-            ...     .extract_mapping()
+            ...     .mappings().collect()
             ...     .select("group_id", "input_id", "wiki_pathways_id")
             ...     .to_dicts()
             ... )
@@ -323,8 +406,8 @@ class WikiPathwaysDatabase:
             _df_group_membership=grp_in_frames.df_group_membership,
         )
 
-    def extract_pathway(self) -> pl.DataFrame:
-        """Extract one metadata row per pathway in the current species scope.
+    def _eager_pathway(self) -> pl.DataFrame:
+        """Materialize one metadata row per pathway in the current scope.
 
         ``gene_count`` counts distinct, non-empty Entrez Gene IDs in the GMT row.
 
@@ -333,30 +416,28 @@ class WikiPathwaysDatabase:
 
             >>> db = WikiPathwaysDatabase.from_gmt(
             ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt",
-            ...     species="Homo sapiens",
-            ... )
-            >>> db.extract_pathway()["wiki_pathways_id"].to_list()
+            ... ).with_species("Homo sapiens")
+            >>> db.pathways().collect()["wiki_pathways_id"].to_list()
             ['WP100', 'WP106']
         """
         return self._lazy_frame("pathway").collect()
 
-    def extract_term2gene(self) -> pl.DataFrame:
-        """Extract distinct WikiPathways-pathway-to-Entrez enrichment pairs.
+    def _eager_term2gene(self) -> pl.DataFrame:
+        """Materialize distinct pathway-to-Entrez enrichment pairs.
 
         Examples:
             Inspect pathway-to-gene pairs from the compact human fixture:
 
             >>> db = WikiPathwaysDatabase.from_gmt(
             ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt",
-            ...     species="Homo sapiens",
-            ... )
-            >>> db.extract_term2gene().head(2).to_dicts()
+            ... ).with_species("Homo sapiens")
+            >>> db.pathway_genes().collect().head(2).to_dicts()
             [{'wiki_pathways_id': 'WP100', 'gene_id': '2678'}, {'wiki_pathways_id': 'WP100', 'gene_id': '2687'}]
         """
         return self._lazy_frame("term2gene").collect()
 
-    def extract_term2name(self) -> pl.DataFrame:
-        """Extract one pathway display-metadata row per WikiPathways ID.
+    def _eager_term2name(self) -> pl.DataFrame:
+        """Materialize one pathway display-metadata row per WikiPathways ID.
 
         Examples:
             Look up a display name for an enrichment term:
@@ -365,7 +446,7 @@ class WikiPathwaysDatabase:
             ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt"
             ... )
             >>> (
-            ...     db.extract_term2name()
+            ...     db.pathway_names().collect()
             ...     .select("wiki_pathways_id", "pathway_name")
             ...     .head(1)
             ...     .to_dicts()
@@ -427,6 +508,15 @@ class WikiPathwaysDatabase:
             resource_name="wikipathways",
             release_version=release_version,
             release_version_source="official_metadata",
+            scope=(
+                json.dumps(
+                    {"species": self.species},
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+                if self.species is not None
+                else None
+            ),
         )
 
     def write_duckdb(
@@ -466,6 +556,7 @@ class WikiPathwaysDatabase:
             resource_name=dataset.resource_name,
             release_version=dataset.release_version,
             release_version_source=dataset.release_version_source,
+            scope=dataset.scope,
         )
         return canonical.write_duckdb(
             path,
@@ -523,6 +614,33 @@ class WikiPathwaysDatabase:
             self._frames = frames
         return self._frames[frame_name]
 
+    def _relation(self, frame_name: str) -> pl.LazyFrame:
+        schema = {
+            "pathway": SCHEMA_PATHWAY,
+            "term2gene": SCHEMA_TERM2GENE,
+            "term2name": SCHEMA_TERM2NAME,
+        }.get(frame_name)
+        if schema is None:
+            raise KeyError(f"Unknown WikiPathways relation: {frame_name}")
+        if self._publication_path is None:
+            return register_replayable_source(
+                schema=schema,
+                batches=lambda batch_size: _iter_source_relation_batches(
+                    self.snapshot.files_gmt,
+                    species=self.snapshot.species,
+                    frame_name=frame_name,
+                    batch_size=batch_size,
+                ),
+            )
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda batch_size: _iter_publication_relation_batches(
+                self,
+                frame_name=frame_name,
+                batch_size=batch_size,
+            ),
+        )
+
     def _read_publication_frames(self) -> dict[str, pl.LazyFrame]:
         with self.connect() as connection:
             pathway = pl.read_database(  # pyright: ignore[reportUnknownMemberType]
@@ -570,7 +688,7 @@ class WikiPathwaysSelection:
         ... )
         >>> selection = db.select_ids(["2687"])
         >>> (
-        ...     selection.extract_mapping()
+        ...     selection.mappings().collect()
         ...     .select("input_id", "wiki_pathways_id")
         ...     .to_dicts()
         ... )
@@ -600,18 +718,63 @@ class WikiPathwaysSelection:
         """
         return self._df_groups is not None
 
-    def extract_mapping(self) -> pl.DataFrame:
-        """Extract every pathway mapping matched by the selected Entrez IDs.
+    def mappings(self) -> pl.LazyFrame:
+        """Return selected pathway mappings as a native lazy relation.
+
+        Species scope is already applied to both the pathway metadata and its
+        gene membership before this input join is planned.
+
+        Examples:
+            >>> lf = selection.mappings()  # doctest: +SKIP
+            >>> lf.collect().head(1)  # doctest: +SKIP
+            shape: (1, ...)
+        """
+
+        snapshot = copy.copy(self)
+        snapshot.dataset = copy.copy(self.dataset)
+        schema = SCHEMA_GROUP_MAPPING if self.is_grouped else SCHEMA_MAPPING
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda batch_size: _iter_selection_mapping_batches(
+                snapshot,
+                batch_size=batch_size,
+            ),
+        )
+
+    def unmatched_ids(self) -> pl.LazyFrame:
+        """Return selected IDs absent from the current species scope.
+
+        Examples:
+            >>> lf = selection.unmatched_ids()  # doctest: +SKIP
+            >>> lf.collect()  # doctest: +SKIP
+            shape: (..., ...)
+        """
+
+        input_ids = self._df_input_ids.lazy()
+        matched = self.mappings().select("input_id").unique()
+        unmatched = input_ids.join(matched, on="input_id", how="anti").select(
+            "input_id"
+        )
+        if self._df_group_membership is None:
+            return unmatched.sort("input_id")
+        return (
+            self._df_group_membership.lazy()
+            .join(unmatched, on="input_id", how="inner")
+            .select("group_id", "input_id")
+            .sort("group_id", "input_id")
+        )
+
+    def _eager_mapping(self) -> pl.DataFrame:
+        """Materialize every pathway mapping matched by selected IDs.
 
         Examples:
             Materialize the pathway mapped to Entrez ID 2687:
 
             >>> db = WikiPathwaysDatabase.from_gmt(
             ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt",
-            ...     species="Homo sapiens",
-            ... )
+            ... ).with_species("Homo sapiens")
             >>> selection = db.select_ids(["2687"])
-            >>> selection.extract_mapping()["wiki_pathways_id"].to_list()
+            >>> selection.mappings().collect()["wiki_pathways_id"].to_list()
             ['WP100']
         """
         self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
@@ -624,8 +787,8 @@ class WikiPathwaysSelection:
             ).collect()
         return self._df_mapping
 
-    def extract_unmatched_ids(self) -> pl.DataFrame:
-        """Extract normalized input IDs with no WikiPathways mapping.
+    def _eager_unmatched(self) -> pl.DataFrame:
+        """Materialize normalized input IDs with no WikiPathways mapping.
 
         Grouped selections report an ID as unmapped independently within each
         group and include ``group_id`` in the result.
@@ -637,23 +800,186 @@ class WikiPathwaysSelection:
             ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt"
             ... )
             >>> selection = db.select_ids(["2687", "MISSING"])
-            >>> selection.extract_unmatched_ids().to_dicts()
+            >>> selection.unmatched_ids().collect().to_dicts()
             [{'input_id': 'MISSING'}]
         """
         self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
         if self._df_unmapped is None:
             self._df_unmapped = extract_unmatched_ids_frame(
                 self._df_input_ids,
-                self.extract_mapping(),
+                self._eager_mapping(),
                 df_group_membership=self._df_group_membership,
             )
         return self._df_unmapped
+
+
+def _iter_selection_mapping_batches(
+    selection: WikiPathwaysSelection,
+    *,
+    batch_size: int,
+) -> Iterator[pl.DataFrame]:
+    database = selection.dataset
+    if database._publication_path is None:  # pyright: ignore[reportPrivateUsage]
+        parsed = read_gmt_frames(database.snapshot.files_gmt)
+        frames = _scope_gmt_frames(parsed.frames, database.species)
+        frame = extract_mapping_frame(
+            frames["pathway"],
+            frames["term2gene"],
+            selection._df_input_ids,  # pyright: ignore[reportPrivateUsage]
+            df_group_membership=selection._df_group_membership,  # pyright: ignore[reportPrivateUsage]
+        ).collect()
+        for offset in range(0, frame.height, batch_size):
+            yield frame.slice(offset, batch_size)
+        return
+
+    connection = database.connect()
+    try:
+        connection.execute(
+            "CREATE TEMP TABLE _input_id(input_id VARCHAR NOT NULL PRIMARY KEY)"
+        )
+        input_rows = [
+            (str(row["input_id"]),)
+            for row in selection._df_input_ids.to_dicts()  # pyright: ignore[reportPrivateUsage]
+        ]
+        if input_rows:
+            connection.executemany("INSERT INTO _input_id VALUES (?)", input_rows)
+        query = """
+            SELECT DISTINCT
+                input.input_id AS input_id,
+                input.input_id AS gene_id,
+                gene.wiki_pathways_id AS wiki_pathways_id,
+                pathway.pathway_name AS pathway_name,
+                pathway.species AS species,
+                pathway.url AS url
+            FROM _input_id AS input
+            JOIN pathway_gene AS gene
+              ON gene.gene_id = input.input_id
+            JOIN pathway
+              ON pathway.wiki_pathways_id = gene.wiki_pathways_id
+        """
+        params: list[str] = []
+        if database.species is not None:
+            query += " WHERE pathway.species = ?"
+            params.append(database.species)
+        query += " ORDER BY input_id, wiki_pathways_id"
+        result = connection.execute(query, params)
+        reader = _publication_arrow_reader(result, batch_size)
+        try:
+            membership = selection._df_group_membership  # pyright: ignore[reportPrivateUsage]
+            for record_batch in reader:
+                frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+                if membership is not None:
+                    frame = (
+                        membership.join(frame, on="input_id", how="inner")
+                        .select(list(SCHEMA_GROUP_MAPPING))
+                        .unique()
+                        .sort(list(SCHEMA_GROUP_MAPPING))
+                    )
+                yield frame
+        finally:
+            close = getattr(reader, "close", None)
+            if close is not None:
+                close()
+    finally:
+        connection.close()
 
 
 def _filter_species_frame(lf: pl.LazyFrame, species: str) -> pl.LazyFrame:
     if "species" not in lf.collect_schema().names():
         return lf
     return lf.filter(pl.col("species") == species)
+
+
+def _scope_gmt_frames(
+    frames: Mapping[str, pl.LazyFrame],
+    species: str | None,
+) -> dict[str, pl.LazyFrame]:
+    if species is None:
+        return dict(frames)
+    pathway = frames["pathway"].filter(pl.col("species") == species)
+    pathway_ids = pathway.select("wiki_pathways_id").unique()
+    return {
+        "pathway": pathway,
+        "term2gene": frames["term2gene"]
+        .join(pathway_ids, on="wiki_pathways_id", how="inner")
+        .sort("wiki_pathways_id", "gene_id"),
+        "term2name": frames["term2name"].filter(pl.col("species") == species),
+    }
+
+
+def _iter_source_relation_batches(
+    files_gmt: tuple[Path, ...],
+    *,
+    species: str | None,
+    frame_name: str,
+    batch_size: int,
+) -> Iterator[pl.DataFrame]:
+    parsed = read_gmt_frames(files_gmt)
+    frames = _scope_gmt_frames(parsed.frames, species)
+    yield from frames[frame_name].collect_batches(chunk_size=batch_size)
+
+
+def _iter_publication_relation_batches(
+    database: WikiPathwaysDatabase,
+    *,
+    frame_name: str,
+    batch_size: int,
+) -> Iterator[pl.DataFrame]:
+    species = database.species
+    if frame_name == "pathway":
+        query = "SELECT * FROM pathway"
+        params: list[str] = []
+        if species is not None:
+            query += " WHERE species = ?"
+            params.append(species)
+    elif frame_name == "term2gene":
+        query = """
+            SELECT gene.wiki_pathways_id, gene.gene_id
+            FROM pathway_gene AS gene
+        """
+        params = []
+        if species is not None:
+            query += " JOIN pathway AS pathway USING (wiki_pathways_id)"
+            query += " WHERE pathway.species = ?"
+            params.append(species)
+        query += " ORDER BY gene.wiki_pathways_id, gene.gene_id"
+    elif frame_name == "term2name":
+        query = """
+            SELECT
+                wiki_pathways_id, pathway_name, species,
+                collection, version, url
+            FROM pathway
+        """
+        params = []
+        if species is not None:
+            query += " WHERE species = ?"
+            params.append(species)
+        query += " ORDER BY wiki_pathways_id"
+    else:
+        raise KeyError(f"Unknown WikiPathways relation: {frame_name}")
+
+    connection = database.connect()
+    try:
+        result = connection.execute(query, params)
+        reader = _publication_arrow_reader(result, batch_size)
+        try:
+            for record_batch in reader:
+                frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+                yield frame
+        finally:
+            close = getattr(reader, "close", None)
+            if close is not None:
+                close()
+    finally:
+        connection.close()
+
+
+def _publication_arrow_reader(result: Any, batch_size: int) -> Any:
+    to_arrow_reader = getattr(result, "to_arrow_reader", None)
+    if to_arrow_reader is not None:
+        return to_arrow_reader(batch_size)
+    fetch_record_batch = result.fetch_record_batch
+    return fetch_record_batch(rows_per_batch=batch_size)
 
 
 _WIKIPATHWAYS_TABLE_CONTRACTS = {
@@ -676,7 +1002,7 @@ _WIKIPATHWAYS_TABLE_CONTRACTS = {
 }
 
 
-def _validate_wikipathways_publication(path: Path) -> str:
+def _validate_wikipathways_publication(path: Path) -> tuple[str, str | None]:
     if not path.is_file():
         raise FileNotFoundError(path)
     try:
@@ -700,8 +1026,18 @@ def _validate_wikipathways_publication(path: Path) -> str:
                 raise ValueError("Unsupported WikiPathways source schema profile")
             if metadata.get("bioextract.resource_schema_version") != SCHEMA_VERSION:
                 raise ValueError("Unsupported WikiPathways resource schema version")
-            if "bioextract.scope" in metadata:
-                raise ValueError("WikiPathways publication scope is unsupported")
+            declared_species: str | None = None
+            scope_value = metadata.get("bioextract.scope")
+            if scope_value is not None:
+                scope_obj = json.loads(scope_value)
+                if not isinstance(scope_obj, dict):
+                    raise ValueError("WikiPathways publication scope is unsupported")
+                scope = cast(dict[str, object], scope_obj)
+                if set(scope) != {"species"}:
+                    raise ValueError("WikiPathways publication scope is unsupported")
+                declared_species = str(scope["species"]).strip()
+                if not declared_species:
+                    raise ValueError("WikiPathways publication species scope is empty")
             release_version = metadata.get("bioextract.release_version")
             if (
                 release_version is None
@@ -787,7 +1123,7 @@ def _validate_wikipathways_publication(path: Path) -> str:
         raise ValueError(
             f"Cannot open WikiPathways DuckDB publication: {path}"
         ) from error
-    return release_version
+    return release_version, declared_species
 
 
 def _file_identity(path: Path) -> tuple[int, int, int, int, int]:

@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import duckdb
+import polars as pl
 import pytest
 
 from bioextract.errors import CapabilityError, IntegrityError
@@ -66,7 +67,7 @@ def test_extract_mapping_and_unmapped_single_selection(tmp_path: Path) -> None:
         .select_ids([" sp|P04637|P53_HUMAN ", "Q9Y243", "MISSING", ""])
     )
 
-    assert selection.extract_mapping().to_dicts() == [
+    assert selection.mappings().collect().to_dicts() == [
         {
             "input_id": "P04637",
             "uniprot_id": "P04637",
@@ -95,7 +96,7 @@ def test_extract_mapping_and_unmapped_single_selection(tmp_path: Path) -> None:
             "reactome_url": "https://reactome.org/PathwayBrowser/#/R-HSA-6798695",
         },
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [{"input_id": "MISSING"}]
+    assert selection.unmatched_ids().collect().to_dicts() == [{"input_id": "MISSING"}]
 
 
 def test_grouped_selection_preserves_groups(tmp_path: Path) -> None:
@@ -113,7 +114,7 @@ def test_grouped_selection_preserves_groups(tmp_path: Path) -> None:
         }
     )
 
-    df_mapping = selection.extract_mapping()
+    df_mapping = selection.mappings().collect()
     assert df_mapping.columns == [
         "group_id",
         "input_id",
@@ -125,8 +126,8 @@ def test_grouped_selection_preserves_groups(tmp_path: Path) -> None:
         "reactome_url",
     ]
     assert df_mapping.filter(df_mapping["input_id"] == "P04637").height == 4
-    assert selection.extract_mapping() is df_mapping
-    assert selection.extract_unmatched_ids().to_dicts() == [
+    assert selection.mappings().collect().equals(df_mapping)
+    assert selection.unmatched_ids().collect().to_dicts() == [
         {"group_id": "TumorA", "input_id": "MISSING"}
     ]
 
@@ -141,12 +142,12 @@ def test_extract_enrichment_inputs_and_relations_are_species_scoped(
         relations=file_relations,
     ).with_species("Homo sapiens")
 
-    assert db.extract_term2gene().to_dicts() == [
+    assert db.pathway_genes().collect().to_dicts() == [
         {"reactome_pathway_id": "R-HSA-6798695", "uniprot_id": "P04637"},
         {"reactome_pathway_id": "R-HSA-6798695", "uniprot_id": "Q9Y243"},
         {"reactome_pathway_id": "R-HSA-69563", "uniprot_id": "P04637"},
     ]
-    assert db.extract_term2name().to_dicts() == [
+    assert db.pathway_names().collect().to_dicts() == [
         {
             "reactome_pathway_id": "R-HSA-1640170",
             "pathway_name": "Cell Cycle",
@@ -163,7 +164,7 @@ def test_extract_enrichment_inputs_and_relations_are_species_scoped(
             "species": "Homo sapiens",
         },
     ]
-    assert db.extract_pathway_relations().to_dicts() == [
+    assert db.pathway_relations().collect().to_dicts() == [
         {
             "parent_reactome_pathway_id": "R-HSA-1640170",
             "child_reactome_pathway_id": "R-HSA-6798695",
@@ -205,21 +206,29 @@ def test_duckdb_reopen_preserves_domain_selection_and_native_sql(
         pathways=file_pathways,
         relations=file_relations,
     ).with_species("Homo sapiens")
-    expected_mapping = source.select_groups(
-        {
-            "TumorA": ["P04637", "MISSING"],
-            "TumorB": ["P04637", "Q9Y243"],
-        }
-    ).extract_mapping()
-    expected_unmatched = source.select_groups(
-        {
-            "TumorA": ["P04637", "MISSING"],
-            "TumorB": ["P04637", "Q9Y243"],
-        }
-    ).extract_unmatched_ids()
-    expected_term2gene = source.extract_term2gene()
-    expected_term2name = source.extract_term2name()
-    expected_relations = source.extract_pathway_relations()
+    expected_mapping = (
+        source.select_groups(
+            {
+                "TumorA": ["P04637", "MISSING"],
+                "TumorB": ["P04637", "Q9Y243"],
+            }
+        )
+        .mappings()
+        .collect()
+    )
+    expected_unmatched = (
+        source.select_groups(
+            {
+                "TumorA": ["P04637", "MISSING"],
+                "TumorB": ["P04637", "Q9Y243"],
+            }
+        )
+        .unmatched_ids()
+        .collect()
+    )
+    expected_term2gene = source.pathway_genes().collect()
+    expected_term2name = source.pathway_names().collect()
+    expected_relations = source.pathway_relations().collect()
     publication = tmp_path / "reactome.duckdb"
     ReactomeDatabase.from_files(
         uniprot_mapping=file_mapping,
@@ -234,11 +243,11 @@ def test_duckdb_reopen_preserves_domain_selection_and_native_sql(
             "TumorB": ["P04637", "Q9Y243"],
         }
     )
-    assert selection.extract_mapping().equals(expected_mapping)
-    assert selection.extract_unmatched_ids().equals(expected_unmatched)
-    assert reopened.extract_term2gene().equals(expected_term2gene)
-    assert reopened.extract_term2name().equals(expected_term2name)
-    assert reopened.extract_pathway_relations().equals(expected_relations)
+    assert selection.mappings().collect().equals(expected_mapping)
+    assert selection.unmatched_ids().collect().equals(expected_unmatched)
+    assert reopened.pathway_genes().collect().equals(expected_term2gene)
+    assert reopened.pathway_names().collect().equals(expected_term2name)
+    assert reopened.pathway_relations().collect().equals(expected_relations)
     assert set(reopened.build_tidy().frames) == set(source.build_tidy().frames)
 
     first = reopened.connect()
@@ -272,7 +281,8 @@ def test_duckdb_reopen_validates_bounded_physical_contract(tmp_path: Path) -> No
     assert (
         ReactomeDatabase.from_duckdb(publication)
         .select_ids(["P04637"])
-        .extract_mapping()
+        .mappings()
+        .collect()
         .height
         == 2
     )
@@ -317,17 +327,21 @@ def test_duckdb_reopen_rejects_wrong_identity_inventory_and_replacement(
     ReactomeDatabase.from_files(uniprot_mapping=file_mapping).write_duckdb(current)
     reopened = ReactomeDatabase.from_duckdb(current)
     cached_selection = reopened.select_ids(["P04637"])
-    assert cached_selection.extract_mapping().height == 2
+    assert cached_selection.mappings().collect().height == 2
     with pytest.raises(CapabilityError, match="source-file handle"):
         reopened.build_tidy().write_duckdb(tmp_path / "invalid.duckdb")
-    with pytest.raises(CapabilityError, match="pathway metadata"):
-        reopened.extract_term2name()
+    with pytest.raises(
+        (CapabilityError, pl.exceptions.ComputeError), match="pathway metadata"
+    ):
+        reopened.pathway_names().collect()
     ReactomeDatabase.from_files(uniprot_mapping=file_mapping).write_duckdb(replacement)
     os.replace(replacement, current)
     with pytest.raises(IntegrityError, match="was replaced"):
         reopened.connect()
-    with pytest.raises(IntegrityError, match="was replaced"):
-        cached_selection.extract_mapping()
+    with pytest.raises(
+        (IntegrityError, pl.exceptions.ComputeError), match="was replaced"
+    ):
+        cached_selection.mappings().collect()
     with pytest.raises(IntegrityError, match="was replaced"):
         reopened.build_tidy()
 
@@ -346,18 +360,20 @@ def test_mapping_only_snapshot_supports_annotation_and_term2gene(
         "Homo sapiens"
     )
 
-    assert db.extract_term2gene().height == 3
-    assert db.select_ids(["P04637"]).extract_mapping().height == 2
+    assert db.pathway_genes().collect().height == 3
+    assert db.select_ids(["P04637"]).mappings().collect().height == 2
 
     tidy = db.build_tidy()
     assert set(tidy.frames) == {"mapping", "term2gene"}
     result = db.write_duckdb(tmp_path / "reactome_mapping.duckdb")
     assert result.tables == ("protein_pathway",)
 
-    with pytest.raises(ValueError, match="pathways file"):
-        db.extract_term2name()
-    with pytest.raises(ValueError, match="relations file"):
-        db.extract_pathway_relations()
+    with pytest.raises((ValueError, pl.exceptions.ComputeError), match="pathways file"):
+        db.pathway_names().collect()
+    with pytest.raises(
+        (ValueError, pl.exceptions.ComputeError), match="relations file"
+    ):
+        db.pathway_relations().collect()
 
 
 def test_pathway_only_snapshot_supports_term2name(tmp_path: Path) -> None:
@@ -366,11 +382,13 @@ def test_pathway_only_snapshot_supports_term2name(tmp_path: Path) -> None:
         "Homo sapiens"
     )
 
-    assert db.extract_term2name().height == 3
+    assert db.pathway_names().collect().height == 3
     assert set(db.build_tidy().frames) == {"pathway", "term2name"}
 
-    with pytest.raises(ValueError, match="UniProt2Reactome file"):
-        db.extract_term2gene()
+    with pytest.raises(
+        (ValueError, pl.exceptions.ComputeError), match="UniProt2Reactome file"
+    ):
+        db.pathway_genes().collect()
 
 
 def test_relation_only_snapshot_supports_unscoped_relations(
@@ -379,18 +397,24 @@ def test_relation_only_snapshot_supports_unscoped_relations(
     _, _, file_relations = write_reactome_fixture(tmp_path)
     db = ReactomeDatabase.from_files(relations=file_relations)
 
-    assert db.extract_pathway_relations().height == 3
+    assert db.pathway_relations().collect().height == 3
     assert set(db.build_tidy().frames) == {"relation"}
 
-    with pytest.raises(ValueError, match="species-scoped relation filtering"):
-        db.with_species("Homo sapiens").extract_pathway_relations()
+    with pytest.raises(
+        (ValueError, pl.exceptions.ComputeError),
+        match="species-scoped relation filtering",
+    ):
+        db.with_species("Homo sapiens").pathway_relations().collect()
 
     publication = tmp_path / "reactome_relations.duckdb"
     db.write_duckdb(publication)
-    with pytest.raises(CapabilityError, match="species-scoped relation filtering"):
+    with pytest.raises(
+        (CapabilityError, pl.exceptions.ComputeError),
+        match="species-scoped relation filtering",
+    ):
         ReactomeDatabase.from_duckdb(publication).with_species(
             "Homo sapiens"
-        ).extract_pathway_relations()
+        ).pathway_relations().collect()
 
 
 def test_from_files_rejects_missing_files(tmp_path: Path) -> None:

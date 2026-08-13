@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -8,6 +9,7 @@ from pathlib import Path
 import duckdb
 import polars as pl
 
+from bioextract._lazy import register_deferred_frame_source
 from bioextract._publication import (
     BIOEXTRACT_RELATIONS,
     DuckDBWriteResult,
@@ -91,8 +93,8 @@ class ReactomeDatabase:
         >>> (
         ...     db.with_species("Homo sapiens")
         ...     .select_ids(["P04637"])
-        ...     .extract_mapping()["reactome_pathway_id"]
-        ...     .to_list()
+        ...     .mappings().select("reactome_pathway_id").collect()
+        ...     .to_series().to_list()
         ... )
         ['R-HSA-6798695', 'R-HSA-69563']
     """
@@ -201,7 +203,7 @@ class ReactomeDatabase:
             >>> db = ReactomeDatabase.from_duckdb(  # doctest: +SKIP
             ...     "tidy/reactome.duckdb"
             ... )
-            >>> db.select_ids(["P04637"]).extract_mapping().height > 0  # doctest: +SKIP
+            >>> db.select_ids(["P04637"]).mappings().collect().height > 0  # doctest: +SKIP
             True
         """
         publication_path = Path(path).absolute()
@@ -319,9 +321,9 @@ class ReactomeDatabase:
             >>> selection = db.select_ids(
             ...     ["sp|P04637|P53_HUMAN", "MISSING"]
             ... )
-            >>> selection.extract_mapping()["input_id"].unique().to_list()
+            >>> selection.mappings().select("input_id").collect().unique().to_series().to_list()
             ['P04637']
-            >>> selection.extract_unmatched_ids().to_dicts()
+            >>> selection.unmatched_ids().collect().to_dicts()
             [{'input_id': 'MISSING'}]
         """
         self._assert_publication_current()
@@ -358,13 +360,13 @@ class ReactomeDatabase:
             ...     {"tumor": ["P04637"], "control": ["MISSING"]}
             ... )
             >>> (
-            ...     selection.extract_mapping()
+            ...     selection.mappings()
             ...     .select("group_id", "input_id")
             ...     .unique()
-            ...     .to_dicts()
+            ...     .collect().to_dicts()
             ... )
             [{'group_id': 'tumor', 'input_id': 'P04637'}]
-            >>> selection.extract_unmatched_ids().to_dicts()
+            >>> selection.unmatched_ids().collect().to_dicts()
             [{'group_id': 'control', 'input_id': 'MISSING'}]
         """
         self._assert_publication_current()
@@ -380,7 +382,20 @@ class ReactomeDatabase:
             _df_group_membership=grp_in_frames.df_group_membership,
         )
 
-    def extract_term2gene(self) -> pl.DataFrame:
+    def pathway_genes(self) -> pl.LazyFrame:
+        """Return distinct Reactome pathway-to-UniProt edges lazily.
+
+        Examples:
+            >>> db.pathway_genes().collect()  # doctest: +SKIP
+            shape: (..., 2)
+        """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=dict.fromkeys(["reactome_pathway_id", "uniprot_id"], pl.String),
+            frame=lambda: snapshot._eager_pathway_genes(),
+        )
+
+    def _eager_pathway_genes(self) -> pl.DataFrame:
         """Extract distinct Reactome-pathway-to-UniProt enrichment pairs.
 
         The current species scope is applied before pairs are deduplicated and
@@ -395,7 +410,7 @@ class ReactomeDatabase:
             >>> db = ReactomeDatabase.from_files(
             ...     uniprot_mapping="data/reactome/UniProt2Reactome.txt"
             ... ).with_species("Homo sapiens")
-            >>> db.extract_term2gene().head(2).to_dicts()
+            >>> db.pathway_genes().collect().head(2).to_dicts()
             [{'reactome_pathway_id': 'R-HSA-6798695', 'uniprot_id': 'P04637'}, {'reactome_pathway_id': 'R-HSA-6798695', 'uniprot_id': 'Q9Y243'}]
         """
         self._assert_publication_current()
@@ -403,7 +418,23 @@ class ReactomeDatabase:
             self._df_term2gene = extract_term2gene_frame(self._mapping_frame())
         return self._df_term2gene
 
-    def extract_term2name(self) -> pl.DataFrame:
+    def pathway_names(self) -> pl.LazyFrame:
+        """Return Reactome pathway display names and species lazily.
+
+        Examples:
+            >>> db.pathway_names().collect()  # doctest: +SKIP
+            shape: (..., 3)
+        """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=dict.fromkeys(
+                ["reactome_pathway_id", "pathway_name", "species"],
+                pl.String,
+            ),
+            frame=lambda: snapshot._eager_pathway_names(),
+        )
+
+    def _eager_pathway_names(self) -> pl.DataFrame:
         """Extract pathway display names and species metadata for enrichment.
 
         Returns:
@@ -419,8 +450,9 @@ class ReactomeDatabase:
             ...     pathways="data/reactome/ReactomePathways.txt"
             ... ).with_species("Homo sapiens")
             >>> (
-            ...     db.extract_term2name()
+            ...     db.pathway_names()
             ...     .select("reactome_pathway_id", "pathway_name")
+            ...     .collect()
             ...     .head(1)
             ...     .to_dicts()
             ... )
@@ -431,7 +463,23 @@ class ReactomeDatabase:
             self._df_term2name = extract_term2name_frame(self._pathway_frame())
         return self._df_term2name
 
-    def extract_pathway_relations(self) -> pl.DataFrame:
+    def pathway_relations(self) -> pl.LazyFrame:
+        """Return Reactome parent-child pathway edges lazily.
+
+        Examples:
+            >>> db.pathway_relations().collect()  # doctest: +SKIP
+            shape: (..., 2)
+        """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=dict.fromkeys(
+                ["parent_reactome_pathway_id", "child_reactome_pathway_id"],
+                pl.String,
+            ),
+            frame=lambda: snapshot._eager_pathway_relations(),
+        )
+
+    def _eager_pathway_relations(self) -> pl.DataFrame:
         """Extract Reactome parent-child pathway relations.
 
         When the dataset is species-scoped, both endpoints must exist in the
@@ -448,7 +496,7 @@ class ReactomeDatabase:
             ...     pathways="data/reactome/ReactomePathways.txt",
             ...     relations="data/reactome/ReactomePathwaysRelation.txt",
             ... ).with_species("Homo sapiens")
-            >>> db.extract_pathway_relations().head(1).to_dicts()
+            >>> db.pathway_relations().collect().head(1).to_dicts()
             [{'parent_reactome_pathway_id': 'R-HSA-1640170', 'child_reactome_pathway_id': 'R-HSA-6798695'}]
         """
         self._assert_publication_current()
@@ -721,11 +769,11 @@ class ReactomeDatabase:
             case "pathway":
                 return self._pathway_frame()
             case "relation":
-                return self.extract_pathway_relations()
+                return self._eager_pathway_relations()
             case "term2gene":
-                return self.extract_term2gene()
+                return self._eager_pathway_genes()
             case "term2name":
-                return self.extract_term2name()
+                return self._eager_pathway_names()
             case _:
                 raise ValueError(f"Unsupported Reactome tidy frame: {frame_name}")
 
@@ -774,8 +822,9 @@ class ReactomeSelection:
         ... )
         >>> selection = db.select_ids(["P04637"])
         >>> (
-        ...     selection.extract_mapping()
+        ...     selection.mappings()
         ...     .select("input_id", "reactome_pathway_id")
+        ...     .collect()
         ...     .head(1)
         ...     .to_dicts()
         ... )
@@ -805,7 +854,29 @@ class ReactomeSelection:
         """
         return self._df_groups is not None
 
-    def extract_mapping(self) -> pl.DataFrame:
+    def mappings(self) -> pl.LazyFrame:
+        """Return selected Reactome mapping rows lazily.
+
+        Examples:
+            >>> selection.mappings().collect()  # doctest: +SKIP
+            shape: (..., ...)
+        """
+        snapshot = copy.copy(self)
+        columns = (["group_id"] if self._df_group_membership is not None else []) + [
+            "input_id",
+            "uniprot_id",
+            "reactome_pathway_id",
+            "pathway_name",
+            "evidence_code",
+            "species",
+            "reactome_url",
+        ]
+        return register_deferred_frame_source(
+            schema=dict.fromkeys(columns, pl.String),
+            frame=snapshot._eager_mappings,
+        )
+
+    def _eager_mappings(self) -> pl.DataFrame:
         """Extract every pathway mapping matched by the selected UniProt IDs.
 
         Examples:
@@ -815,7 +886,7 @@ class ReactomeSelection:
             ...     uniprot_mapping="data/reactome/UniProt2Reactome.txt"
             ... ).with_species("Homo sapiens")
             >>> selection = db.select_ids(["P04637"])
-            >>> selection.extract_mapping()["reactome_pathway_id"].to_list()
+            >>> selection.mappings().select("reactome_pathway_id").collect().to_series().to_list()
             ['R-HSA-6798695', 'R-HSA-69563']
         """
         self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
@@ -827,7 +898,25 @@ class ReactomeSelection:
             )
         return self._df_mapping
 
-    def extract_unmatched_ids(self) -> pl.DataFrame:
+    def unmatched_ids(self) -> pl.LazyFrame:
+        """Return selected UniProt IDs without a Reactome mapping lazily.
+
+        Examples:
+            >>> selection.unmatched_ids().collect()  # doctest: +SKIP
+            shape: (..., 1)
+        """
+        snapshot = copy.copy(self)
+        columns = (
+            ["group_id", "input_id"]
+            if self._df_group_membership is not None
+            else ["input_id"]
+        )
+        return register_deferred_frame_source(
+            schema=dict.fromkeys(columns, pl.String),
+            frame=snapshot._eager_unmatched_ids,
+        )
+
+    def _eager_unmatched_ids(self) -> pl.DataFrame:
         """Extract normalized input IDs with no Reactome pathway mapping.
 
         Grouped selections report an ID as unmapped independently within each
@@ -840,14 +929,14 @@ class ReactomeSelection:
             ...     uniprot_mapping="data/reactome/UniProt2Reactome.txt"
             ... )
             >>> selection = db.select_ids(["P04637", "MISSING"])
-            >>> selection.extract_unmatched_ids().to_dicts()
+            >>> selection.unmatched_ids().collect().to_dicts()
             [{'input_id': 'MISSING'}]
         """
         self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
         if self._df_unmapped is None:
             self._df_unmapped = extract_unmatched_ids_frame(
                 self._df_input_ids,
-                self.extract_mapping(),
+                self._eager_mappings(),
                 df_group_membership=self._df_group_membership,
             )
         return self._df_unmapped

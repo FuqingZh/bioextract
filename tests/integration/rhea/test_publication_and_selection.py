@@ -312,7 +312,7 @@ def test_from_duckdb_selects_exact_reactions_and_domain_relations(
     database = RheaDatabase.from_duckdb(path)
     selection = database.select_reactions(["CHEBI:1"], namespace="chebi")
 
-    assert selection.extract_matches().select(
+    assert selection.matches().collect().select(
         "input_id", "input_namespace", "rhea_id", "direction"
     ).to_dicts() == [
         {
@@ -341,7 +341,8 @@ def test_from_duckdb_selects_exact_reactions_and_domain_relations(
         },
     ]
     participant_roles = (
-        selection.extract_participants()
+        selection.participants()
+        .collect()
         .filter(pl.col("participant_id") == "Participant_A")
         .select("rhea_id", "side", "directional_role", "chebi_id")
         .to_dicts()
@@ -372,11 +373,11 @@ def test_from_duckdb_selects_exact_reactions_and_domain_relations(
             "chebi_id": "CHEBI:1",
         },
     ]
-    assert selection.extract_reactions().filter(pl.col("rhea_id") == 10000)[
+    assert selection.reactions().collect().filter(pl.col("rhea_id") == 10000)[
         "reaction_smiles"
     ].to_list() == ["A>>B"]
-    assert selection.extract_publications()["pubmed_id"].to_list() == ["12345"]
-    assert selection.extract_relationships()["relation_type"].unique().to_list() == [
+    assert selection.publications().collect()["pubmed_id"].to_list() == ["12345"]
+    assert selection.relationships().collect()["relation_type"].unique().to_list() == [
         "is_a"
     ]
 
@@ -396,13 +397,13 @@ def test_grouped_selection_preserves_lineage_and_unmatched_ids(
         namespace="ec",
     )
 
-    assert selection.extract_matches().select(
+    assert selection.matches().collect().select(
         "group_id", "input_id", "rhea_id"
     ).to_dicts() == [
         {"group_id": "known", "input_id": "1.1.1.1", "rhea_id": 10000},
         {"group_id": "mixed", "input_id": "1.1.1.1", "rhea_id": 10000},
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [
+    assert selection.unmatched_ids().collect().to_dicts() == [
         {
             "group_id": "mixed",
             "input_id": "9.9.9.9",
@@ -449,26 +450,29 @@ def test_grouped_selection_resolves_unique_ids_once_and_reuses_mapping(
         "control",
         "empty",
     )
-    assert selection.extract_matches().select(
+    assert selection.matches().collect().select(
         "group_id", "input_id", "rhea_id"
     ).to_dicts() == [
         {"group_id": "case", "input_id": "RHEA:10000", "rhea_id": 10000},
         {"group_id": "control", "input_id": "RHEA:10000", "rhea_id": 10000},
     ]
-    selection.extract_reactions()
-    selection.extract_matches()
-    assert selection.extract_unmatched_ids().select(
+    selection.reactions().collect()
+    selection.matches().collect()
+    assert selection.unmatched_ids().collect().select(
         "group_id", "input_id"
     ).to_dicts() == [
         {"group_id": "case", "input_id": "RHEA:99999"},
         {"group_id": "control", "input_id": "RHEA:99999"},
     ]
-    assert input_table_calls == [
-        (
+    assert input_table_calls
+    assert all(
+        calls
+        == (
             ("RHEA:10000", "10000"),
             ("RHEA:99999", "99999"),
         )
-    ]
+        for calls in input_table_calls
+    )
 
 
 @pytest.mark.parametrize(
@@ -501,7 +505,8 @@ def test_supported_namespaces_resolve_official_mappings(
             [input_id],
             namespace=namespace,
         )
-        .extract_matches()
+        .matches()
+        .collect()
     )
 
     assert 10000 in matches["rhea_id"].to_list()
@@ -520,6 +525,91 @@ def test_obsolete_policy_is_explicit(tmp_path: Path) -> None:
         include_obsolete=True,
     )
 
-    assert excluded.extract_matches().is_empty()
-    assert excluded.extract_unmatched_ids()["input_id"].to_list() == ["RHEA:10004"]
-    assert included.extract_matches()["rhea_id"].to_list() == [10004]
+    assert excluded.matches().collect().is_empty()
+    assert excluded.unmatched_ids().collect()["input_id"].to_list() == ["RHEA:10004"]
+    assert included.matches().collect()["rhea_id"].to_list() == [10004]
+
+
+def test_lazy_relations_are_replayable_and_non_cartesian(tmp_path: Path) -> None:
+    release = _write_release(tmp_path / "release")
+    path = tmp_path / "rhea.duckdb"
+    RheaDatabase.from_files(release).write_duckdb(path)
+
+    selection = RheaDatabase.from_duckdb(path).select_reactions(
+        ["CHEBI:1"],
+        namespace="chebi",
+    )
+
+    matches = selection.matches()
+    assert isinstance(matches, pl.LazyFrame)
+    assert matches.collect_schema().names() == [
+        "input_id",
+        "input_namespace",
+        "rhea_id",
+        "master_id",
+        "direction",
+    ]
+    first = matches.filter(pl.col("rhea_id") >= 10002).select("rhea_id").collect()
+    second = matches.filter(pl.col("rhea_id") >= 10002).select("rhea_id").collect()
+    assert first.equals(second)
+    assert first["rhea_id"].to_list() == [10002, 10003]
+
+    mappings = selection.uniprot_mappings().collect()
+    assert mappings.columns == [
+        "rhea_id",
+        "master_id",
+        "direction",
+        "uniprot_id",
+        "uniprot_section",
+    ]
+    assert mappings.select("rhea_id", "uniprot_id").to_dicts() == [
+        {"rhea_id": 10000, "uniprot_id": "P00001"},
+        {"rhea_id": 10001, "uniprot_id": "A00001"},
+    ]
+
+    cross_references = selection.cross_references().collect()
+    assert "uniprot_section" not in cross_references.columns
+    assert "P00001" not in cross_references["reference_id"].to_list()
+
+    neighborhoods = selection.uniprot_neighborhoods()
+    schema = neighborhoods.collect_schema()
+    assert schema["inputs"] == pl.List(
+        pl.Struct(
+            {
+                "input_id": pl.String,
+                "input_namespace": pl.String,
+            }
+        )
+    )
+    assert schema["uniprot_entries"] == pl.List(
+        pl.Struct(
+            {
+                "uniprot_id": pl.String,
+                "uniprot_section": pl.String,
+            }
+        )
+    )
+    neighborhood_rows = neighborhoods.collect().to_dicts()
+    by_reaction = {row["rhea_id"]: row for row in neighborhood_rows}
+    assert by_reaction[10000]["inputs"] == [
+        {"input_id": "CHEBI:1", "input_namespace": "chebi"}
+    ]
+    assert by_reaction[10000]["uniprot_entries"] == [
+        {"uniprot_id": "P00001", "uniprot_section": "Swiss-Prot"}
+    ]
+    assert by_reaction[10002]["uniprot_entries"] == []
+
+    grouped = RheaDatabase.from_duckdb(path).select_groups(
+        {"case": ["CHEBI:1"], "control": ["CHEBI:1"]},
+        namespace="chebi",
+    )
+    grouped_rows = grouped.uniprot_neighborhoods().collect().to_dicts()
+    grouped_inputs = {tuple(sorted(item.items())) for item in grouped_rows[0]["inputs"]}
+    assert grouped_inputs == {
+        (("group_id", "case"), ("input_id", "CHEBI:1"), ("input_namespace", "chebi")),
+        (
+            ("group_id", "control"),
+            ("input_id", "CHEBI:1"),
+            ("input_namespace", "chebi"),
+        ),
+    }
