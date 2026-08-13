@@ -97,7 +97,8 @@ def _extract_edges_repeated_single_queries(
         df_edges_group = (
             db.select_ids(input_ids)
             .with_min_combined_score(thr_score_min)
-            .extract_edges()
+            .edges()
+            .collect()
             .with_columns(pl.lit(group_id).alias("group_id"))
             .select(["group_id", "string_id_a", "string_id_b", "combined_score"])
         )
@@ -173,7 +174,8 @@ def main() -> None:
             lambda: (
                 db.select_groups(ids_by_group)
                 .with_min_combined_score(args.thr_score_min)
-                .extract_edges()
+                .edges()
+                .collect()
             ),
         )
 

@@ -89,12 +89,12 @@ selection = (
     .select_ids(["P04637", "Q9Y243", "MISSING"])
 )
 
-df_mapping = selection.extract_mapping()
-df_unmapped = selection.extract_unmatched_ids()
+lf_mapping = selection.mappings()
+lf_unmapped = selection.unmatched_ids()
 
-df_term2gene = db.with_species("Homo sapiens").extract_term2gene()
-df_term2name = db.with_species("Homo sapiens").extract_term2name()
-df_relations = db.with_species("Homo sapiens").extract_pathway_relations()
+lf_term2gene = db.with_species("Homo sapiens").pathway_genes()
+lf_term2name = db.with_species("Homo sapiens").pathway_names()
+lf_relations = db.with_species("Homo sapiens").pathway_relations()
 ```
 
 Grouped selections should mirror the existing STRINGdb and OmniPath shape:
@@ -108,7 +108,7 @@ df_group_mapping = (
             "TumorB": ["P31749", "P42345"],
         }
     )
-    .extract_mapping()
+    .mappings()
 )
 ```
 
@@ -121,11 +121,11 @@ happens when a frame is first needed.
 Capability dependencies are explicit:
 
 ```text
-extract_mapping              -> UniProt2Reactome.txt
-extract_unmatched_ids   -> UniProt2Reactome.txt
-extract_term2gene            -> UniProt2Reactome.txt
-extract_term2name            -> ReactomePathways.txt
-extract_pathway_relations    -> ReactomePathwaysRelation.txt
+ mappings                     -> UniProt2Reactome.txt
+ unmatched_ids                -> UniProt2Reactome.txt
+ pathway_genes                -> UniProt2Reactome.txt
+ pathway_names                -> ReactomePathways.txt
+ pathway_relations            -> ReactomePathwaysRelation.txt
 species-scoped relations     -> ReactomePathwaysRelation.txt + ReactomePathways.txt
 ```
 
@@ -144,19 +144,19 @@ auditable.
 values. The selected IDs are interpreted as UniProt accessions. The method does
 not attempt gene-symbol or isoform conversion.
 
-Extraction is DataFrame-first:
+Relation access is lazy and native to Polars:
 
-1. read the needed raw file once
+1. return a replayable lazy relation
 2. apply species filter when present
 3. join or filter with the normalized selected IDs
-4. return deterministic, stable columns
+4. let the caller choose `collect()`, `collect_batches()`, or `sink_*()`
 
-The implementation may cache raw frames and extraction frames on the selection
-object, following the existing STRINGdb and OmniPath pattern.
+The implementation may use private caches inside one execution, but cache
+identity is not part of the public relation contract.
 
 ## Output Contract
 
-`extract_mapping()` returns:
+`mappings()` returns a lazy relation with:
 
 ```text
 input_id
@@ -181,7 +181,7 @@ species
 reactome_url
 ```
 
-`extract_unmatched_ids()` returns:
+`unmatched_ids()` returns:
 
 ```text
 input_id
@@ -194,14 +194,14 @@ group_id
 input_id
 ```
 
-`extract_term2gene()` returns:
+`pathway_genes()` returns:
 
 ```text
 reactome_pathway_id
 uniprot_id
 ```
 
-`extract_term2name()` returns:
+`pathway_names()` returns:
 
 ```text
 reactome_pathway_id
@@ -209,7 +209,7 @@ pathway_name
 species
 ```
 
-`extract_pathway_relations()` returns:
+`pathway_relations()` returns:
 
 ```text
 parent_reactome_pathway_id

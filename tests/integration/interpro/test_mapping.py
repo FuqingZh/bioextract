@@ -56,7 +56,7 @@ def test_extract_mapping_uses_xml_metadata_when_available(tmp_path: Path) -> Non
         interpro_xml=files["xml"],
     )
 
-    assert db.extract_mapping().to_dicts() == [
+    assert db.mappings().collect().to_dicts() == [
         {
             "uniprot_id": "P12345",
             "interpro_id": "IPR000001",
@@ -98,7 +98,8 @@ def test_xml_metadata_is_optional(tmp_path: Path) -> None:
         db.select_ids(
             ["P12345"],
         )
-        .extract_mapping()
+        .mappings()
+        .collect()
         .row(0, named=True)
     )
 
@@ -117,7 +118,7 @@ def test_select_ids_streams_subset_and_reports_unmapped(tmp_path: Path) -> None:
         ["sp|P12345|TEST_HUMAN", "MISSING"],
     )
 
-    assert selection.extract_mapping().select(
+    assert selection.mappings().collect().select(
         "input_id",
         "input_namespace",
         "uniprot_id",
@@ -139,7 +140,7 @@ def test_select_ids_streams_subset_and_reports_unmapped(tmp_path: Path) -> None:
             "member_db": "SMART",
         },
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [{"input_id": "MISSING"}]
+    assert selection.unmatched_ids().collect().to_dicts() == [{"input_id": "MISSING"}]
 
 
 def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
@@ -153,8 +154,8 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
         {"up": ["P12345"], "down": ["P12345", "MISSING"]},
     )
 
-    df_mapping = grouped.extract_mapping()
-    assert grouped.extract_mapping() is df_mapping
+    df_mapping = grouped.mappings().collect()
+    assert grouped.mappings().collect().equals(df_mapping)
     assert df_mapping.columns[:3] == [
         "group_id",
         "input_id",
@@ -166,7 +167,7 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
         {"group_id": "up", "member_db": "PFAM"},
         {"group_id": "up", "member_db": "SMART"},
     ]
-    assert grouped.extract_unmatched_ids().to_dicts() == [
+    assert grouped.unmatched_ids().collect().to_dicts() == [
         {"group_id": "down", "input_id": "MISSING"}
     ]
 
@@ -186,8 +187,8 @@ def test_mapping_only_duckdb_round_trip_preserves_domain_selection(
     assert result.path == path
     assert result.tables == ("mapping",)
     selection = reopened.select_ids(["P12345", "MISSING"])
-    assert selection.extract_mapping().height == 2
-    assert selection.extract_unmatched_ids().to_dicts() == [{"input_id": "MISSING"}]
+    assert selection.mappings().collect().height == 2
+    assert selection.unmatched_ids().collect().to_dicts() == [{"input_id": "MISSING"}]
 
 
 @pytest.mark.parametrize(

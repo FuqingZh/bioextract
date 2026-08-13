@@ -28,8 +28,11 @@ selection = database.select_groups(
     {"case": ["P31749"], "control": ["MAPK1"]},
     namespace="protein",
 )
-enzsub = selection.extract_enzsub()
-interactions = selection.with_interactions().extract_interactions()
+lf_enzsub = selection.enzsub()
+lf_interactions = selection.with_interactions().interactions()
+
+# Native Polars execution remains the caller's choice.
+df_enzsub = lf_enzsub.collect()
 ```
 
 Convenience existence probes are intentionally not part of the public handle;

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import polars as pl
 
+from bioextract._lazy import register_replayable_source
 from bioextract._publication import DuckDBWriteResult
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
 from bioextract.errors import CapabilityError, IntegrityError
@@ -22,6 +24,7 @@ from .constant import (
     MEDIA_TYPE_PARQUET_DATASET,
     MEDIA_TYPE_TSV,
     MEDIA_TYPE_TSV_GZIP,
+    SCHEMA_MAPPING,
     SCHEMA_VERSION,
 )
 from .util import (
@@ -170,25 +173,6 @@ class UniProtDatabase:
             return frame.select(COLS_IDMAPPING_SELECTED)
         return filter_taxids(frame, normalized).select(COLS_IDMAPPING_SELECTED)
 
-    def read_mapping(
-        self,
-        *,
-        taxon_ids: Iterable[str | int] | None = None,
-        allow_all_taxa: bool = False,
-    ) -> pl.DataFrame:
-        """Materialize an explicitly scoped idmapping read.
-
-        Examples:
-            >>> database.read_mapping(taxon_ids=["9606"])  # doctest: +SKIP
-            shape: (...)
-        """
-        normalized = normalize_taxids(tuple(taxon_ids or ()))
-        if not normalized and not allow_all_taxa:
-            raise ValueError(
-                "Unscoped eager idmapping reads require allow_all_taxa=True"
-            )
-        return self.scan_mapping(taxon_ids=normalized).collect()
-
     def write_duckdb(
         self,
         path: os.PathLike[str] | str,
@@ -306,13 +290,14 @@ class UniProtDatabase:
 
     def _scan_mapping(self, taxon_ids: tuple[str, ...]) -> pl.LazyFrame:
         if self._mode == "idmapping_publication":
-            connection = self.connect()
-            query = "SELECT * FROM mapping"
-            params: list[str] = []
-            if taxon_ids:
-                query += f" WHERE tax_id IN ({','.join('?' for _ in taxon_ids)})"
-                params.extend(taxon_ids)
-            return connection.sql(query, params=params).pl(lazy=True)
+            return register_replayable_source(
+                schema=SCHEMA_MAPPING,
+                batches=lambda batch_size: _iter_publication_mapping_batches(
+                    self,
+                    taxon_ids,
+                    batch_size=batch_size,
+                ),
+            )
         source = self._required_source_path()
         match self._mapping_kind:
             case "raw_plain" | "raw_gzip":
@@ -339,6 +324,46 @@ class UniProtDatabase:
         if self._entries is None:
             raise RuntimeError("UniProtKB entries source is unavailable")
         return self._entries
+
+
+def _iter_publication_mapping_batches(
+    database: UniProtDatabase,
+    taxon_ids: tuple[str, ...],
+    *,
+    batch_size: int,
+) -> Iterator[pl.DataFrame]:
+    """Stream an idmapping publication with a fresh connection per execution."""
+
+    connection = database.connect()
+    reader: Any = None
+    try:
+        columns = ", ".join(COLS_IDMAPPING_SELECTED)
+        query = f"SELECT {columns} FROM mapping"
+        params: list[str] = []
+        if taxon_ids:
+            query += f" WHERE tax_id IN ({','.join('?' for _ in taxon_ids)})"
+            params.extend(taxon_ids)
+        result = connection.execute(query, params)
+        reader = _uniprot_arrow_reader(result, batch_size)
+        for record_batch in reader:
+            frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+            yield frame.cast(  # type: ignore[reportArgumentType]
+                SCHEMA_MAPPING,  # type: ignore[reportArgumentType]
+                strict=False,
+            )
+    finally:
+        if reader is not None:
+            close = getattr(reader, "close", None)
+            if close is not None:
+                close()
+        connection.close()
+
+
+def _uniprot_arrow_reader(result: Any, batch_size: int) -> Any:
+    to_arrow_reader = getattr(result, "to_arrow_reader", None)
+    if to_arrow_reader is not None:
+        return to_arrow_reader(batch_size)
+    return result.fetch_record_batch(rows_per_batch=batch_size)
 
 
 def _required_file(path: os.PathLike[str] | str, role: str) -> Path:

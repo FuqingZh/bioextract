@@ -6,8 +6,8 @@ Status: current
 
 `UniProtDatabase` exposes independent idmapping and reviewed UniProtKB
 products. Source-backed idmapping uses
-`from_idmapping(path, release_version=None)`, `scan_mapping()`,
-`read_mapping()`, and `write_duckdb()`. An unscoped eager
+`from_idmapping(path, release_version=None)`, `scan_mapping()`, and
+`write_duckdb()`. An unscoped eager
 read or write requires `allow_all_taxa=True`; lazy scanning remains unscoped by
 default.
 
@@ -86,33 +86,39 @@ entry's canonical sequence. `External` and `Not described` remain unresolved.
 Varsplic headers resolve through the identifier relation and update only the
 unique `Alternative` owner product.
 
-## Selection And Extractor Schemas
+## Selection And Lazy Relation Schemas
 
-Every matched extractor begins with the stable selection prefix
+Every matched relation begins with the stable selection prefix
 `group_id, input_id, input_namespace, primary_accession`, then adds:
 
-| Extractor | Stable additional columns |
+| Relation | Stable additional columns |
 | --- | --- |
-| `extract_proteins` | `entry_name, is_reviewed, taxon_id, protein_existence, sequence_length, molecular_weight, sequence_version, entry_version` |
-| `extract_accessions` | `accession, accession_order, is_primary` |
-| `extract_protein_names` | `name_type, name, name_order` |
-| `extract_gene_names` | `name_type, name, name_order` |
-| `extract_ec_numbers` | `ec_number` |
-| `extract_go_annotations` | `go_id, aspect, term_name, evidence_code, evidence_source` |
-| `extract_cross_references` | `database, external_id, properties, isoform_id` |
-| `extract_comments` | `comment_id, comment_type, comment_text` |
-| `extract_subcellular_locations` | `location, note` |
-| `extract_keywords` | `keyword, keyword_order` |
-| `extract_sequences` | `sequence_id, sequence_type, sequence, length, crc64, sha256` |
-| `extract_isoforms` | `isoform_id, name, isoform_order, sequence_status, sequence_id` |
-| `extract_isoform_identifiers` | `isoform_id, identifier, identifier_order, is_main` |
-| `extract_sequence_variations` | `variation_id, start_position, end_position, note` |
-| `extract_isoform_variations` | `isoform_id, variation_id, variation_order` |
+| `proteins()` | `entry_name, is_reviewed, taxon_id, protein_existence, sequence_length, molecular_weight, sequence_version, entry_version` |
+| `accessions()` | `accession, accession_order, is_primary` |
+| `protein_names()` | `name_type, name, name_order` |
+| `gene_names()` | `name_type, name, name_order` |
+| `ec_numbers()` | `ec_number` |
+| `go_annotations()` | `go_id, aspect, term_name, evidence_code, evidence_source` |
+| `cross_references()` | `database, external_id, properties, isoform_id` |
+| `comments()` | `comment_id, comment_type, comment_text` |
+| `subcellular_locations()` | `location, note` |
+| `keywords()` | `keyword, keyword_order` |
+| `sequences()` | `sequence_id, sequence_type, sequence, length, crc64, sha256` |
+| `isoforms()` | `isoform_id, name, isoform_order, sequence_status, sequence_id` |
+| `isoform_identifiers()` | `isoform_id, identifier, identifier_order, is_main` |
+| `sequence_variations()` | `variation_id, start_position, end_position, note` |
+| `isoform_variations()` | `isoform_id, variation_id, variation_order` |
 
-`extract_unmatched_ids()` instead returns
+`unmatched_ids()` instead returns
 `group_id, input_id, input_namespace, reason`. Empty selections preserve the
-corresponding schema, and every extractor has an explicit domain order after
+corresponding schema, and every relation has an explicit domain order after
 the stable selection prefix.
+
+All selection relations return native `polars.LazyFrame` objects. For example,
+`selection.proteins().collect()` materializes only when the caller requests it;
+the same frame can instead use `collect_batches()` or a Polars `sink_*()`
+method. The physical idmapping scan remains explicitly named:
+`database.scan_mapping(taxon_ids=...).collect()`.
 
 `from_duckdb()` validates the shared exact five-table metadata-v1 provenance
 schema, resource/source profile, capabilities, exact table inventories, and
@@ -121,7 +127,7 @@ tables to recount them; staged publication validation owns bounded row-count
 verification.
 `connect()` is read-only. Selection supports `uniprot`, `entry_name`,
 `gene_name`, `gene_id`, `refseq`, `ensembl`, and `isoform_id`, retaining every
-canonical match. Extractors expose proteins, accessions, names, EC, GO,
+canonical match. Lazy relations expose proteins, accessions, names, EC, GO,
 cross-references, comments, locations, keywords, sequences, isoforms, isoform
 identifiers, variations, and unmatched inputs.
 

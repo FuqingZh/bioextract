@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 import os
 from collections.abc import Iterable, Mapping
@@ -9,6 +10,7 @@ from pathlib import Path
 import polars as pl
 from polars._typing import SchemaDict
 
+from bioextract._lazy import register_deferred_frame_source
 from bioextract._shared import (
     create_group_input_frames,
     create_input_id_frame,
@@ -88,8 +90,8 @@ class STRINGDatabase:
         >>> (
         ...     db.select_ids(["TP53", "EGFR"])
         ...     .with_min_combined_score(400)
-        ...     .extract_edges()
-        ...     .to_dicts()
+        ...     .edges()
+        ...     .collect().to_dicts()
         ... )
         [{'string_id_a': '9606.ENSP0001', 'string_id_b': '9606.ENSP0002', 'combined_score': 700}]
     """
@@ -186,9 +188,9 @@ class STRINGDatabase:
             ... )
             >>> (
             ...     db.select_ids(["TP53"])
-            ...     .extract_string_mapping()
+            ...     .mappings()
             ...     .select("input_id", "string_protein_id")
-            ...     .to_dicts()
+            ...     .collect().to_dicts()
             ... )
             [{'input_id': 'TP53', 'string_protein_id': '9606.ENSP0001', 'alias': 'TP53', 'source': 'UniProt_GN_Name'}]
         """
@@ -264,9 +266,9 @@ class STRINGDatabase:
             ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
             ... )
             >>> selection = db.select_ids([" TP53 ", "MISSING"])
-            >>> selection.extract_string_mapping()["input_id"].to_list()
+            >>> selection.mappings().select("input_id").collect().to_series().to_list()
             ['TP53']
-            >>> selection.extract_unmatched_ids().to_dicts()
+            >>> selection.unmatched_ids().collect().to_dicts()
             [{'input_id': 'MISSING'}]
         """
         if namespace not in ("alias", "string"):
@@ -316,9 +318,9 @@ class STRINGDatabase:
             ... )
             >>> (
             ...     db.select_groups({"up": ["TP53"], "down": ["EGFR"]})
-            ...     .extract_string_mapping()
+            ...     .mappings()
             ...     .select("group_id", "input_id")
-            ...     .to_dicts()
+            ...     .collect().to_dicts()
             ... )
             [{'group_id': 'down', 'input_id': 'EGFR'}, {'group_id': 'up', 'input_id': 'TP53'}]
         """
@@ -443,9 +445,9 @@ class StringSelection:
         ... )
         >>> selection = db.select_ids(["TP53"])
         >>> (
-        ...     selection.extract_string_mapping()
+        ...     selection.mappings()
         ...     .select("input_id", "string_protein_id")
-        ...     .to_dicts()
+        ...     .collect().to_dicts()
         ... )
         [{'input_id': 'TP53', 'string_protein_id': '9606.ENSP0001', 'alias': 'TP53', 'source': 'UniProt_GN_Name'}]
     """
@@ -534,12 +536,11 @@ class StringSelection:
             >>> selection = db.select_ids(["TP53", "EGFR", "CDK2"])
             >>> (
             ...     selection.with_min_combined_score(400)
-            ...     .extract_edges()["combined_score"]
-            ...     .sort()
-            ...     .to_list()
+            ...     .edges().select("combined_score").collect()["combined_score"]
+            ...     .sort().to_list()
             ... )
             [450, 700]
-            >>> selection.with_min_combined_score(700).extract_edges()["combined_score"].to_list()
+            >>> selection.with_min_combined_score(700).edges().select("combined_score").collect()["combined_score"].to_list()
             [700]
         """
         return StringSelection(
@@ -554,7 +555,20 @@ class StringSelection:
             _df_string_ids=self._df_string_ids,
         )
 
-    def extract_string_mapping(self) -> pl.DataFrame:
+    def mappings(self) -> pl.LazyFrame:
+        """Return the input-to-STRING alias mapping lazily.
+
+        Examples:
+            >>> selection.mappings().collect().head(1)  # doctest: +SKIP
+            shape: (1, ...)
+        """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=self._schema_string_map_result,
+            frame=snapshot._eager_mappings,
+        )
+
+    def _eager_mappings(self) -> pl.DataFrame:
         """Extract the input-to-STRING mapping table for this selection.
 
         Returns:
@@ -575,7 +589,7 @@ class StringSelection:
             >>> db = STRINGDatabase.from_files(
             ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
             ... )
-            >>> db.select_ids(["TP53"]).extract_string_mapping().to_dicts()
+            >>> db.select_ids(["TP53"]).mappings().collect().to_dicts()
             [{'input_id': 'TP53', 'string_protein_id': '9606.ENSP0001', 'alias': 'TP53', 'source': 'UniProt_GN_Name'}]
         """
         if self.namespace != "alias":
@@ -657,7 +671,20 @@ class StringSelection:
 
         return self._df_protein_map
 
-    def extract_unmatched_ids(self) -> pl.DataFrame:
+    def unmatched_ids(self) -> pl.LazyFrame:
+        """Return normalized input IDs that did not map to STRING lazily.
+
+        Examples:
+            >>> selection.unmatched_ids().collect()  # doctest: +SKIP
+            shape: (..., 1)
+        """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=dict.fromkeys([*self._col_group_id, "input_id"], pl.String),
+            frame=snapshot._eager_unmatched_ids,
+        )
+
+    def _eager_unmatched_ids(self) -> pl.DataFrame:
         """Extract normalized input IDs that were not mapped to STRING IDs.
 
         Returns:
@@ -675,15 +702,13 @@ class StringSelection:
             >>> db = STRINGDatabase.from_files(
             ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
             ... )
-            >>> db.select_ids(["MISSING"]).extract_unmatched_ids().to_dicts()
+            >>> db.select_ids(["MISSING"]).unmatched_ids().collect().to_dicts()
             [{'input_id': 'MISSING'}]
         """
         if self._df_unmapped is None:
             cols_index = list(self._col_group_id) + ["input_id"]
             if self.namespace == "alias":
-                df_mapped_input_ids = (
-                    self.extract_string_mapping().select("input_id").unique()
-                )
+                df_mapped_input_ids = self._eager_mappings().select("input_id").unique()
             else:
                 if self.dataset.snapshot.file_links is None:
                     raise CapabilityError(
@@ -719,7 +744,20 @@ class StringSelection:
 
         return self._df_unmapped
 
-    def extract_edges(self) -> pl.DataFrame:
+    def edges(self) -> pl.LazyFrame:
+        """Return the STRING subnetwork induced by selected IDs lazily.
+
+        Examples:
+            >>> selection.edges().collect().head(1)  # doctest: +SKIP
+            shape: (1, ...)
+        """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=self._schema_edges_result,
+            frame=snapshot._eager_edges,
+        )
+
+    def _eager_edges(self) -> pl.DataFrame:
         """Extract the STRING subnetwork induced by the mapped STRING IDs.
 
         Returns:
@@ -741,7 +779,7 @@ class StringSelection:
             ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
             ...     links="fixtures/string/9606.protein.links.v12.0.txt.gz",
             ... )
-            >>> db.select_ids(["TP53", "EGFR"]).extract_edges().to_dicts()
+            >>> db.select_ids(["TP53", "EGFR"]).edges().collect().to_dicts()
             [{'string_id_a': '9606.ENSP0001', 'string_id_b': '9606.ENSP0002', 'combined_score': 700}]
         """
         if self.dataset.snapshot.file_links is None:
@@ -828,7 +866,7 @@ class StringSelection:
                 id_column = self.dataset._alias_schema.col_string_id  # pyright: ignore[reportPrivateUsage]
                 cols_select = [*self._col_group_id, id_column]
                 self._df_string_ids = (
-                    self.extract_string_mapping()
+                    self._eager_mappings()
                     .select(cols_select)
                     .rename({id_column: "string_id"})
                     .unique()

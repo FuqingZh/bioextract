@@ -48,8 +48,10 @@ ancestor_selection = go.select_ancestors(
     target_subset_id="goslim_generic",
     include_self=True,
 )
-df_ancestors = ancestor_selection.extract_ancestors()
-df_unmatched = ancestor_selection.extract_unmatched_ids()
+lf_ancestors = ancestor_selection.ancestors()
+lf_unmatched = ancestor_selection.unmatched_ids()
+df_ancestors = lf_ancestors.collect()
+df_unmatched = lf_unmatched.collect()
 go_result = go.write_duckdb("out/go.duckdb")
 published_go = GODatabase.from_duckdb(go_result.path)
 with published_go.connect() as connection:

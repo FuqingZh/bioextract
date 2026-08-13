@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import os
 import warnings
 from collections.abc import Iterable, Mapping
@@ -8,6 +9,7 @@ from pathlib import Path
 
 import polars as pl
 
+from bioextract._lazy import register_deferred_frame_source
 from bioextract._shared import (
     create_group_input_frames,
     create_input_id_frame,
@@ -54,7 +56,7 @@ class EggNOGDatabase:
         ...     "fixtures/eggnog/eggnog.db",
         ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
         ... )
-        >>> db.select_ids(["9606.ENSP1"]).extract_mapping().select(
+        >>> db.select_ids(["9606.ENSP1"]).mappings().collect().select(
         ...     "name", "cog_category", "cog_name"
         ... ).head(1).rows()
         [('9606.ENSP1', 'E', 'Amino acid transport and metabolism')]
@@ -94,7 +96,7 @@ class EggNOGDatabase:
             ...     "fixtures/eggnog/eggnog.db",
             ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
             ... )
-            >>> db.select_ids(["9606.ENSP1"]).extract_mapping().select(
+            >>> db.select_ids(["9606.ENSP1"]).mappings().collect().select(
             ...     "cog_category", "cog_name"
             ... ).head(1).rows()
             [('E', 'Amino acid transport and metabolism')]
@@ -150,9 +152,9 @@ class EggNOGDatabase:
             ...     "fixtures/eggnog/eggnog.db"
             ... )
             >>> selection = db.select_ids(["9606.ENSP1"])
-            >>> selection.extract_mapping().select(
+            >>> selection.mappings().select(
             ...     "input_id", "og", "cog_category"
-            ... ).rows()
+            ... ).collect().rows()
             [('9606.ENSP1', 'OG0001', 'E'), ('9606.ENSP1', 'OG0001', 'G'), ('9606.ENSP1', 'OG0002', 'S')]
         """
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
@@ -188,9 +190,9 @@ class EggNOGDatabase:
             >>> selection = db.select_groups(
             ...     {"up": ["9606.ENSP1"], "down": ["9606.MISSING"]},
             ... )
-            >>> selection.extract_mapping().select(
+            >>> selection.mappings().select(
             ...     "group_id", "cog_category"
-            ... ).rows()
+            ... ).collect().rows()
             [('up', 'E'), ('up', 'G'), ('up', 'S')]
         """
         grp_in_frames = create_group_input_frames(
@@ -205,7 +207,23 @@ class EggNOGDatabase:
             _df_group_membership=grp_in_frames.df_group_membership,
         )
 
-    def read_cog_fun(self) -> pl.DataFrame:
+    def cog_functions(self) -> pl.LazyFrame:
+        """Return the optional COG function lookup lazily.
+
+        Examples:
+            >>> db.cog_functions().collect().head(1)  # doctest: +SKIP
+            shape: (1, ...)
+        """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=dict.fromkeys(
+                ["cog_category", "cog_class", "cog_name"],
+                pl.String,
+            ),
+            frame=lambda: snapshot._read_cog_fun(),
+        )
+
+    def _read_cog_fun(self) -> pl.DataFrame:
         """Read and cache the optional COG function lookup.
 
         Returns:
@@ -219,7 +237,7 @@ class EggNOGDatabase:
             ...     "fixtures/eggnog/eggnog.db",
             ...     cog_functions="fixtures/eggnog/cog-24.fun.tab",
             ... )
-            >>> db.read_cog_fun().select(
+            >>> db.cog_functions().collect().select(
             ...     "cog_category", "cog_name"
             ... ).head(1).rows()
             [('E', 'Amino acid transport and metabolism')]
@@ -244,7 +262,7 @@ class EggnogSelection:
         ...     "fixtures/eggnog/eggnog.db"
         ... )
         >>> selection = db.select_ids(["9606.ENSP1"])
-        >>> selection.extract_mapping().get_column("cog_category").to_list()
+        >>> selection.mappings().collect().get_column("cog_category").to_list()
         ['E', 'G', 'S']
     """
 
@@ -272,7 +290,32 @@ class EggnogSelection:
         """
         return self._df_groups is not None
 
-    def extract_mapping(self) -> pl.DataFrame:
+    def mappings(self) -> pl.LazyFrame:
+        """Return selected eggNOG mapping rows lazily.
+
+        Examples:
+            >>> selection.mappings().collect().head(1)  # doctest: +SKIP
+            shape: (1, ...)
+        """
+        snapshot = copy.copy(self)
+        columns = (["group_id"] if self._df_group_membership is not None else []) + [
+            "input_id",
+            "input_namespace",
+            "name",
+            "og",
+            "level",
+            "description",
+            "COG_categories",
+            "cog_category",
+            "cog_class",
+            "cog_name",
+        ]
+        return register_deferred_frame_source(
+            schema=dict.fromkeys(columns, pl.String),
+            frame=snapshot._eager_mappings,
+        )
+
+    def _eager_mappings(self) -> pl.DataFrame:
         """Extract mapping rows for the normalized selection.
 
         Returns:
@@ -287,9 +330,9 @@ class EggnogSelection:
             ...     "fixtures/eggnog/eggnog.db"
             ... )
             >>> selection = db.select_ids(["9606.ENSP1"])
-            >>> selection.extract_mapping().select(
+            >>> selection.mappings().select(
             ...     "input_id", "cog_category"
-            ... ).rows()
+            ... ).collect().rows()
             [('9606.ENSP1', 'E'), ('9606.ENSP1', 'G'), ('9606.ENSP1', 'S')]
         """
         if self._df_mapping is None:
@@ -299,11 +342,29 @@ class EggnogSelection:
                 df_input_ids=self._df_input_ids,
                 df_group_membership=self._df_group_membership,
                 namespace=self.namespace,
-                df_cog_fun=self.dataset.read_cog_fun(),
+                df_cog_fun=self.dataset._read_cog_fun(),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
             )
         return self._df_mapping
 
-    def extract_unmatched_ids(self) -> pl.DataFrame:
+    def unmatched_ids(self) -> pl.LazyFrame:
+        """Return selected IDs absent from the eggNOG mapping lazily.
+
+        Examples:
+            >>> selection.unmatched_ids().collect()  # doctest: +SKIP
+            shape: (..., 1)
+        """
+        snapshot = copy.copy(self)
+        columns = (
+            ["group_id", "input_id"]
+            if self._df_group_membership is not None
+            else ["input_id"]
+        )
+        return register_deferred_frame_source(
+            schema=dict.fromkeys(columns, pl.String),
+            frame=snapshot._eager_unmatched_ids,
+        )
+
+    def _eager_unmatched_ids(self) -> pl.DataFrame:
         """Extract normalized input IDs with no eggNOG mapping row.
 
         Returns:
@@ -317,13 +378,13 @@ class EggnogSelection:
             ...     "fixtures/eggnog/eggnog.db"
             ... )
             >>> selection = db.select_ids(["9606.MISSING"])
-            >>> selection.extract_unmatched_ids().to_dicts()
+            >>> selection.unmatched_ids().collect().to_dicts()
             [{'input_id': '9606.MISSING'}]
         """
         if self._df_unmapped is None:
             self._df_unmapped = extract_unmatched_ids_frame(
                 self._df_input_ids,
-                self.extract_mapping(),
+                self._eager_mappings(),
                 df_group_membership=self._df_group_membership,
             )
         return self._df_unmapped

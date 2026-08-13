@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -8,7 +9,9 @@ from typing import TYPE_CHECKING, Literal
 
 import duckdb
 import polars as pl
+from polars._typing import SchemaDict
 
+from bioextract._lazy import register_deferred_frame_source
 from bioextract._publication import validate_duckdb_metadata_v1
 from bioextract._shared import validate_group_ids
 from bioextract.errors import CapabilityError
@@ -32,6 +35,45 @@ _REASONS = {
     "obsolete_excluded",
     "invalid_canonical_target",
 }
+_CHEBI_RELATION_TYPES: SchemaDict = {
+    "group_id": pl.String,
+    "input_id": pl.String,
+    "input_namespace": pl.String,
+    "chebi_id": pl.String,
+    "match_type": pl.String,
+    "matched_value": pl.String,
+    "reason": pl.Enum(sorted(_REASONS)),
+    "preferred_name": pl.String,
+    "definition": pl.String,
+    "star_rating": pl.Int8,
+    "is_obsolete": pl.Boolean,
+    "formula": pl.String,
+    "charge": pl.Int32,
+    "average_mass": pl.Float64,
+    "monoisotopic_mass": pl.Float64,
+    "smiles": pl.String,
+    "inchi": pl.String,
+    "inchi_key": pl.String,
+    "name": pl.String,
+    "scope": pl.String,
+    "source_prefix": pl.String,
+    "accession": pl.String,
+    "xref_id": pl.String,
+    "subject_chebi_id": pl.String,
+    "relation_type": pl.String,
+    "relation_id": pl.String,
+    "object_chebi_id": pl.String,
+    "structure_index": pl.Int32,
+    "molfile": pl.String,
+    "wurcs": pl.String,
+    "ancestor_chebi_id": pl.String,
+    "descendant_chebi_id": pl.String,
+    "depth": pl.Int64,
+}
+
+
+def _relation_schema(columns: Iterable[str]) -> SchemaDict:
+    return {column: _CHEBI_RELATION_TYPES[column] for column in columns}
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,13 +116,33 @@ class ChEBICompoundSelection:
         default=None, init=False, repr=False, compare=False
     )
 
-    def extract_matches(self) -> pl.DataFrame:
+    def matches(self) -> pl.LazyFrame:
+        """Return identifier-to-canonical-compound matches lazily.
+
+        Examples:
+            >>> selection.matches().select("chebi_id").collect()  # doctest: +SKIP
+            shape: (..., 1)
+        """
+        snapshot = copy.copy(self)
+        columns = (["group_id"] if self._is_grouped else []) + [
+            "input_id",
+            "input_namespace",
+            "chebi_id",
+            "match_type",
+            "matched_value",
+        ]
+        return register_deferred_frame_source(
+            schema=_relation_schema(columns),
+            frame=snapshot._eager_matches,
+        )
+
+    def _eager_matches(self) -> pl.DataFrame:
         """Return identifier-to-canonical-compound matches.
 
         Examples:
             Observe the canonical shared identifier:
 
-            >>> selection.extract_matches()["chebi_id"].head(1).to_list()  # doctest: +SKIP
+            >>> selection.matches().select("chebi_id").collect()  # doctest: +SKIP
             ['CHEBI:15377']
         """
         candidates = self._candidates()
@@ -125,17 +187,35 @@ class ChEBICompoundSelection:
         )
         return frame.sort(sort_cols)
 
-    def extract_unmatched_ids(self) -> pl.DataFrame:
+    def unmatched_ids(self) -> pl.LazyFrame:
+        """Return policy-rejected inputs and stable reasons lazily.
+
+        Examples:
+            >>> selection.unmatched_ids().collect()  # doctest: +SKIP
+            shape: (..., 3)
+        """
+        snapshot = copy.copy(self)
+        columns = (["group_id"] if self._is_grouped else []) + [
+            "input_id",
+            "input_namespace",
+            "reason",
+        ]
+        return register_deferred_frame_source(
+            schema=_relation_schema(columns),
+            frame=snapshot._eager_unmatched_ids,
+        )
+
+    def _eager_unmatched_ids(self) -> pl.DataFrame:
         """Return inputs without a policy-accepted match and a stable reason.
 
         Examples:
             Inspect stable reason codes separately from successful matches:
 
-            >>> unmatched = selection.extract_unmatched_ids()  # doctest: +SKIP
+            >>> unmatched = selection.unmatched_ids().collect()  # doctest: +SKIP
             >>> "reason" in unmatched.columns  # doctest: +SKIP
             True
         """
-        matches = set(self.extract_matches().get_column("input_id").to_list())
+        matches = set(self._eager_matches().get_column("input_id").to_list())
         candidate_rows = self._candidates().to_dicts()
         by_input: dict[str, list[dict[str, object]]] = {}
         for row in candidate_rows:
@@ -178,15 +258,44 @@ class ChEBICompoundSelection:
         sort_cols = ["group_id", "input_id"] if self._is_grouped else ["input_id"]
         return frame.sort(sort_cols)
 
-    def extract_compounds(self) -> pl.DataFrame:
+    def compounds(self) -> pl.LazyFrame:
+        """Return one canonical compound row per accepted match lazily.
+
+        Examples:
+            >>> selection.compounds().select("chebi_id").collect()  # doctest: +SKIP
+            shape: (..., 1)
+        """
+        snapshot = copy.copy(self)
+        columns = (["group_id"] if self._is_grouped else []) + [
+            "input_id",
+            "input_namespace",
+            "chebi_id",
+            "preferred_name",
+            "definition",
+            "star_rating",
+            "is_obsolete",
+            "formula",
+            "charge",
+            "average_mass",
+            "monoisotopic_mass",
+            "smiles",
+            "inchi",
+            "inchi_key",
+        ]
+        return register_deferred_frame_source(
+            schema=_relation_schema(columns),
+            frame=snapshot._eager_compounds,
+        )
+
+    def _eager_compounds(self) -> pl.DataFrame:
         """Return one canonical compound row per accepted match.
 
         Examples:
             Read the scalar annotation profile:
 
-            >>> selection.extract_compounds().select(  # doctest: +SKIP
+            >>> selection.compounds().select(  # doctest: +SKIP
             ...     "chebi_id", "preferred_name", "formula"
-            ... ).columns
+            ... ).collect_schema().names()
             ['chebi_id', 'preferred_name', 'formula']
         """
         return self._extract_joined(
@@ -213,13 +322,33 @@ class ChEBICompoundSelection:
             """
         )
 
-    def extract_names(self) -> pl.DataFrame:
+    def names(self) -> pl.LazyFrame:
+        """Return synonyms for selected compounds lazily.
+
+        Examples:
+            >>> selection.names().select("name", "scope").collect()  # doctest: +SKIP
+            shape: (..., 2)
+        """
+        snapshot = copy.copy(self)
+        columns = (["group_id"] if self._is_grouped else []) + [
+            "input_id",
+            "input_namespace",
+            "chebi_id",
+            "name",
+            "scope",
+        ]
+        return register_deferred_frame_source(
+            schema=_relation_schema(columns),
+            frame=snapshot._eager_names,
+        )
+
+    def _eager_names(self) -> pl.DataFrame:
         """Return synonyms for selected compounds.
 
         Examples:
             Retain each synonym's official scope:
 
-            >>> selection.extract_names().select("name", "scope").columns  # doctest: +SKIP
+            >>> selection.names().select("name", "scope").collect_schema().names()  # doctest: +SKIP
             ['name', 'scope']
         """
         self._require_tables({"compound_name"}, "extract compound names")
@@ -238,15 +367,36 @@ class ChEBICompoundSelection:
             """
         )
 
-    def extract_cross_references(self) -> pl.DataFrame:
+    def cross_references(self) -> pl.LazyFrame:
+        """Return external database accessions for selected compounds lazily.
+
+        Examples:
+            >>> selection.cross_references().collect()  # doctest: +SKIP
+            shape: (..., 7)
+        """
+        snapshot = copy.copy(self)
+        columns = (["group_id"] if self._is_grouped else []) + [
+            "input_id",
+            "input_namespace",
+            "chebi_id",
+            "source_prefix",
+            "accession",
+            "xref_id",
+        ]
+        return register_deferred_frame_source(
+            schema=_relation_schema(columns),
+            frame=snapshot._eager_cross_references,
+        )
+
+    def _eager_cross_references(self) -> pl.DataFrame:
         """Return external database accessions for selected compounds.
 
         Examples:
             Keep prefix and accession separate for exact reuse:
 
-            >>> selection.extract_cross_references().select(  # doctest: +SKIP
+            >>> selection.cross_references().select(  # doctest: +SKIP
             ...     "source_prefix", "accession"
-            ... ).columns
+            ... ).collect_schema().names()
             ['source_prefix', 'accession']
         """
         self._require_tables(
@@ -268,7 +418,35 @@ class ChEBICompoundSelection:
             """
         )
 
-    def extract_relations(
+    def relations(
+        self,
+        *,
+        direction: Literal["outgoing", "incoming", "both"] = "both",
+    ) -> pl.LazyFrame:
+        """Return direct compound relations in the requested direction lazily.
+
+        Examples:
+            >>> selection.relations(direction="outgoing").collect()  # doctest: +SKIP
+            shape: (..., 8)
+        """
+        if direction not in {"outgoing", "incoming", "both"}:
+            raise ValueError("direction must be 'outgoing', 'incoming', or 'both'")
+        snapshot = copy.copy(self)
+        columns = (["group_id"] if self._is_grouped else []) + [
+            "input_id",
+            "input_namespace",
+            "chebi_id",
+            "subject_chebi_id",
+            "relation_type",
+            "relation_id",
+            "object_chebi_id",
+        ]
+        return register_deferred_frame_source(
+            schema=_relation_schema(columns),
+            frame=lambda: snapshot._eager_relations(direction=direction),
+        )
+
+    def _eager_relations(
         self,
         *,
         direction: Literal["outgoing", "incoming", "both"] = "both",
@@ -278,9 +456,9 @@ class ChEBICompoundSelection:
         Examples:
             Request only edges leaving the selected compound:
 
-            >>> selection.extract_relations(  # doctest: +SKIP
+            >>> selection.relations(  # doctest: +SKIP
             ...     direction="outgoing"
-            ... ).columns[-3:]
+            ... ).collect_schema().names()[-3:]
             ['relation_type', 'relation_id', 'object_chebi_id']
         """
         if direction not in {"outgoing", "incoming", "both"}:
@@ -310,15 +488,35 @@ class ChEBICompoundSelection:
             """
         )
 
-    def extract_structures(self) -> pl.DataFrame:
+    def structures(self) -> pl.LazyFrame:
+        """Return SDF molfile records for selected compounds lazily.
+
+        Examples:
+            >>> selection.structures().select("chebi_id", "molfile").collect()  # doctest: +SKIP
+            shape: (..., 2)
+        """
+        snapshot = copy.copy(self)
+        columns = (["group_id"] if self._is_grouped else []) + [
+            "input_id",
+            "input_namespace",
+            "chebi_id",
+            "structure_index",
+            "molfile",
+        ]
+        return register_deferred_frame_source(
+            schema=_relation_schema(columns),
+            frame=snapshot._eager_structures,
+        )
+
+    def _eager_structures(self) -> pl.DataFrame:
         """Return SDF molfile records for selected compounds.
 
         Examples:
             Keep large molfiles outside the scalar compound profile:
 
-            >>> selection.extract_structures().select(  # doctest: +SKIP
+            >>> selection.structures().select(  # doctest: +SKIP
             ...     "chebi_id", "molfile"
-            ... ).columns
+            ... ).collect_schema().names()
             ['chebi_id', 'molfile']
         """
         self._require_tables({"compound_structure"}, "extract compound structures")
@@ -337,13 +535,32 @@ class ChEBICompoundSelection:
             """
         )
 
-    def extract_wurcs(self) -> pl.DataFrame:
+    def wurcs(self) -> pl.LazyFrame:
+        """Return WURCS representations for selected compounds lazily.
+
+        Examples:
+            >>> selection.wurcs().select("chebi_id", "wurcs").collect()  # doctest: +SKIP
+            shape: (..., 2)
+        """
+        snapshot = copy.copy(self)
+        columns = (["group_id"] if self._is_grouped else []) + [
+            "input_id",
+            "input_namespace",
+            "chebi_id",
+            "wurcs",
+        ]
+        return register_deferred_frame_source(
+            schema=_relation_schema(columns),
+            frame=snapshot._eager_wurcs,
+        )
+
+    def _eager_wurcs(self) -> pl.DataFrame:
         """Return WURCS representations for selected compounds.
 
         Examples:
             Extract source WURCS strings without parsing them:
 
-            >>> selection.extract_wurcs().columns[-1]  # doctest: +SKIP
+            >>> selection.wurcs().collect_schema().names()[-1]  # doctest: +SKIP
             'wurcs'
         """
         self._require_tables({"compound_wurcs"}, "extract compound WURCS")
@@ -361,27 +578,45 @@ class ChEBICompoundSelection:
             """
         )
 
-    def extract_ancestors(self) -> pl.DataFrame:
-        """Traverse transitive ``is_a`` parents cycle-safely.
+    def ancestors(self) -> pl.LazyFrame:
+        """Traverse transitive ``is_a`` parents cycle-safely and lazily.
 
         Examples:
-            Retain traversal depth for each ancestor:
-
-            >>> selection.extract_ancestors().columns[-2:]  # doctest: +SKIP
-            ['ancestor_chebi_id', 'depth']
+            >>> selection.ancestors().select("ancestor_chebi_id").collect()  # doctest: +SKIP
+            shape: (..., 1)
         """
-        return self._extract_hierarchy(reverse=False)
+        snapshot = copy.copy(self)
+        columns = (["group_id"] if self._is_grouped else []) + [
+            "input_id",
+            "input_namespace",
+            "chebi_id",
+            "ancestor_chebi_id",
+            "depth",
+        ]
+        return register_deferred_frame_source(
+            schema=_relation_schema(columns),
+            frame=lambda: snapshot._extract_hierarchy(reverse=False),
+        )
 
-    def extract_descendants(self) -> pl.DataFrame:
-        """Traverse transitive ``is_a`` children cycle-safely.
+    def descendants(self) -> pl.LazyFrame:
+        """Traverse transitive ``is_a`` children cycle-safely and lazily.
 
         Examples:
-            Retain traversal depth for each descendant:
-
-            >>> selection.extract_descendants().columns[-2:]  # doctest: +SKIP
-            ['descendant_chebi_id', 'depth']
+            >>> selection.descendants().select("descendant_chebi_id").collect()  # doctest: +SKIP
+            shape: (..., 1)
         """
-        return self._extract_hierarchy(reverse=True)
+        snapshot = copy.copy(self)
+        columns = (["group_id"] if self._is_grouped else []) + [
+            "input_id",
+            "input_namespace",
+            "chebi_id",
+            "descendant_chebi_id",
+            "depth",
+        ]
+        return register_deferred_frame_source(
+            schema=_relation_schema(columns),
+            frame=lambda: snapshot._extract_hierarchy(reverse=True),
+        )
 
     def _extract_hierarchy(self, *, reverse: bool) -> pl.DataFrame:
         self._require_tables({"compound_relation"}, "traverse compound hierarchy")
@@ -552,7 +787,7 @@ class ChEBICompoundSelection:
         return result
 
     def _extract_joined(self, query: str) -> pl.DataFrame:
-        matches = self.extract_matches()
+        matches = self._eager_matches()
         publication = self.database._require_publication()  # pyright: ignore[reportPrivateUsage]  # sibling query boundary
         with duckdb.connect(str(publication.path), read_only=True) as connection:
             _create_selected_table(connection, matches, grouped=self._is_grouped)

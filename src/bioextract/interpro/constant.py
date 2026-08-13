@@ -34,6 +34,22 @@ SCHEMA_MAPPING: SchemaDict = {
     "end": pl.Int64,
 }
 
+SCHEMA_PFAM_ANNOTATION: SchemaDict = {
+    "uniprot_id": pl.String,
+    "pfam_id": pl.String,
+    "pfam_name": pl.String,
+    "interpro_id": pl.String,
+    "interpro_name": pl.String,
+    "interpro_type": pl.String,
+}
+
+SCHEMA_GROUP_PFAM_ANNOTATION: SchemaDict = {
+    "group_id": pl.String,
+    "input_id": pl.String,
+    "input_namespace": pl.String,
+    **SCHEMA_PFAM_ANNOTATION,
+}
+
 SCHEMA_INTERPRO_ENTRY: SchemaDict = {
     "interpro_id": pl.String,
     "interpro_type": pl.String,

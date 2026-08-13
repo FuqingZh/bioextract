@@ -16,7 +16,18 @@ import bioextract.stringdb as stringdb
 import bioextract.uniprot as uniprot
 import bioextract.wikipathways as wikipathways
 from bioextract._tidy import TidyDataset
+from bioextract.chebi._query import ChEBICompoundSelection
+from bioextract.eggnog.eggnog import EggnogSelection
+from bioextract.go._query import GOAncestorSelection
+from bioextract.interpro.interpro import InterProSelection
+from bioextract.kegg.kegg import KeggSelection
+from bioextract.kegg.metabolic.core import KEGGMetabolicSelection
+from bioextract.omnipath.omnipath import OmniPathSelection
+from bioextract.reactome.reactome import ReactomeSelection
+from bioextract.rhea._query import RheaReactionSelection
 from bioextract.stringdb.stringdb import StringSelection
+from bioextract.uniprot._query import UniProtSelection
+from bioextract.wikipathways.wikipathways import WikiPathwaysSelection
 
 
 @pytest.mark.parametrize(
@@ -57,6 +68,46 @@ def test_removed_legacy_writer_apis_are_not_exported() -> None:
     assert not hasattr(chebi.ChEBIDatabase, "from_release")
     assert not hasattr(kegg.KEGGDatabase, "write_parquet")
     assert not hasattr(interpro.InterProDatabase, "write_parquet")
+
+
+def test_public_relation_classes_do_not_expose_eager_compatibility_methods() -> None:
+    relation_classes = (
+        chebi.ChEBIDatabase,
+        ChEBICompoundSelection,
+        eggnog.EggNOGDatabase,
+        EggnogSelection,
+        go.GODatabase,
+        GOAncestorSelection,
+        interpro.InterProDatabase,
+        InterProSelection,
+        kegg.KEGGDatabase,
+        KeggSelection,
+        KEGGMetabolicSelection,
+        omnipath.OmniPathDatabase,
+        OmniPathSelection,
+        reactome.ReactomeDatabase,
+        ReactomeSelection,
+        rhea.RheaDatabase,
+        RheaReactionSelection,
+        stringdb.STRINGDatabase,
+        StringSelection,
+        uniprot.UniProtDatabase,
+        UniProtSelection,
+        wikipathways.WikiPathwaysDatabase,
+        WikiPathwaysSelection,
+    )
+    for relation_class in relation_classes:
+        public_methods = {
+            name
+            for name, _member in inspect.getmembers(
+                relation_class,
+                inspect.isfunction,
+            )
+            if not name.startswith("_")
+        }
+        assert not any(name.startswith("extract_") for name in public_methods)
+        assert "read_mapping" not in public_methods
+        assert "xml_frame" not in public_methods
 
 
 def test_resource_factories_do_not_expose_limits() -> None:
@@ -130,7 +181,7 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
             "pathways",
             "relations",
         ),
-        wikipathways.WikiPathwaysDatabase.from_gmt: ("source", "species", "glob"),
+        wikipathways.WikiPathwaysDatabase.from_gmt: ("source", "glob"),
         wikipathways.WikiPathwaysDatabase.from_duckdb: ("path",),
         eggnog.EggNOGDatabase.from_sqlite: (
             "source",
@@ -222,11 +273,16 @@ def test_phase_2_constructor_parameter_kinds_are_explicit() -> None:
         wikipathways.WikiPathwaysDatabase.from_gmt
     ).parameters
     assert parameters["source"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-    assert all(
-        parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
-        for name in ("species", "glob")
-    )
+    assert parameters["glob"].kind is inspect.Parameter.KEYWORD_ONLY
     assert parameters["glob"].default is True
+
+
+def test_wikipathways_species_scope_is_a_view_operation() -> None:
+    parameters = inspect.signature(
+        wikipathways.WikiPathwaysDatabase.with_species
+    ).parameters
+    assert tuple(parameters) == ("self", "species")
+    assert parameters["species"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
 
 
 def test_go_ancestor_selection_signature_is_explicit() -> None:

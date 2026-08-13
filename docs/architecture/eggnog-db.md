@@ -57,8 +57,8 @@ db = EggNOGDatabase.from_sqlite(
 selection = db.select_ids(
     ["9606.ENSP00000369497"],
 )
-df_selected = selection.extract_mapping()
-df_unmapped = selection.extract_unmatched_ids()
+lf_selected = selection.mappings()
+lf_unmapped = selection.unmatched_ids()
 ```
 
 Grouped selections prepend `group_id` in the same style as other resource DBs.
@@ -73,8 +73,8 @@ decompress once themselves and pass the resulting `.db` file.
 
 eggNOG remains direct-only: there is no database-level full mapping extractor,
 publication writer, persistent cache, or public unpack helper. A selection
-caches its mapping and unmatched outputs, so repeated extractors on that
-selection do not repeat the SQLite lookup.
+returns replayable lazy relations; each Polars execution owns its temporary
+SQLite resources and does not require an open connection or a private table.
 
 ## Selected Output Contract
 
@@ -122,7 +122,7 @@ input_id
 input_namespace
 ```
 
-`extract_unmatched_ids()` returns `input_id` for single selection and
+`unmatched_ids()` returns `input_id` for single selection and
 `group_id, input_id` for grouped selection.
 
 ## Real Snapshot Status

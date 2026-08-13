@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import polars as pl
 
+from bioextract._lazy import (
+    register_deferred_frame_source,
+    register_replayable_source,
+)
 from bioextract._publication import (
     BIOEXTRACT_RELATIONS,
     DuckDBWriteResult,
@@ -25,22 +31,30 @@ from bioextract._tidy import (
 )
 from bioextract.errors import CapabilityError, IntegrityError
 
-from ._pfam import build_pfam_tidy_dataset, read_interpro_release_version
+from ._pfam import (
+    _read_pfam_xml_mapping,  # pyright: ignore[reportPrivateUsage]
+    build_pfam_tidy_dataset,
+    read_interpro_release_version,
+)
 from .constant import (
     ASSET_SPECS,
     COLS_MAPPING,
     MEDIA_TYPE_TSV_GZIP,
     MEDIA_TYPE_XML_GZIP,
     SCHEMA_GROUP_INPUT_IDS,
+    SCHEMA_GROUP_PFAM_ANNOTATION,
     SCHEMA_GROUPS,
     SCHEMA_MAPPING,
+    SCHEMA_PFAM_ANNOTATION,
     SCHEMA_UNMAPPED,
     SCHEMA_VERSION,
     InterProNamespace,
 )
 from .util import (
+    build_mapping_frame,
     extract_mapping_frame,
     extract_unmatched_ids_frame,
+    iter_protein2ipr_records,
     read_interpro_xml_frames,
     read_mapping_frame,
     scan_mapping_frame,
@@ -75,9 +89,9 @@ class InterProDatabase:
         ...     protein_to_interpro="fixtures/interpro/108.0/raw/protein2ipr.dat.gz",
         ...     interpro_xml="fixtures/interpro/108.0/raw/interpro.xml.gz",
         ... )
-        >>> db.extract_mapping().select(
+        >>> db.mappings().select(
         ...     "uniprot_id", "interpro_id", "member_db"
-        ... ).head(1).rows()
+        ... ).head(1).collect().rows()
         [('P12345', 'IPR000001', 'PFAM')]
     """
 
@@ -125,9 +139,9 @@ class InterProDatabase:
             ...     protein_to_interpro="fixtures/interpro/108.0/raw/protein2ipr.dat.gz",
             ...     interpro_xml="fixtures/interpro/108.0/raw/interpro.xml.gz",
             ... )
-            >>> db.extract_mapping().select(
+            >>> db.mappings().select(
             ...     "interpro_id", "interpro_type", "member_db"
-            ... ).head(1).rows()
+            ... ).head(1).collect().rows()
             [('IPR000001', 'Domain', 'PFAM')]
         """
         file_protein2ipr = _validate_file(
@@ -155,7 +169,7 @@ class InterProDatabase:
             >>> db = InterProDatabase.from_duckdb(  # doctest: +SKIP
             ...     "tidy/data.duckdb"
             ... )
-            >>> db.select_ids(["P12345"]).extract_mapping().height  # doctest: +SKIP
+            >>> db.select_ids(["P12345"]).mappings().collect().height  # doctest: +SKIP
             1
         """
         publication_path = Path(path).resolve()
@@ -220,7 +234,7 @@ class InterProDatabase:
             ...     protein_to_interpro="fixtures/interpro/108.0/raw/protein2ipr.dat.gz"
             ... )
             >>> selection = db.select_ids(["sp|P12345|TEST_HUMAN"])
-            >>> selection.extract_mapping().select(
+            >>> selection.mappings().select(
             ...     "input_id", "interpro_id", "member_db_id"
             ... ).rows()
             [('P12345', 'IPR000001', 'PF00051'), ('P12345', 'IPR000001', 'SM00130')]
@@ -258,7 +272,7 @@ class InterProDatabase:
             >>> selection = db.select_groups(
             ...     {"up": ["P12345"], "down": ["Q9Y243"]},
             ... )
-            >>> selection.extract_mapping().select(
+            >>> selection.mappings().select(
             ...     "group_id", "uniprot_id"
             ... ).unique().sort("group_id").rows()
             [('down', 'Q9Y243'), ('up', 'P12345')]
@@ -275,11 +289,11 @@ class InterProDatabase:
             _df_group_membership=grp_in_frames.df_group_membership,
         )
 
-    def extract_mapping(self) -> pl.DataFrame:
-        """Extract the full row-level UniProt-to-InterPro mapping.
+    def mappings(self) -> pl.LazyFrame:
+        """Return the full row-level UniProt-to-InterPro mapping lazily.
 
         Returns:
-            A cached frame that preserves member-database rows and positional
+            A lazy frame that preserves member-database rows and positional
             coordinates. `interpro_type` and `member_db` remain null when no XML
             source was configured.
 
@@ -289,11 +303,18 @@ class InterProDatabase:
             >>> db = InterProDatabase.from_mapping_files(
             ...     protein_to_interpro="fixtures/interpro/108.0/raw/protein2ipr.dat.gz"
             ... )
-            >>> db.extract_mapping().select(
+            >>> db.mappings().select(
             ...     "uniprot_id", "member_db_id", "start", "end"
-            ... ).head(2).rows()
+            ... ).head(2).collect().rows()
             [('P12345', 'PF00051', 10, 80), ('P12345', 'SM00130', 12, 76)]
         """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=SCHEMA_MAPPING,
+            frame=lambda: snapshot._eager_mappings(),
+        )
+
+    def _eager_mappings(self) -> pl.DataFrame:
         if self._df_mapping is None:
             if self._publication_path is not None:
                 with self.connect() as connection:
@@ -306,11 +327,41 @@ class InterProDatabase:
                     )
             else:
                 self._df_mapping = read_mapping_frame(
-                    self._require_mapping_source(action="extract mappings"),
-                    df_interpro_entry=self.xml_frame("entry"),
-                    df_interpro_member=self.xml_frame("member"),
+                    self._require_mapping_source(action="read mappings"),
+                    df_interpro_entry=self._xml_frame("entry"),
+                    df_interpro_member=self._xml_frame("member"),
                 )
         return self._df_mapping
+
+    def pfam_annotations(self) -> pl.LazyFrame:
+        """Return public UniProt-to-Pfam annotations with InterPro trace.
+
+        The relation is available only when InterPro XML/Pfam capability is
+        present. It preserves the exact ``uniprot_id`` to ``pfam_id`` to
+        ``interpro_id`` association and adds the Pfam display name.
+
+        Examples:
+            >>> lf = db.pfam_annotations()  # doctest: +SKIP
+            >>> lf.select("uniprot_id", "pfam_id").collect()  # doctest: +SKIP
+            shape: (..., 2)
+        """
+
+        if self._publication_path is None:
+            if self.snapshot.file_interpro_xml is None:
+                raise CapabilityError(
+                    "InterPro Pfam annotations require an InterPro XML source"
+                )
+        elif "pfam" not in self._capabilities:
+            raise CapabilityError(
+                "InterPro publication lacks the Pfam annotation capability"
+            )
+        return register_replayable_source(
+            schema=SCHEMA_PFAM_ANNOTATION,
+            batches=lambda batch_size: _iter_database_pfam_batches(
+                self,
+                batch_size=batch_size,
+            ),
+        )
 
     def build_tidy(
         self,
@@ -364,15 +415,15 @@ class InterProDatabase:
         if self.snapshot.file_interpro_xml is not None:
             validate_mapping_xml_relationships(
                 file_protein2ipr,
-                df_interpro_entry=self.xml_frame("entry"),
-                df_interpro_member=self.xml_frame("member"),
+                df_interpro_entry=self._xml_frame("entry"),
+                df_interpro_member=self._xml_frame("member"),
             )
         dataset = TidyDataset(
             frames={
                 "mapping": scan_mapping_frame(
                     file_protein2ipr,
-                    df_interpro_entry=self.xml_frame("entry"),
-                    df_interpro_member=self.xml_frame("member"),
+                    df_interpro_entry=self._xml_frame("entry"),
+                    df_interpro_member=self._xml_frame("member"),
                 )
             },
             source=self._tidy_sources(),
@@ -450,7 +501,7 @@ class InterProDatabase:
             include_source_hashes=include_source_hashes,
         )
 
-    def xml_frame(self, frame_name: str) -> pl.DataFrame:
+    def _xml_frame(self, frame_name: str) -> pl.DataFrame:
         """Read and cache one InterPro XML lookup frame.
 
         Args:
@@ -471,12 +522,12 @@ class InterProDatabase:
             ...     protein_to_interpro="fixtures/interpro/108.0/raw/protein2ipr.dat.gz",
             ...     interpro_xml="fixtures/interpro/108.0/raw/interpro.xml.gz",
             ... )
-            >>> db.xml_frame("entry").rows()
+            >>> db._xml_frame("entry").rows()  # doctest: +SKIP
             [('IPR000001', 'Domain'), ('IPR000002', 'Homologous_superfamily')]
         """
         if self._publication_path is not None:
             raise CapabilityError(
-                "xml_frame() requires an InterPro XML source handle; the "
+                "InterPro XML source is required; the "
                 "publication retains enriched mapping values, not XML lookup frames"
             )
         xml_path = self.snapshot.file_interpro_xml
@@ -529,11 +580,11 @@ class InterProDatabase:
 
 @dataclass(slots=True)
 class InterProSelection:
-    """Materialize one single or grouped InterPro mapping query.
+    """Plan one single or grouped InterPro mapping query.
 
     Instances are created by `InterProDatabase.select_ids()` or
     `InterProDatabase.select_groups()`. Mapping and unmapped frames are cached
-    independently after first extraction.
+    independently when their lazy plans execute.
 
     Examples:
         Inspect the InterPro IDs retained by a selection:
@@ -542,7 +593,7 @@ class InterProSelection:
         ...     protein_to_interpro="fixtures/interpro/108.0/raw/protein2ipr.dat.gz"
         ... )
         >>> selection = db.select_ids(["P12345"])
-        >>> selection.extract_mapping().get_column("interpro_id").unique().to_list()
+        >>> selection.mappings().select("interpro_id").collect().unique().to_series().to_list()
         ['IPR000001']
     """
 
@@ -569,11 +620,46 @@ class InterProSelection:
         """
         return self._df_groups is not None
 
-    def extract_mapping(self) -> pl.DataFrame:
-        """Extract mapping rows for the normalized selection.
+    def pfam_annotations(self) -> pl.LazyFrame:
+        """Return selected Pfam annotations with caller lineage.
+
+        The returned schema includes ``input_id`` and ``input_namespace``;
+        grouped selections additionally include ``group_id``. Execution is
+        lazy and uses only the public database relation boundary.
+
+        Examples:
+            >>> lf = selection.pfam_annotations()  # doctest: +SKIP
+            >>> lf.select("input_id", "pfam_id").collect()  # doctest: +SKIP
+            shape: (..., 2)
+        """
+
+        schema = (
+            SCHEMA_GROUP_PFAM_ANNOTATION
+            if self.is_grouped
+            else {
+                "input_id": pl.String,
+                "input_namespace": pl.String,
+                **SCHEMA_PFAM_ANNOTATION,
+            }
+        )
+        # Validate capability before constructing a plan; source/publication
+        # execution itself remains deferred to the returned LazyFrame.
+        self.dataset.pfam_annotations()
+        snapshot = copy.copy(self)
+        snapshot.dataset = copy.copy(self.dataset)
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda batch_size: _iter_selection_pfam_batches(
+                snapshot,
+                batch_size=batch_size,
+            ),
+        )
+
+    def mappings(self) -> pl.LazyFrame:
+        """Return mapping rows for the normalized selection lazily.
 
         Returns:
-            A frame prefixed by `input_id` and `input_namespace`; grouped selections
+            A lazy frame prefixed by `input_id` and `input_namespace`; grouped selections
             additionally begin with `group_id`. Member and positional rows stay
             expanded.
 
@@ -584,11 +670,25 @@ class InterProSelection:
             ...     protein_to_interpro="fixtures/interpro/108.0/raw/protein2ipr.dat.gz"
             ... )
             >>> selection = db.select_ids(["P12345"])
-            >>> selection.extract_mapping().select(
+            >>> selection.mappings().select(
             ...     "input_id", "member_db_id"
-            ... ).rows()
+            ... ).collect().rows()
             [('P12345', 'PF00051'), ('P12345', 'SM00130')]
         """
+        snapshot = copy.copy(self)
+        schema = {
+            "input_id": pl.String,
+            "input_namespace": pl.String,
+            **SCHEMA_MAPPING,
+        }
+        if self.is_grouped:
+            schema = {"group_id": pl.String, **schema}
+        return register_deferred_frame_source(
+            schema=schema,
+            frame=lambda: snapshot._eager_mapping(),
+        )
+
+    def _eager_mapping(self) -> pl.DataFrame:
         if self._df_mapping is None:
             if self.dataset._publication_path is not None:  # pyright: ignore[reportPrivateUsage]
                 selected_mapping = pl.DataFrame(schema=SCHEMA_MAPPING)
@@ -639,13 +739,31 @@ class InterProSelection:
                     self._df_input_ids,
                     df_group_membership=self._df_group_membership,
                     namespace=self.namespace,
-                    df_interpro_entry=self.dataset.xml_frame("entry"),
-                    df_interpro_member=self.dataset.xml_frame("member"),
+                    df_interpro_entry=self.dataset._xml_frame("entry"),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+                    df_interpro_member=self.dataset._xml_frame("member"),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
                 )
         return self._df_mapping
 
-    def extract_unmatched_ids(self) -> pl.DataFrame:
-        """Extract normalized input IDs with no InterPro mapping row.
+    def unmatched_ids(self) -> pl.LazyFrame:
+        """Return selected UniProt IDs absent from the mapping lazily.
+
+        Examples:
+            >>> lf = selection.unmatched_ids()  # doctest: +SKIP
+            >>> lf.collect()  # doctest: +SKIP
+            shape: (..., ...)
+        """
+
+        snapshot = copy.copy(self)
+        schema = {"input_id": pl.String}
+        if self.is_grouped:
+            schema = {"group_id": pl.String, **schema}
+        return register_deferred_frame_source(
+            schema=schema,
+            frame=lambda: snapshot._eager_unmatched_ids(),
+        )
+
+    def _eager_unmatched_ids(self) -> pl.DataFrame:
+        """Materialize normalized input IDs with no InterPro mapping row.
 
         Returns:
             `input_id` for a single selection, or `group_id, input_id` for a
@@ -658,16 +776,217 @@ class InterProSelection:
             ...     protein_to_interpro="fixtures/interpro/108.0/raw/protein2ipr.dat.gz"
             ... )
             >>> selection = db.select_ids(["MISSING"])
-            >>> selection.extract_unmatched_ids().to_dicts()
+            >>> selection.unmatched_ids().collect().to_dicts()
             [{'input_id': 'MISSING'}]
         """
         if self._df_unmapped is None:
             self._df_unmapped = extract_unmatched_ids_frame(
                 self._df_input_ids,
-                self.extract_mapping(),
+                self._eager_mapping(),
                 df_group_membership=self._df_group_membership,
             )
         return self._df_unmapped
+
+
+def _build_pfam_annotation_frame(
+    df_mapping: pl.DataFrame,
+    df_xml_mapping: pl.DataFrame,
+) -> pl.DataFrame:
+    pfam = df_mapping.filter(
+        pl.col("member_db").str.to_uppercase() == "PFAM",
+        pl.col("member_db_id").str.contains(r"^PF[0-9]{5}$"),
+    ).select(
+        "uniprot_id",
+        "member_db_id",
+        "interpro_id",
+        "interpro_name",
+        "interpro_type",
+    )
+    pfam = pfam.rename({"member_db_id": "pfam_id"})
+    return (
+        pfam.join(
+            df_xml_mapping.select("interpro_id", "pfam_id", "pfam_name").unique(),
+            on=["interpro_id", "pfam_id"],
+            how="inner",
+        )
+        .select(list(SCHEMA_PFAM_ANNOTATION))
+        .unique()
+        .sort(list(SCHEMA_PFAM_ANNOTATION))
+    )
+
+
+def _iter_database_pfam_batches(
+    database: InterProDatabase,
+    *,
+    batch_size: int,
+) -> Iterator[pl.DataFrame]:
+    if database._publication_path is None:  # pyright: ignore[reportPrivateUsage]
+        mapping_path = database._require_mapping_source(  # pyright: ignore[reportPrivateUsage]
+            action="read Pfam annotations"
+        )
+        xml_path = database._require_interpro_xml(  # pyright: ignore[reportPrivateUsage]
+            action="read Pfam annotations"
+        )
+        xml_frames = read_interpro_xml_frames(xml_path)
+        mapping = read_mapping_frame(
+            mapping_path,
+            df_interpro_entry=xml_frames["entry"],
+            df_interpro_member=xml_frames["member"],
+        )
+        _version, xml_mapping = _read_pfam_xml_mapping(xml_path)
+        frame = _build_pfam_annotation_frame(mapping, xml_mapping)
+        for offset in range(0, frame.height, batch_size):
+            yield frame.slice(offset, batch_size)
+        return
+
+    connection = database.connect()
+    try:
+        query = """
+            SELECT DISTINCT
+                mapping.uniprot_id AS uniprot_id,
+                mapping.member_db_id AS pfam_id,
+                term.pfam_name AS pfam_name,
+                mapping.interpro_id AS interpro_id,
+                mapping.interpro_name AS interpro_name,
+                mapping.interpro_type AS interpro_type
+            FROM mapping
+            JOIN term ON term.pfam_id = mapping.member_db_id
+            JOIN term_xref
+              ON term_xref.pfam_id = mapping.member_db_id
+             AND term_xref.interpro_id = mapping.interpro_id
+            WHERE upper(mapping.member_db) = 'PFAM'
+            ORDER BY uniprot_id, pfam_id, interpro_id
+        """
+        reader = _interpro_arrow_reader(connection.execute(query), batch_size)
+        try:
+            for record_batch in reader:
+                frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+                yield frame.cast(  # type: ignore[reportArgumentType]
+                    SCHEMA_PFAM_ANNOTATION,  # type: ignore[reportArgumentType]
+                    strict=False,
+                )
+        finally:
+            close = getattr(reader, "close", None)
+            if close is not None:
+                close()
+    finally:
+        connection.close()
+
+
+def _iter_selection_pfam_batches(
+    selection: InterProSelection,
+    *,
+    batch_size: int,
+) -> Iterator[pl.DataFrame]:
+    database = selection.dataset
+    input_ids = set(selection._df_input_ids.get_column("input_id").to_list())  # pyright: ignore[reportPrivateUsage]
+    if database._publication_path is None:  # pyright: ignore[reportPrivateUsage]
+        mapping_path = database._require_mapping_source(  # pyright: ignore[reportPrivateUsage]
+            action="select Pfam annotations"
+        )
+        xml_path = database._require_interpro_xml(  # pyright: ignore[reportPrivateUsage]
+            action="select Pfam annotations"
+        )
+        xml_frames = read_interpro_xml_frames(xml_path)
+        mapping = build_mapping_frame(
+            iter_protein2ipr_records(mapping_path, input_ids=input_ids),
+            df_interpro_entry=xml_frames["entry"],
+            df_interpro_member=xml_frames["member"],
+        )
+        _version, xml_mapping = _read_pfam_xml_mapping(xml_path)
+        pfam = _build_pfam_annotation_frame(mapping, xml_mapping)
+    else:
+        connection = database.connect()
+        try:
+            connection.execute(
+                "CREATE TEMP TABLE _interpro_input_id(input_id VARCHAR PRIMARY KEY)"
+            )
+            if input_ids:
+                connection.executemany(
+                    "INSERT INTO _interpro_input_id VALUES (?)",
+                    [(value,) for value in sorted(input_ids)],
+                )
+            query = """
+                SELECT DISTINCT
+                    mapping.uniprot_id AS uniprot_id,
+                    mapping.member_db_id AS pfam_id,
+                    term.pfam_name AS pfam_name,
+                    mapping.interpro_id AS interpro_id,
+                    mapping.interpro_name AS interpro_name,
+                    mapping.interpro_type AS interpro_type
+                FROM mapping
+                JOIN _interpro_input_id AS input
+                  ON input.input_id = mapping.uniprot_id
+                JOIN term ON term.pfam_id = mapping.member_db_id
+                JOIN term_xref
+                  ON term_xref.pfam_id = mapping.member_db_id
+                 AND term_xref.interpro_id = mapping.interpro_id
+                WHERE upper(mapping.member_db) = 'PFAM'
+                ORDER BY uniprot_id, pfam_id, interpro_id
+            """
+            reader = _interpro_arrow_reader(connection.execute(query), batch_size)
+            try:
+                for record_batch in reader:
+                    frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+                    frame = frame.cast(  # type: ignore[reportArgumentType]
+                        SCHEMA_PFAM_ANNOTATION,  # type: ignore[reportArgumentType]
+                        strict=False,
+                    )
+                    yield from _add_selection_lineage(
+                        frame,
+                        selection,
+                        batch_size=batch_size,
+                    )
+            finally:
+                close = getattr(reader, "close", None)
+                if close is not None:
+                    close()
+        finally:
+            connection.close()
+        return
+
+    yield from _add_selection_lineage(pfam, selection, batch_size=batch_size)
+
+
+def _add_selection_lineage(
+    frame: pl.DataFrame,
+    selection: InterProSelection,
+    *,
+    batch_size: int,
+) -> Iterator[pl.DataFrame]:
+    # Keep both caller lineage and the canonical UniProt ID. Polars normally
+    # coalesces join keys, so use a duplicate right-hand key to avoid dropping
+    # ``uniprot_id`` when normalizing ``input_id``.
+    frame = (
+        selection._df_input_ids.join(  # pyright: ignore[reportPrivateUsage]
+            frame.with_columns(pl.col("uniprot_id").alias("_pfam_join_id")),
+            left_on="input_id",
+            right_on="_pfam_join_id",
+            how="inner",
+        )
+        .with_columns(pl.lit(selection.namespace).alias("input_namespace"))
+        .select(
+            "input_id",
+            "input_namespace",
+            *list(SCHEMA_PFAM_ANNOTATION),
+        )
+    )
+    if selection._df_group_membership is not None:  # pyright: ignore[reportPrivateUsage]
+        frame = (
+            selection._df_group_membership.join(frame, on="input_id", how="inner")  # pyright: ignore[reportPrivateUsage]
+            .select(list(SCHEMA_GROUP_PFAM_ANNOTATION))
+            .unique()
+            .sort(list(SCHEMA_GROUP_PFAM_ANNOTATION))
+        )
+    for offset in range(0, frame.height, batch_size):
+        yield frame.slice(offset, batch_size)
+
+
+def _interpro_arrow_reader(result: Any, batch_size: int) -> Any:
+    to_arrow_reader = getattr(result, "to_arrow_reader", None)
+    if to_arrow_reader is not None:
+        return to_arrow_reader(batch_size)
+    return result.fetch_record_batch(rows_per_batch=batch_size)
 
 
 def _validate_file(

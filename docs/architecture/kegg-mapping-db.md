@@ -66,17 +66,17 @@ db = KEGGDatabase.from_mapping_files(
     ncbi_gene_conversion="conv_ncbi_gene.tsv",
 )
 
-df_mapping = db.extract_mapping()
+lf_mapping = db.mappings()
 
 selection = db.select_ids(["P12345", "Q9Y243"], namespace="uniprot")
-df_selected = selection.extract_mapping()
-df_unmapped = selection.extract_unmatched_ids()
+lf_selected = selection.mappings()
+lf_unmapped = selection.unmatched_ids()
 
 grouped = db.select_groups(
     {"up": ["P12345"], "down": ["Q9Y243"]},
     namespace="uniprot",
 )
-df_grouped = grouped.extract_mapping()
+lf_grouped = grouped.mappings()
 
 result = db.write_duckdb("kegg-mapping.duckdb")
 published = KEGGDatabase.from_duckdb(result.path)
@@ -97,7 +97,8 @@ the semantic kind of the input ID values.
 
 ## Output Contract
 
-`extract_mapping()` exposes one wide public DataFrame. These fields are
+`mappings()` exposes one wide public lazy relation. Callers choose when to
+collect it. These fields are
 derived from headerless KEGG inputs, so they are created directly with the
 stable public `snake_case` names; no source-header mapping is recorded for
 this relation:
@@ -149,7 +150,7 @@ input_id
 input_namespace
 ```
 
-`extract_unmatched_ids()` returns `input_id` for single selections and
+`unmatched_ids()` returns `input_id` for single selections and
 `group_id, input_id` for grouped selections.
 
 ## Tidy Dataset
@@ -161,7 +162,7 @@ main.mapping
 ```
 
 The DuckDB relation uses the same `snake_case` columns as
-`extract_mapping()`; reopening does not perform an inverse rename and
+`mappings()`; reopening does not perform an inverse rename and
 preserves single/grouped selection and unmatched-ID behavior.
 
 Suggested schema version:
@@ -182,7 +183,8 @@ call creates a fresh caller-owned read-only connection.
 - Keep file paths explicit in `from_mapping_files()`.
 - Keep selection output flat, matching Reactome, WikiPathways, StringDB, and
   OmniPath grouped selection behavior.
-- Cache the full mapping frame on the `KEGGDatabase` instance after first materialize.
+- Keep mapping execution replayable; do not make a full eager mapping cache part
+  of the public contract.
 - Use Polars joins and projections rather than manual row loops.
 - Raise targeted `ValueError` when mapping-only methods are called on a BRITE
   snapshot.
@@ -192,7 +194,7 @@ call creates a fresh caller-owned read-only connection.
 Focused tests cover:
 
 - `from_mapping_files()` with required and optional files
-- `extract_mapping()` normalization and many-to-many expansion
+- `mappings()` normalization and many-to-many expansion
 - `select_ids(..., namespace="uniprot")`
 - `select_ids(..., namespace="ncbi_gene")`
 - `select_ids(..., namespace="kegg_gene")`

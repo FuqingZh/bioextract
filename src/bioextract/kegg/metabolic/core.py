@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import gzip
 import os
 import re
@@ -12,7 +13,9 @@ from typing import Any, Literal
 
 import duckdb
 import polars as pl
+from polars._typing import SchemaDict
 
+from bioextract._lazy import register_deferred_frame_source
 from bioextract._publication import (
     DuckDBWriteResult,
     validate_duckdb_metadata_v1,
@@ -153,6 +156,77 @@ def _paths(
             f"KEGG metabolic input role {role!r} must resolve to at least one file"
         )
     return paths
+
+
+_METABOLIC_TABLE_SCHEMAS: Mapping[str, SchemaDict] = {
+    "reaction": {
+        "reaction_id": pl.String,
+        "name": pl.String,
+        "definition": pl.String,
+        "equation": pl.String,
+        "is_reversible": pl.Boolean,
+    },
+    "reaction_participant": {
+        "reaction_id": pl.String,
+        "side": pl.String,
+        "position": pl.Int64,
+        "participant_namespace": pl.String,
+        "participant_id": pl.String,
+        "coefficient_text": pl.String,
+        "coefficient_numeric": pl.Float64,
+    },
+    "reaction_enzyme": {"reaction_id": pl.String, "ec_number": pl.String},
+    "reaction_ko": {"reaction_id": pl.String, "ko_id": pl.String},
+    "reaction_module": {"reaction_id": pl.String, "module_id": pl.String},
+    "reaction_pathway": {"reaction_id": pl.String, "pathway_id": pl.String},
+    "compound": {
+        "compound_id": pl.String,
+        "name": pl.String,
+        "formula": pl.String,
+        "exact_mass": pl.Float64,
+        "molecular_weight": pl.Float64,
+    },
+    "compound_cross_reference": {
+        "compound_id": pl.String,
+        "namespace": pl.String,
+        "external_id": pl.String,
+        "relationship": pl.String,
+    },
+    "reaction_cross_reference": {
+        "reaction_id": pl.String,
+        "namespace": pl.String,
+        "external_id": pl.String,
+        "relationship": pl.String,
+    },
+}
+
+
+def _table_columns(publication: MetabolicPublication, table: str) -> list[str]:
+    """Return the contract columns for a generated metabolic relation."""
+    del publication
+    try:
+        return list(_METABOLIC_TABLE_SCHEMAS[table])
+    except KeyError as error:
+        raise KeyError(f"Unknown KEGG metabolic table: {table}") from error
+
+
+def _selection_schema(columns: Iterable[str]) -> SchemaDict:
+    types: dict[str, Any] = {
+        "group_id": pl.String,
+        "input_id": pl.String,
+        "input_namespace": pl.String,
+        "anchor_type": pl.String,
+        "anchor_id": pl.String,
+        "match_type": pl.String,
+        "entity_type": pl.String,
+        "entity_id": pl.String,
+        "reason": pl.String,
+    }
+    for table_schema in _METABOLIC_TABLE_SCHEMAS.values():
+        for name, dtype in table_schema.items():
+            if name not in types:
+                types[name] = dtype
+    return {column: types.get(column, pl.String) for column in columns}
 
 
 def from_metabolic_files(
@@ -739,7 +813,7 @@ class KEGGMetabolicSelection:
         >>> selection = db.select_ids(  # doctest: +SKIP
         ...     ["CHEBI:15377"], namespace="chebi"
         ... )
-        >>> selection.extract_reactions().height >= 1  # doctest: +SKIP
+        >>> selection.reactions().collect().height >= 1  # doctest: +SKIP
         True
     """
 
@@ -848,15 +922,32 @@ class KEGGMetabolicSelection:
                 f"KEGG metabolic publication lacks required relations: {missing}"
             )
 
-    def extract_matches(self) -> pl.DataFrame:
-        """Return canonical anchors resolved from every input identifier.
+    def matches(self) -> pl.LazyFrame:
+        """Return canonical anchors resolved from every input identifier lazily.
 
         Examples:
-            >>> selection.extract_matches().select(  # doctest: +SKIP
+            >>> selection.matches().select(  # doctest: +SKIP
             ...     "input_id", "entity_id"
-            ... ).columns
+            ... ).collect_schema().names()
             ['input_id', 'entity_id']
         """
+        snapshot = copy.copy(self)
+        prefix = ["group_id"] if self.is_grouped else []
+        return register_deferred_frame_source(
+            schema=_selection_schema(
+                prefix
+                + [
+                    "input_id",
+                    "input_namespace",
+                    "match_type",
+                    "entity_type",
+                    "entity_id",
+                ]
+            ),
+            frame=lambda: snapshot._eager_matches(),
+        )
+
+    def _eager_matches(self) -> pl.DataFrame:
         if self._matches is not None:
             return self._matches
         matches = self._resolve_unique_matches()
@@ -1090,7 +1181,7 @@ class KEGGMetabolicSelection:
     def _reaction_lineage(self) -> pl.DataFrame:
         if self._lineage is not None:
             return self._lineage
-        matches = self.extract_matches()
+        matches = self._eager_matches()
         prefix = ["group_id"] if self.is_grouped else []
         schema = pl.Schema(
             dict.fromkeys(
@@ -1228,71 +1319,144 @@ class KEGGMetabolicSelection:
         )
         return result
 
-    def extract_reactions(self) -> pl.DataFrame:
-        """Return selected reactions with input and anchor lineage.
+    def reactions(self) -> pl.LazyFrame:
+        """Return selected reactions with input and anchor lineage lazily.
 
         Examples:
-            >>> selection.extract_reactions().select(  # doctest: +SKIP
+            >>> selection.reactions().select(  # doctest: +SKIP
             ...     "reaction_id", "equation"
-            ... ).columns
+            ... ).collect_schema().names()
             ['reaction_id', 'equation']
         """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=_selection_schema(
+                (["group_id"] if self.is_grouped else [])
+                + ["input_id", "input_namespace", "anchor_type", "anchor_id"]
+                + _table_columns(self.publication, "reaction")
+            ),
+            frame=lambda: snapshot._eager_reactions(),
+        )
+
+    def _eager_reactions(self) -> pl.DataFrame:
         return self._extract("reaction", "reaction_id")
 
-    def extract_participants(self) -> pl.DataFrame:
-        """Return ordered left/right participants of selected reactions.
+    def participants(self) -> pl.LazyFrame:
+        """Return ordered left/right participants lazily.
 
         Examples:
-            >>> selection.extract_participants().select(  # doctest: +SKIP
+            >>> selection.participants().select(  # doctest: +SKIP
             ...     "reaction_id", "side", "participant_id"
-            ... ).columns
+            ... ).collect_schema().names()
             ['reaction_id', 'side', 'participant_id']
         """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=_selection_schema(
+                (["group_id"] if self.is_grouped else [])
+                + ["input_id", "input_namespace", "anchor_type", "anchor_id"]
+                + _table_columns(self.publication, "reaction_participant")
+            ),
+            frame=lambda: snapshot._eager_participants(),
+        )
+
+    def _eager_participants(self) -> pl.DataFrame:
         return self._extract("reaction_participant", "reaction_id")
 
-    def extract_enzymes(self) -> pl.DataFrame:
-        """Return EC links owned by the selected reactions.
+    def enzymes(self) -> pl.LazyFrame:
+        """Return EC links owned by the selected reactions lazily.
 
         Examples:
-            >>> selection.extract_enzymes().select(  # doctest: +SKIP
+            >>> selection.enzymes().select(  # doctest: +SKIP
             ...     "reaction_id", "ec_number"
-            ... ).columns
+            ... ).collect_schema().names()
             ['reaction_id', 'ec_number']
         """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=_selection_schema(
+                (["group_id"] if self.is_grouped else [])
+                + ["input_id", "input_namespace", "anchor_type", "anchor_id"]
+                + _table_columns(self.publication, "reaction_enzyme")
+            ),
+            frame=lambda: snapshot._eager_enzymes(),
+        )
+
+    def _eager_enzymes(self) -> pl.DataFrame:
         return self._extract("reaction_enzyme", "reaction_id")
 
-    def extract_kos(self) -> pl.DataFrame:
-        """Return KO links owned by the selected reactions.
+    def kos(self) -> pl.LazyFrame:
+        """Return KO links owned by the selected reactions lazily.
 
         Examples:
-            >>> selection.extract_kos().select(  # doctest: +SKIP
+            >>> selection.kos().select(  # doctest: +SKIP
             ...     "reaction_id", "ko_id"
-            ... ).columns
+            ... ).collect_schema().names()
             ['reaction_id', 'ko_id']
         """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=_selection_schema(
+                (["group_id"] if self.is_grouped else [])
+                + ["input_id", "input_namespace", "anchor_type", "anchor_id"]
+                + _table_columns(self.publication, "reaction_ko")
+            ),
+            frame=lambda: snapshot._eager_kos(),
+        )
+
+    def _eager_kos(self) -> pl.DataFrame:
         return self._extract("reaction_ko", "reaction_id")
 
-    def extract_modules(self) -> pl.DataFrame:
-        """Return module memberships of the selected reactions.
+    def modules(self) -> pl.LazyFrame:
+        """Return module memberships of the selected reactions lazily.
 
         Examples:
-            >>> selection.extract_modules().select(  # doctest: +SKIP
+            >>> selection.modules().select(  # doctest: +SKIP
             ...     "reaction_id", "module_id"
-            ... ).columns
+            ... ).collect_schema().names()
             ['reaction_id', 'module_id']
         """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=_selection_schema(
+                (["group_id"] if self.is_grouped else [])
+                + ["input_id", "input_namespace", "anchor_type", "anchor_id"]
+                + _table_columns(self.publication, "reaction_module")
+            ),
+            frame=lambda: snapshot._eager_modules(),
+        )
+
+    def _eager_modules(self) -> pl.DataFrame:
         return self._extract("reaction_module", "reaction_id")
 
-    def extract_compounds(self) -> pl.DataFrame:
-        """Return compound participants and available compound facts.
+    def compounds(self) -> pl.LazyFrame:
+        """Return compound participants and facts lazily.
 
         Examples:
-            >>> selection.extract_compounds().select(  # doctest: +SKIP
+            >>> selection.compounds().select(  # doctest: +SKIP
             ...     "participant_id", "name"
-            ... ).columns
+            ... ).collect_schema().names()
             ['participant_id', 'name']
         """
-        participants = self.extract_participants().filter(
+        snapshot = copy.copy(self)
+        prefix = ["group_id"] if self.is_grouped else []
+        participant_columns = (
+            prefix
+            + ["input_id", "input_namespace", "anchor_type", "anchor_id"]
+            + _table_columns(self.publication, "reaction_participant")
+        )
+        columns = participant_columns + [
+            column
+            for column in _table_columns(self.publication, "compound")
+            if column not in {"compound_id"}
+        ]
+        return register_deferred_frame_source(
+            schema=_selection_schema(columns),
+            frame=lambda: snapshot._eager_compounds(),
+        )
+
+    def _eager_compounds(self) -> pl.DataFrame:
+        participants = self._eager_participants().filter(
             pl.col("participant_namespace") == "kegg_compound"
         )
         self._require("compound")
@@ -1305,29 +1469,63 @@ class KEGGMetabolicSelection:
             how="left",
         )
 
-    def extract_pathway_memberships(self) -> pl.DataFrame:
-        """Return reference-pathway memberships of selected reactions.
+    def pathway_memberships(self) -> pl.LazyFrame:
+        """Return reference-pathway memberships lazily.
 
         Examples:
-            >>> selection.extract_pathway_memberships().select(  # doctest: +SKIP
+            >>> selection.pathway_memberships().select(  # doctest: +SKIP
             ...     "reaction_id", "pathway_id"
-            ... ).columns
+            ... ).collect_schema().names()
             ['reaction_id', 'pathway_id']
         """
+        snapshot = copy.copy(self)
+        return register_deferred_frame_source(
+            schema=_selection_schema(
+                (["group_id"] if self.is_grouped else [])
+                + ["input_id", "input_namespace", "anchor_type", "anchor_id"]
+                + _table_columns(self.publication, "reaction_pathway")
+            ),
+            frame=lambda: snapshot._eager_pathway_memberships(),
+        )
+
+    def _eager_pathway_memberships(self) -> pl.DataFrame:
         return self._extract("reaction_pathway", "reaction_id")
 
-    def extract_cross_references(self) -> pl.DataFrame:
-        """Return compound and reaction cross-references in the selection.
+    def cross_references(self) -> pl.LazyFrame:
+        """Return compound and reaction cross-references lazily.
 
         Examples:
-            >>> selection.extract_cross_references().select(  # doctest: +SKIP
+            >>> selection.cross_references().select(  # doctest: +SKIP
             ...     "namespace", "external_id"
-            ... ).columns
+            ... ).collect_schema().names()
             ['namespace', 'external_id']
         """
+        snapshot = copy.copy(self)
+        columns = ["group_id"] if self.is_grouped else []
+        columns += ["input_id", "input_namespace", "anchor_type", "anchor_id"]
+        columns += _table_columns(self.publication, "reaction_participant")
+        if "compound" in self.publication.tables:
+            columns += [
+                column
+                for column in _table_columns(self.publication, "compound")
+                if column != "compound_id"
+            ]
+        for table in ("compound_cross_reference", "reaction_cross_reference"):
+            if table in self.publication.tables:
+                columns += [
+                    column
+                    for column in _table_columns(self.publication, table)
+                    if column not in columns
+                ]
+        return register_deferred_frame_source(
+            schema=_selection_schema(dict.fromkeys(columns)),
+            frame=lambda: snapshot._eager_cross_references(),
+        )
+
+    def _eager_cross_references(self) -> pl.DataFrame:
         frames: list[pl.DataFrame] = []
-        compounds = self.extract_compounds()
-        reactions = self.extract_reactions()
+        compounds = self._eager_compounds()
+        reactions = self._eager_reactions()
         with duckdb.connect(str(self.publication.path), read_only=True) as con:
             if "compound_cross_reference" in self.publication.tables:
                 frames.append(
@@ -1349,15 +1547,23 @@ class KEGGMetabolicSelection:
                 )
         return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
 
-    def extract_unmatched_ids(self) -> pl.DataFrame:
-        """Return normalized inputs that resolved to no canonical anchor.
+    def unmatched_ids(self) -> pl.LazyFrame:
+        """Return normalized inputs that resolved to no canonical anchor lazily.
 
         Examples:
-            >>> selection.extract_unmatched_ids().select(  # doctest: +SKIP
+            >>> selection.unmatched_ids().select(  # doctest: +SKIP
             ...     "input_id", "reason"
-            ... ).columns
+            ... ).collect_schema().names()
             ['input_id', 'reason']
         """
+        snapshot = copy.copy(self)
+        prefix = ["group_id"] if self.is_grouped else []
+        return register_deferred_frame_source(
+            schema=_selection_schema(prefix + ["input_id", "reason"]),
+            frame=lambda: snapshot._eager_unmatched_ids(),
+        )
+
+    def _eager_unmatched_ids(self) -> pl.DataFrame:
         return self._expand_groups(self._resolve_unique_unmatched())
 
     def _resolve_unique_unmatched(self) -> pl.DataFrame:

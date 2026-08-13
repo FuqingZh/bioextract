@@ -329,7 +329,7 @@ def test_all_role_provenance_and_mixed_reaction_xref_capability(
 
     database = RheaDatabase.from_duckdb(path)
     assert database.snapshot.scope == "publication"
-    matches = database.select_reactions(["1.1.1.1"], namespace="ec").extract_matches()
+    matches = database.select_reactions(["1.1.1.1"], namespace="ec").matches().collect()
     assert matches["rhea_id"].to_list() == [10000]
 
 
@@ -401,7 +401,7 @@ def test_reaction_xref_publication_persists_partial_construction_scope(
 
     database = RheaDatabase.from_duckdb(path)
     assert database.snapshot.scope == "publication"
-    matches = database.select_reactions(["1.1.1.1"], namespace="ec").extract_matches()
+    matches = database.select_reactions(["1.1.1.1"], namespace="ec").matches().collect()
     assert matches["rhea_id"].to_list() == [10000]
 
 

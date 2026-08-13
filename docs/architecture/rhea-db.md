@@ -140,16 +140,20 @@ identity; the pH 7.3 mapping is not applied implicitly.
 
 Selections are immutable deferred query plans. They normalize identifiers,
 validate capabilities, and retain query policy without executing DuckDB.
-Terminal methods execute through short-lived read-only connections and return
-eager Polars `DataFrame` objects:
+Relation methods return native Polars `LazyFrame` objects:
 
-- `extract_matches()`;
-- `extract_reactions()`;
-- `extract_participants()`;
-- `extract_cross_references()`;
-- `extract_unmatched_ids()`;
-- `extract_publications()`;
-- `extract_relationships()`.
+- `matches()`;
+- `reactions()`;
+- `participants()`;
+- `cross_references()` (external xrefs only);
+- `uniprot_mappings()` (normalized reaction-to-UniProt edges);
+- `uniprot_neighborhoods()` (reaction-centric `List(Struct)` lists);
+- `unmatched_ids()`;
+- `publications()`;
+- `relationships()`.
+
+Callers choose `collect()`, `collect_batches()`, or `sink_*()`; each execution
+opens and closes its own short-lived read-only DuckDB resources.
 
 All matched outputs retain `input_id`, `input_namespace`, `rhea_id`, `master_id`,
 and `direction`; grouped selections additionally retain `group_id`. There is no

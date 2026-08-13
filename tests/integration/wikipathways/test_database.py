@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 import duckdb
+import polars as pl
 import pytest
 
 from bioextract.errors import CapabilityError, IntegrityError
@@ -56,7 +57,7 @@ def test_from_gmt_resolves_literal_sequence_and_glob_deterministically(
             file_b.resolve(),
         )
     )
-    assert sequence.extract_pathway()["wiki_pathways_id"].to_list() == ["WP1", "WP2"]
+    assert sequence.pathways().collect()["wiki_pathways_id"].to_list() == ["WP1", "WP2"]
 
 
 def test_from_gmt_glob_false_treats_patterns_literally(tmp_path: Path) -> None:
@@ -139,8 +140,10 @@ def test_from_gmt_requires_common_collection(
         "B%WikiPathways_20260511%WP2%Mus musculus\thttps://example/WP2\t2",
     )
 
-    with pytest.raises(ValueError, match="common Collection"):
-        WikiPathwaysDatabase.from_gmt([file_a, file_b]).extract_pathway()
+    with pytest.raises(
+        (ValueError, pl.exceptions.ComputeError), match="common Collection"
+    ):
+        WikiPathwaysDatabase.from_gmt([file_a, file_b]).pathways().collect()
 
 
 def test_from_gmt_rejects_empty_file_alongside_valid_file(tmp_path: Path) -> None:
@@ -152,10 +155,10 @@ def test_from_gmt_rejects_empty_file_alongside_valid_file(tmp_path: Path) -> Non
     empty.write_text("\n \t\n", encoding="utf-8")
 
     with pytest.raises(
-        ValueError,
+        (ValueError, pl.exceptions.ComputeError),
         match=rf"at least one non-empty pathway record: path={re.escape(str(empty))}",
     ):
-        WikiPathwaysDatabase.from_gmt([valid, empty]).extract_pathway()
+        WikiPathwaysDatabase.from_gmt([valid, empty]).pathways().collect()
 
 
 def test_from_gmt_rejects_single_empty_file(tmp_path: Path) -> None:
@@ -163,10 +166,10 @@ def test_from_gmt_rejects_single_empty_file(tmp_path: Path) -> None:
     empty.write_text("", encoding="utf-8")
 
     with pytest.raises(
-        ValueError,
+        (ValueError, pl.exceptions.ComputeError),
         match=rf"at least one non-empty pathway record: path={re.escape(str(empty))}",
     ):
-        WikiPathwaysDatabase.from_gmt(empty).extract_pathway()
+        WikiPathwaysDatabase.from_gmt(empty).pathways().collect()
 
 
 @pytest.mark.parametrize("collection", ["Reactome_20260510", "WikiPathways_"])
@@ -179,8 +182,10 @@ def test_from_gmt_rejects_invalid_collection_version(
         f"A%{collection}%WP1%Homo sapiens\thttps://example/WP1\t1",
     )
 
-    with pytest.raises(ValueError, match="WikiPathways GMT Collection"):
-        WikiPathwaysDatabase.from_gmt(file_gmt).extract_pathway()
+    with pytest.raises(
+        (ValueError, pl.exceptions.ComputeError), match="WikiPathways GMT Collection"
+    ):
+        WikiPathwaysDatabase.from_gmt(file_gmt).pathways().collect()
 
 
 def test_from_gmt_extracts_one_common_version_from_collection(
@@ -195,7 +200,7 @@ def test_from_gmt_extracts_one_common_version_from_collection(
         "B%WikiPathways_20260510%WP2%Mus musculus\thttps://example/WP2\t2",
     )
 
-    pathways = WikiPathwaysDatabase.from_gmt([file_a, file_b]).extract_pathway()
+    pathways = WikiPathwaysDatabase.from_gmt([file_a, file_b]).pathways().collect()
     assert pathways["collection"].unique().to_list() == ["WikiPathways_20260510"]
     assert pathways["version"].unique().to_list() == ["20260510"]
 
@@ -216,15 +221,18 @@ def test_from_gmt_rejects_duplicate_ids_within_or_across_files(
         else write_gmt(tmp_path / "both.gmt", row_a, row_b)
     )
 
-    with pytest.raises(ValueError, match="wiki_pathways_id must be unique"):
-        WikiPathwaysDatabase.from_gmt(sources).extract_pathway()
+    with pytest.raises(
+        (ValueError, pl.exceptions.ComputeError),
+        match="wiki_pathways_id must be unique",
+    ):
+        WikiPathwaysDatabase.from_gmt(sources).pathways().collect()
 
 
 def test_extract_pathway_term_frames_and_species_filter(tmp_path: Path) -> None:
     file_gmt = write_wikipathways_fixture(tmp_path)
-    db = WikiPathwaysDatabase.from_gmt(file_gmt, species="Homo sapiens")
+    db = WikiPathwaysDatabase.from_gmt(file_gmt).with_species("Homo sapiens")
 
-    assert db.extract_pathway().to_dicts() == [
+    assert db.pathways().collect().to_dicts() == [
         {
             "wiki_pathways_id": "WP100",
             "pathway_name": "Glutathione metabolism",
@@ -244,13 +252,13 @@ def test_extract_pathway_term_frames_and_species_filter(tmp_path: Path) -> None:
             "gene_count": 2,
         },
     ]
-    assert db.extract_term2gene().to_dicts() == [
+    assert db.pathway_genes().collect().to_dicts() == [
         {"wiki_pathways_id": "WP100", "gene_id": "2678"},
         {"wiki_pathways_id": "WP100", "gene_id": "2687"},
         {"wiki_pathways_id": "WP106", "gene_id": "2806"},
         {"wiki_pathways_id": "WP106", "gene_id": "435"},
     ]
-    assert db.extract_term2name().columns == [
+    assert db.pathway_names().collect().columns == [
         "wiki_pathways_id",
         "pathway_name",
         "species",
@@ -262,10 +270,10 @@ def test_extract_pathway_term_frames_and_species_filter(tmp_path: Path) -> None:
 
 def test_single_and_grouped_selection(tmp_path: Path) -> None:
     file_gmt = write_wikipathways_fixture(tmp_path)
-    db = WikiPathwaysDatabase.from_gmt(file_gmt, species="Homo sapiens")
+    db = WikiPathwaysDatabase.from_gmt(file_gmt).with_species("Homo sapiens")
 
     selection = db.select_ids(["2687", " 435 ", "MISSING", ""])
-    assert selection.extract_mapping().to_dicts() == [
+    assert selection.mappings().collect().to_dicts() == [
         {
             "input_id": "2687",
             "gene_id": "2687",
@@ -283,21 +291,21 @@ def test_single_and_grouped_selection(tmp_path: Path) -> None:
             "url": "https://www.wikipathways.org/instance/WP106",
         },
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [{"input_id": "MISSING"}]
+    assert selection.unmatched_ids().collect().to_dicts() == [{"input_id": "MISSING"}]
 
     grouped = db.select_groups({"A": ["2687"], "B": ["2687", "MISSING"]})
-    df_grouped_mapping = grouped.extract_mapping()
-    assert grouped.extract_mapping() is df_grouped_mapping
+    df_grouped_mapping = grouped.mappings().collect()
+    assert grouped.mappings().collect().equals(df_grouped_mapping)
     assert df_grouped_mapping.columns[0] == "group_id"
     assert df_grouped_mapping.height == 2
-    df_unmatched = grouped.extract_unmatched_ids()
-    assert grouped.extract_unmatched_ids() is df_unmatched
+    df_unmatched = grouped.unmatched_ids().collect()
+    assert grouped.unmatched_ids().collect().equals(df_unmatched)
     assert df_unmatched.to_dicts() == [{"group_id": "B", "input_id": "MISSING"}]
 
 
 def test_build_tidy_writes_duckdb_without_sidecar(tmp_path: Path) -> None:
     file_gmt = write_wikipathways_fixture(tmp_path)
-    db = WikiPathwaysDatabase.from_gmt(file_gmt, species="Homo sapiens")
+    db = WikiPathwaysDatabase.from_gmt(file_gmt).with_species("Homo sapiens")
 
     tidy = db.build_tidy()
     assert set(tidy.frames) == {"pathway", "term2gene", "term2name"}
@@ -315,12 +323,11 @@ def test_species_filter_keeps_all_file_provenance(tmp_path: Path) -> None:
         tmp_path / "mouse.gmt",
         "Mouse%WikiPathways_20260510%WP2%Mus musculus\thttps://example/WP2\t2",
     )
-    db = WikiPathwaysDatabase.from_gmt(
-        [file_mouse, file_human],
-        species="Homo sapiens",
+    db = WikiPathwaysDatabase.from_gmt([file_mouse, file_human]).with_species(
+        "Homo sapiens"
     )
 
-    assert db.extract_pathway()["wiki_pathways_id"].to_list() == ["WP1"]
+    assert db.pathways().collect()["wiki_pathways_id"].to_list() == ["WP1"]
     path_out = tmp_path / "wikipathways.duckdb"
     db.write_duckdb(path_out)
     with duckdb.connect(str(path_out), read_only=True) as connection:
@@ -349,27 +356,29 @@ def test_duckdb_reopen_matches_source_extraction_selection_and_native_sql(
     tmp_path: Path,
 ) -> None:
     source = WikiPathwaysDatabase.from_gmt(
-        write_wikipathways_fixture(tmp_path), species="Homo sapiens"
-    )
+        write_wikipathways_fixture(tmp_path)
+    ).with_species("Homo sapiens")
     publication = tmp_path / "wikipathways.duckdb"
     source.write_duckdb(publication)
     reopened = WikiPathwaysDatabase.from_duckdb(publication)
 
-    assert reopened.extract_pathway().equals(source.extract_pathway())
-    assert reopened.extract_term2gene().equals(source.extract_term2gene())
-    assert reopened.extract_term2name().equals(source.extract_term2name())
+    assert reopened.pathways().collect().equals(source.pathways().collect())
+    assert reopened.pathway_genes().collect().equals(source.pathway_genes().collect())
+    assert reopened.pathway_names().collect().equals(source.pathway_names().collect())
     assert (
         reopened.select_ids(["2687", "MISSING"])
-        .extract_mapping()
-        .equals(source.select_ids(["2687", "MISSING"]).extract_mapping())
+        .mappings()
+        .collect()
+        .equals(source.select_ids(["2687", "MISSING"]).mappings().collect())
     )
     assert (
         reopened.select_groups({"case": ["2687"], "control": ["435", "MISSING"]})
-        .extract_mapping()
+        .mappings()
+        .collect()
         .equals(
-            source.select_groups(
-                {"case": ["2687"], "control": ["435", "MISSING"]}
-            ).extract_mapping()
+            source.select_groups({"case": ["2687"], "control": ["435", "MISSING"]})
+            .mappings()
+            .collect()
         )
     )
 
@@ -383,6 +392,53 @@ def test_duckdb_reopen_matches_source_extraction_selection_and_native_sql(
     finally:
         first.close()
         second.close()
+
+
+def test_with_species_scopes_pathway_genes_before_entrez_matching(
+    tmp_path: Path,
+) -> None:
+    source_file = write_gmt(
+        tmp_path / "same-gene.gmt",
+        "Human pathway%WikiPathways_20260510%WPH%Homo sapiens	https://example/WPH	7",
+        "Mouse pathway%WikiPathways_20260510%WPM%Mus musculus	https://example/WPM	7",
+    )
+    database = WikiPathwaysDatabase.from_gmt(source_file)
+    human = database.with_species(" Homo sapiens ")
+
+    assert database.species is None
+    assert human.species == "Homo sapiens"
+    assert isinstance(human.pathways(), pl.LazyFrame)
+    assert human.pathways().collect()["wiki_pathways_id"].to_list() == ["WPH"]
+    assert human.pathway_genes().collect().to_dicts() == [
+        {"wiki_pathways_id": "WPH", "gene_id": "7"}
+    ]
+    assert human.select_ids(["7"]).mappings().collect().select(
+        "input_id", "wiki_pathways_id"
+    ).to_dicts() == [{"input_id": "7", "wiki_pathways_id": "WPH"}]
+    assert human.select_ids(["8"]).unmatched_ids().collect().to_dicts() == [
+        {"input_id": "8"}
+    ]
+
+    scoped_publication = tmp_path / "same-gene-human.duckdb"
+    human.write_duckdb(scoped_publication)
+    with duckdb.connect(str(scoped_publication), read_only=True) as connection:
+        assert connection.execute(
+            "SELECT value FROM _bioextract.metadata WHERE key = 'bioextract.scope'"
+        ).fetchone() == ('{"species":"Homo sapiens"}',)
+    reopened_scoped = WikiPathwaysDatabase.from_duckdb(scoped_publication)
+    assert reopened_scoped.species == "Homo sapiens"
+    with pytest.raises(CapabilityError, match="scoped to"):
+        reopened_scoped.with_species("Mus musculus")
+
+    publication = tmp_path / "same-gene.duckdb"
+    database.write_duckdb(publication)
+    reopened_human = WikiPathwaysDatabase.from_duckdb(publication).with_species(
+        "Homo sapiens"
+    )
+    assert reopened_human.pathways().collect()["wiki_pathways_id"].to_list() == ["WPH"]
+    assert reopened_human.select_ids(["7"]).mappings().collect().select(
+        "input_id", "wiki_pathways_id"
+    ).to_dicts() == [{"input_id": "7", "wiki_pathways_id": "WPH"}]
 
 
 def test_duckdb_reopen_validates_bounded_publication_contract(tmp_path: Path) -> None:
@@ -426,7 +482,7 @@ def test_reopened_capabilities_and_cached_terminals_recheck_identity(
     source.write_duckdb(publication)
     reopened = WikiPathwaysDatabase.from_duckdb(publication)
     selection = reopened.select_ids(["2687"])
-    selection.extract_mapping()
+    selection.mappings().collect()
 
     with pytest.raises(CapabilityError, match="GMT source handle"):
         reopened.write_duckdb(tmp_path / "copy.duckdb")
@@ -441,10 +497,10 @@ def test_reopened_capabilities_and_cached_terminals_recheck_identity(
     WikiPathwaysDatabase.from_gmt(source_file).write_duckdb(replacement)
     replacement.replace(publication)
 
-    with pytest.raises(IntegrityError, match="replaced"):
-        selection.extract_mapping()
-    with pytest.raises(IntegrityError, match="replaced"):
-        reopened.extract_pathway()
+    with pytest.raises((IntegrityError, pl.exceptions.ComputeError), match="replaced"):
+        selection.mappings().collect()
+    with pytest.raises((IntegrityError, pl.exceptions.ComputeError), match="replaced"):
+        reopened.pathways().collect()
     with pytest.raises(IntegrityError, match="replaced"):
         reopened.connect()
 
@@ -459,5 +515,8 @@ def test_from_gmt_rejects_missing_and_malformed_files(
 
     file_bad = tmp_path / "bad.gmt"
     file_bad.write_text("bad\thttps://example.org\t1\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="four '%' separated fields"):
-        WikiPathwaysDatabase.from_gmt(file_bad).extract_pathway()
+    with pytest.raises(
+        (ValueError, pl.exceptions.ComputeError),
+        match="four '%' separated fields",
+    ):
+        WikiPathwaysDatabase.from_gmt(file_bad).pathways().collect()

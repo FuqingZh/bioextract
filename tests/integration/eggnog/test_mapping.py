@@ -7,6 +7,7 @@ import warnings
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
+import polars as pl
 import pytest
 
 from bioextract.eggnog import EggNOGDatabase
@@ -66,7 +67,8 @@ def test_selected_mapping_from_sqlite_expands_og_cog_categories(
 
     df_mapping = (
         db.select_ids(["9606.ENSP1"])
-        .extract_mapping()
+        .mappings()
+        .collect()
         .select(
             "name",
             "og",
@@ -134,7 +136,7 @@ def test_select_ids_queries_subset_and_reports_unmapped(tmp_path: Path) -> None:
         ["9606.ENSP1", "9606.MISSING"],
     )
 
-    df_mapping = selection.extract_mapping()
+    df_mapping = selection.mappings().collect()
     assert df_mapping.select(
         "input_id", "input_namespace", "cog_category"
     ).to_dicts() == [
@@ -154,7 +156,7 @@ def test_select_ids_queries_subset_and_reports_unmapped(tmp_path: Path) -> None:
             "cog_category": "S",
         },
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [
+    assert selection.unmatched_ids().collect().to_dicts() == [
         {"input_id": "9606.MISSING"}
     ]
 
@@ -173,8 +175,8 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
         },
     )
 
-    df_mapping = selection.extract_mapping()
-    assert selection.extract_mapping() is df_mapping
+    df_mapping = selection.mappings().collect()
+    assert selection.mappings().collect().equals(df_mapping)
     assert df_mapping.columns[:3] == [
         "group_id",
         "input_id",
@@ -188,7 +190,7 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
         {"group_id": "up", "cog_category": "G"},
         {"group_id": "up", "cog_category": "S"},
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [
+    assert selection.unmatched_ids().collect().to_dicts() == [
         {"group_id": "down", "input_id": "9606.MISSING"}
     ]
 
@@ -217,13 +219,15 @@ def test_grouped_selection_queries_one_global_unique_id_set(
         }
     )
 
-    mapping = selection.extract_mapping()
-    selection.extract_mapping()
-    selection.extract_unmatched_ids()
-    selection.extract_unmatched_ids()
+    mapping = selection.mappings().collect()
+    selection.mappings().collect()
+    selection.unmatched_ids().collect()
+    selection.unmatched_ids().collect()
 
     assert mapping.height == 6
-    assert queried_ids == [["9606.ENSP1", "9606.ENSP2", "9606.MISSING"]]
+    expected_ids = ["9606.ENSP1", "9606.ENSP2", "9606.MISSING"]
+    assert queried_ids
+    assert all(ids == expected_ids for ids in queried_ids)
 
 
 def test_gzip_sqlite_is_decompressed_to_tmp_dir(tmp_path: Path) -> None:
@@ -247,7 +251,8 @@ def test_gzip_sqlite_is_decompressed_to_tmp_dir(tmp_path: Path) -> None:
         db.select_ids(
             ["9606.ENSP1"],
         )
-        .extract_mapping()
+        .mappings()
+        .collect()
         .height
         == 3
     )
@@ -268,8 +273,8 @@ def test_gzip_sqlite_cleanup_on_query_failure(tmp_path: Path) -> None:
 
     with pytest.warns(UserWarning):
         db = EggNOGDatabase.from_sqlite(file_gz, temp_dir=scratch)
-    with pytest.raises(sqlite3.DatabaseError):
-        db.select_ids(["9606.ENSP1"]).extract_mapping()
+    with pytest.raises((sqlite3.DatabaseError, pl.exceptions.ComputeError)):
+        db.select_ids(["9606.ENSP1"]).mappings().collect()
 
     assert list(scratch.iterdir()) == []
     assert {path.name for path in tmp_path.iterdir()} == {"broken.db.gz", "scratch"}
@@ -281,4 +286,4 @@ def test_plain_sqlite_emits_no_warning(tmp_path: Path) -> None:
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         db = EggNOGDatabase.from_sqlite(files["db"])
-        db.select_ids(["9606.ENSP1"]).extract_mapping()
+        db.select_ids(["9606.ENSP1"]).mappings().collect()

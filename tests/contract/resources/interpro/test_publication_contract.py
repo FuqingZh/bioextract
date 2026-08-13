@@ -118,11 +118,11 @@ def test_reopened_grouped_selection_preserves_unique_fan_out_and_unmatched(
         {"case": ["sp|P12345|TEST", "missing"], "repeat": ["P12345"]}
     )
 
-    assert selection.extract_mapping().select("group_id", "input_id").to_dicts() == [
+    assert selection.mappings().collect().select("group_id", "input_id").to_dicts() == [
         {"group_id": "case", "input_id": "P12345"},
         {"group_id": "repeat", "input_id": "P12345"},
     ]
-    assert selection.extract_unmatched_ids().to_dicts() == [
+    assert selection.unmatched_ids().collect().to_dicts() == [
         {"group_id": "case", "input_id": "missing"}
     ]
 
@@ -140,8 +140,8 @@ def test_reopened_selection_queries_only_unique_input_ids(
     def reject_full_mapping(_database: InterProDatabase) -> None:
         raise AssertionError("selection must not extract the full mapping")
 
-    monkeypatch.setattr(InterProDatabase, "extract_mapping", reject_full_mapping)
-    assert selection.extract_mapping().height == 1
+    monkeypatch.setattr(InterProDatabase, "_eager_mappings", reject_full_mapping)
+    assert selection.mappings().collect().height == 1
 
 
 def test_reopened_empty_selections_preserve_source_typed_outputs(
@@ -155,14 +155,22 @@ def test_reopened_empty_selections_preserve_source_typed_outputs(
     for ids in ([], ["", "  "]):
         expected = source.select_ids(ids)
         actual = reopened.select_ids(ids)
-        assert actual.extract_mapping().equals(expected.extract_mapping())
-        assert actual.extract_unmatched_ids().equals(expected.extract_unmatched_ids())
+        assert actual.mappings().collect().equals(expected.mappings().collect())
+        assert (
+            actual.unmatched_ids().collect().equals(expected.unmatched_ids().collect())
+        )
 
     expected_grouped = source.select_groups({"empty": ["", "  "]})
     actual_grouped = reopened.select_groups({"empty": ["", "  "]})
-    assert actual_grouped.extract_mapping().equals(expected_grouped.extract_mapping())
-    assert actual_grouped.extract_unmatched_ids().equals(
-        expected_grouped.extract_unmatched_ids()
+    assert (
+        actual_grouped.mappings()
+        .collect()
+        .equals(expected_grouped.mappings().collect())
+    )
+    assert (
+        actual_grouped.unmatched_ids()
+        .collect()
+        .equals(expected_grouped.unmatched_ids().collect())
     )
 
 
@@ -171,11 +179,11 @@ def test_reopened_full_mapping_preserves_source_deduplication_and_order(
 ) -> None:
     duplicate = "P12345\tIPR000001\tKringle\tPF00051\t10\t80"
     source = _source(tmp_path, mapping_rows=(duplicate, duplicate))
-    expected = source.extract_mapping()
+    expected = source.mappings().collect()
     path = tmp_path / "interpro.duckdb"
     source.write_duckdb(path)
 
-    assert InterProDatabase.from_duckdb(path).extract_mapping().equals(expected)
+    assert InterProDatabase.from_duckdb(path).mappings().collect().equals(expected)
 
 
 def test_source_handle_connect_reports_missing_capability(tmp_path: Path) -> None:
@@ -187,8 +195,7 @@ def test_reopened_handle_reports_missing_xml_frame_capability(tmp_path: Path) ->
     path = tmp_path / "interpro.duckdb"
     _source(tmp_path).write_duckdb(path)
 
-    with pytest.raises(CapabilityError, match="XML source handle"):
-        InterProDatabase.from_duckdb(path).xml_frame("entry")
+    assert not hasattr(InterProDatabase.from_duckdb(path), "xml_frame")
 
 
 def test_reopened_handle_reports_missing_publication_source_capability(
@@ -572,11 +579,11 @@ def test_retained_lazy_dataset_rejects_changed_source_before_commit(
 
 def test_xml_cache_rejects_source_identity_change(tmp_path: Path) -> None:
     source = _source(tmp_path)
-    assert source.xml_frame("entry").height == 1
+    assert source._xml_frame("entry").height == 1  # pyright: ignore[reportPrivateUsage]
     xml_path = source.snapshot.file_interpro_xml
     assert xml_path is not None
     with gzip.open(xml_path, "at", encoding="utf-8") as handle:
         handle.write("\n")
 
     with pytest.raises(IntegrityError, match="XML source changed"):
-        source.xml_frame("entry")
+        source._xml_frame("entry")  # pyright: ignore[reportPrivateUsage]
