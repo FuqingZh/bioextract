@@ -1,7 +1,7 @@
 # bioextract Documentation
 
-Version: v1.2
-Date: 2026-08-12
+Version: v1.4
+Date: 2026-08-14
 Status: current
 
 This directory contains durable architecture, data contracts, test standards,
@@ -39,10 +39,11 @@ when a domain does not yet have a dedicated architecture document.
 | Area | Architecture or contract | Test standard | Benchmark |
 | --- | --- | --- | --- |
 | Repository purpose and boundaries | [Domain Access Architecture](architecture/20260729-v1.0-domain-access-architecture.md) | [Repository test standard](testing/README.md) | — |
-| Shared publication output | [Materialized Dataset Contract](architecture/tidy-dataset-contract.md) | [Repository test standard](testing/README.md) | — |
+| Cross-resource lazy relations | [Lazy Domain Query Convergence Plan](implementation-plans/20260812-v1.0-lazy-domain-query-convergence-implementation-plan.md) | [Repository test standard](testing/README.md) | [joint_omics 23362 baseline](benchmarks/20260813-v1.0-joint-omics-23362-lazy-relation-baseline.md) |
+| Shared publication output | [Materialized Dataset Contract](architecture/tidy-dataset-contract.md); [metadata v2 declarative-provenance amendment](implementation-plans/20260813-v1.0-publication-metadata-v2-migration-plan.md) | [Repository test standard](testing/README.md) | — |
 | ChEBI and ChemOnt | [ChEBIDatabase](architecture/chebi-db.md) | [ChEBIDatabase](testing/chebi-db.md) | — |
 | GO ontology and KEGG BRITE | [GO and KEGG Tidy](architecture/go-kegg-tidy.md) | [GO and KEGG Tidy](testing/go-kegg-tidy.md) | — |
-| KEGG organism mapping | [KEGG Mapping DB](architecture/kegg-mapping-db.md) | [KEGG Mapping DB](testing/kegg-mapping-db.md) | — |
+| KEGG organism mapping | [KEGG Mapping DB](architecture/kegg-mapping-db.md); P3 DuckDB-native publisher accepted on the fixed 1,000-organism scope, with [release held](implementation-plans/20260813-v1.0-kegg-mapping-aggregate-publication-implementation-plan.md) pending its separate release gate | [KEGG Mapping DB](testing/kegg-mapping-db.md) | [2026-06 candidate benchmark](benchmarks/20260813-v1.0-kegg-mapping-2026-06-candidate.md); [P3 native publication benchmark](benchmarks/20260814-v1.0-kegg-mapping-p3-native-publication.md) |
 | KEGG metabolic | [KEGG Metabolic Database](architecture/kegg-metabolic-db.md) | [KEGG Metabolic Database](testing/kegg-metabolic-db.md) | [2026-07 baseline](benchmarks/20260730-kegg-metabolic-2026-07-benchmark.md) |
 | Reactome | [ReactomeDatabase](architecture/reactome-db.md) | [ReactomeDatabase](testing/reactome-db.md) | — |
 | WikiPathways | [WikiPathwaysDatabase](architecture/wikipathways-db.md) | [WikiPathwaysDatabase](testing/wikipathways-db.md) | — |
@@ -56,12 +57,34 @@ when a domain does not yet have a dedicated architecture document.
 ## Plans And History
 
 The completed
+[Publication Metadata v2 Source Inventory Migration Plan](implementation-plans/20260813-v1.0-publication-metadata-v2-migration-plan.md)
+removes the duplicated `bioextract.sources` JSON inventory, makes
+`_bioextract.source_file` authoritative, treats it as a declarative resolved
+input inventory, makes bytes and pre-existing hashes optional without an extra
+path/content pass, and requires a coordinated rebuild rather than dual-reading
+metadata v1. The nullable-byte and no-hash-option correction is included in the
+same pre-release contract slice; no compatibility reader or alias is retained.
+
+The accepted
+[KEGG Mapping Aggregate Publication Plan](implementation-plans/20260813-v1.0-kegg-mapping-aggregate-publication-implementation-plan.md)
+depends on metadata v2 and replaces the current one-organism wide `mapping`
+shape with bounded multi-organism discovery, explicit organism scoping,
+aggregate `List(Struct)` gene/KO relations, source/publication lazy parity, and
+an evidence gate before any reverse-lookup acceleration table. Its P3
+DuckDB-native publisher is accepted on the fixed 100/1,000-organism gates;
+package release, a later full build, and formal publication replacement remain
+separately authorized.
+
+The completed
 [Lazy Domain Query Convergence Plan](implementation-plans/20260812-v1.0-lazy-domain-query-convergence-implementation-plan.md)
 defines the repository-wide native `LazyFrame` relation contract, replayable
 DuckDB execution ownership, non-Cartesian Rhea `List(Struct)` neighborhoods,
 species-safe WikiPathways access, public InterPro Pfam annotations, and the
 benchmark gate that precedes any UniProt idmapping selected-ID API. Its final
-repository gate passed with 781 tests.
+repository gate passed with 781 tests. The production-scale
+[joint_omics 23362 baseline](benchmarks/20260813-v1.0-joint-omics-23362-lazy-relation-baseline.md)
+now supplies that workload evidence, confirms shared-execution and physical
+pushdown needs, and keeps the selected-ID public API shape undecided.
 
 The implemented
 [GO Ancestor Projection And Publication Query Pushdown Plan](implementation-plans/20260810-v1.0-go-ancestor-query-implementation-plan.md)

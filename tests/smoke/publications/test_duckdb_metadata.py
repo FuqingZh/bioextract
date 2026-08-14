@@ -38,7 +38,7 @@ def test_configured_duckdb_publications_have_embedded_provenance() -> None:
         assert path.is_file(), f"publication is not a file: {path}"
         inspection = inspect_publication(path)
 
-        assert inspection.metadata_schema_version == "1", path
+        assert inspection.metadata_schema_version == "2", path
         assert inspection.resource_name, path
         assert inspection.resource_schema_version, path
         assert inspection.source_schema_profile, path

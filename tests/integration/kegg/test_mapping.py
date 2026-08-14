@@ -2,287 +2,409 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import duckdb
 import polars as pl
 import pytest
 
-import bioextract.kegg.kegg as kegg_module
+from bioextract.errors import CapabilityError, IntegrityError
 from bioextract.kegg import KEGGDatabase
 
 
-def write_kegg_mapping_fixture(tmp_path: Path) -> dict[str, Path]:
-    files = {
-        "conv_uniprot": tmp_path / "conv_uniprot.tsv",
-        "conv_ncbi_gene": tmp_path / "conv_ncbi_gene.tsv",
-        "gene_ko": tmp_path / "gene_ko.tsv",
-        "gene_pathway": tmp_path / "gene_pathway.tsv",
-        "gene_list": tmp_path / "gene_list.tsv",
-    }
-    files["conv_uniprot"].write_text(
-        "up:P12345\thsa:1\nup:Q9Y243\thsa:2\nup:P12345\thsa:1\n",
-        encoding="utf-8",
-    )
-    files["conv_ncbi_gene"].write_text(
-        "ncbi-geneid:101\thsa:1\nncbi-geneid:102\thsa:2\n",
-        encoding="utf-8",
-    )
-    files["gene_ko"].write_text(
-        "hsa:1\tko:K00001\nhsa:2\tko:K00002\n",
-        encoding="utf-8",
-    )
-    files["gene_pathway"].write_text(
-        "hsa:1\tpath:hsa00010\nhsa:1\tpath:hsa01100\nhsa:2\tpath:hsa04110\n",
-        encoding="utf-8",
-    )
-    files["gene_list"].write_text(
-        "hsa:1\tGENE1; alpha description\nhsa:2\tGENE2\n",
-        encoding="utf-8",
-    )
-    return files
-
-
-def create_mapping_db(files: dict[str, Path]) -> KEGGDatabase:
-    return KEGGDatabase.from_mapping_files(
-        uniprot_conversion=files["conv_uniprot"],
-        ncbi_gene_conversion=files["conv_ncbi_gene"],
-        gene_ko=files["gene_ko"],
-        gene_pathway=files["gene_pathway"],
-        gene_list=files["gene_list"],
-        organism_code="hsa",
-    )
-
-
-def test_extract_mapping_normalizes_and_expands_many_to_many(tmp_path: Path) -> None:
-    db = create_mapping_db(write_kegg_mapping_fixture(tmp_path))
-
-    df_mapping = db.mappings().collect()
-
-    assert df_mapping.columns == [
-        "organism_code",
-        "kegg_gene_id",
-        "uniprot_id",
-        "ncbi_gene_id",
-        "ko_id",
-        "kegg_pathway_id",
-        "pathway_map_id",
-        "gene_symbol",
-        "gene_description",
-    ]
-    assert df_mapping.to_dicts() == [
-        {
-            "organism_code": "hsa",
-            "kegg_gene_id": "hsa:1",
-            "uniprot_id": "P12345",
-            "ncbi_gene_id": "101",
-            "ko_id": "K00001",
-            "kegg_pathway_id": "hsa00010",
-            "pathway_map_id": "map00010",
-            "gene_symbol": "GENE1",
-            "gene_description": "alpha description",
-        },
-        {
-            "organism_code": "hsa",
-            "kegg_gene_id": "hsa:1",
-            "uniprot_id": "P12345",
-            "ncbi_gene_id": "101",
-            "ko_id": "K00001",
-            "kegg_pathway_id": "hsa01100",
-            "pathway_map_id": "map01100",
-            "gene_symbol": "GENE1",
-            "gene_description": "alpha description",
-        },
-        {
-            "organism_code": "hsa",
-            "kegg_gene_id": "hsa:2",
-            "uniprot_id": "Q9Y243",
-            "ncbi_gene_id": "102",
-            "ko_id": "K00002",
-            "kegg_pathway_id": "hsa04110",
-            "pathway_map_id": "map04110",
-            "gene_symbol": "GENE2",
-            "gene_description": None,
-        },
-    ]
-
-
-def test_select_ids_supports_input_id_kinds_and_unmapped(tmp_path: Path) -> None:
-    db = create_mapping_db(write_kegg_mapping_fixture(tmp_path))
-
-    df_uniprot = (
-        db.select_ids(
-            ["sp|P12345|GENE1_HUMAN", "MISSING"],
-            namespace="uniprot",
+def write_mapping_tree(tmp_path: Path) -> Path:
+    root = tmp_path / "mapping"
+    for code, accession, ncbi, ko in (
+        ("hsa", "P12345", "101", "K00001"),
+        ("mmu", "P12345", "201", "K00002"),
+    ):
+        organism = root / code
+        organism.mkdir(parents=True)
+        (organism / "gene_list.tsv").write_text(
+            f"{code}:1\tCDS\t1..100\tGENE1, ALIAS2, ALIAS1; alpha description\n"
+            f"{code}:2\tCDS\tcomplement(200..300)\tsecond description\n",
+            encoding="utf-8",
         )
-        .mappings()
-        .collect()
+        (organism / "conv_uniprot.tsv").write_text(
+            f"up:{accession}\t{code}:1\nup:Q9Y243\t{code}:2\n",
+            encoding="utf-8",
+        )
+        (organism / "conv_ncbi_geneid.tsv").write_text(
+            f"ncbi-geneid:{ncbi}\t{code}:1\n",
+            encoding="utf-8",
+        )
+        (organism / "gene_ko.tsv").write_text(
+            f"{code}:1\tko:{ko}\n{code}:2\tko:K00003\n",
+            encoding="utf-8",
+        )
+        (organism / "gene_pathway.tsv").write_text(
+            f"{code}:1\tpath:{code}00010\n",
+            encoding="utf-8",
+        )
+    (root / "organism").mkdir()
+    (root / "organism" / "list_organism.tsv").write_text(
+        "T01001\thsa\tHomo sapiens\tEukaryotes;Animals\n"
+        "T01002\tmmu\tMus musculus\tEukaryotes;Animals\n",
+        encoding="utf-8",
     )
-    assert df_uniprot.select(
-        "input_id", "input_namespace", "kegg_gene_id"
-    ).to_dicts() == [
-        {"input_id": "P12345", "input_namespace": "uniprot", "kegg_gene_id": "hsa:1"},
-        {"input_id": "P12345", "input_namespace": "uniprot", "kegg_gene_id": "hsa:1"},
-    ]
-    assert db.select_ids(
-        ["P12345", "MISSING"],
-        namespace="uniprot",
-    ).unmatched_ids().collect().to_dicts() == [{"input_id": "MISSING"}]
-
-    df_ncbi = db.select_ids(["102"], namespace="ncbi_gene").mappings().collect()
-    assert df_ncbi.select("input_id", "kegg_gene_id").to_dicts() == [
-        {"input_id": "102", "kegg_gene_id": "hsa:2"}
-    ]
-
-    df_kegg = db.select_ids(["hsa:1"], namespace="kegg_gene").mappings().collect()
-    assert df_kegg.select("input_id", "uniprot_id", "kegg_pathway_id").to_dicts() == [
-        {"input_id": "hsa:1", "uniprot_id": "P12345", "kegg_pathway_id": "hsa00010"},
-        {"input_id": "hsa:1", "uniprot_id": "P12345", "kegg_pathway_id": "hsa01100"},
-    ]
-
-
-def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
-    db = create_mapping_db(write_kegg_mapping_fixture(tmp_path))
-
-    selection = db.select_groups(
-        {"up": ["P12345", "MISSING"], "down": ["Q9Y243"]},
-        namespace="uniprot",
+    (root / "ko").mkdir()
+    (root / "ko" / "ko_pathway.tsv").write_text(
+        "ko:K00001\tpath:map00010\nko:K00001\tpath:ko00010\nko:K00002\tpath:map00020\n",
+        encoding="utf-8",
     )
-
-    df_mapping = selection.mappings().collect()
-    assert df_mapping.columns[:3] == ["group_id", "input_id", "input_namespace"]
-    assert df_mapping.select("group_id", "input_id", "kegg_gene_id").to_dicts() == [
-        {"group_id": "down", "input_id": "Q9Y243", "kegg_gene_id": "hsa:2"},
-        {"group_id": "up", "input_id": "P12345", "kegg_gene_id": "hsa:1"},
-        {"group_id": "up", "input_id": "P12345", "kegg_gene_id": "hsa:1"},
-    ]
-    assert selection.unmatched_ids().collect().to_dicts() == [
-        {"group_id": "up", "input_id": "MISSING"}
-    ]
+    return root
 
 
-def test_select_groups_resolves_unique_ids_once_then_expands_membership(
+def test_directory_factory_exposes_fixed_nested_relations_lazily(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    db = create_mapping_db(write_kegg_mapping_fixture(tmp_path))
-    mapping_calls = 0
-    original_eager_mappings = kegg_module.KEGGDatabase._eager_mappings  # pyright: ignore[reportPrivateUsage]
+    db = KEGGDatabase.from_mapping_directory(write_mapping_tree(tmp_path))
 
-    def counted_eager_mappings(database: KEGGDatabase) -> pl.DataFrame:
-        nonlocal mapping_calls
-        mapping_calls += 1
-        return original_eager_mappings(database)
-
-    monkeypatch.setattr(
-        kegg_module.KEGGDatabase,
-        "_eager_mappings",
-        counted_eager_mappings,
+    gene_lf = db.gene_annotations()
+    assert isinstance(gene_lf, pl.LazyFrame)
+    assert gene_lf.collect_schema()["ko_mappings"] == pl.List(
+        pl.Struct({"ko_id": pl.String})
     )
+    genes = gene_lf.collect().sort("organism_code", "kegg_gene_id")
+    assert genes.height == 4
+    first = genes.row(0, named=True)
+    assert first["gene_aliases"] == ["ALIAS1", "ALIAS2"]
+    assert first["uniprot_mappings"] == [{"uniprot_id": "P12345"}]
+    assert first["pathway_mappings"] == [
+        {"kegg_pathway_id": "hsa00010", "pathway_map_id": "map00010"}
+    ]
+    assert genes.row(1, named=True)["gene_symbol"] is None
+    assert genes.row(1, named=True)["gene_description"] == "second description"
+
+    organisms = db.organisms().collect().sort("organism_code")
+    assert organisms.select("organism_code", "genome_id").to_dicts() == [
+        {"organism_code": "hsa", "genome_id": "T01001"},
+        {"organism_code": "mmu", "genome_id": "T01002"},
+    ]
+    assert organisms["taxonomy_lineage"].to_list() == [
+        ["Eukaryotes", "Animals"],
+        ["Eukaryotes", "Animals"],
+    ]
+
+
+def test_scope_prunes_organisms_but_keeps_global_kos(tmp_path: Path) -> None:
+    db = KEGGDatabase.from_mapping_directory(write_mapping_tree(tmp_path))
+    hsa = db.with_organisms(["hsa", "hsa"])
+
+    assert hsa.organisms().collect()["organism_code"].to_list() == ["hsa"]
+    assert hsa.gene_annotations().collect()["organism_code"].unique().to_list() == [
+        "hsa"
+    ]
+    assert hsa.ko_annotations().collect().sort("ko_id")["ko_id"].to_list() == [
+        "K00001",
+        "K00002",
+        "K00003",
+    ]
+    with pytest.raises(ValueError, match="without case rewriting"):
+        db.with_organisms(["HSA"])
+
+
+def test_direct_and_via_ko_pathways_remain_distinct(tmp_path: Path) -> None:
+    hsa = KEGGDatabase.from_mapping_directory(
+        write_mapping_tree(tmp_path)
+    ).with_organisms(["hsa"])
+
+    direct = hsa.gene_pathways().collect().filter(pl.col("kegg_gene_id") == "hsa:1")
+    assert direct["pathway_mappings"].to_list() == [
+        [{"kegg_pathway_id": "hsa00010", "pathway_map_id": "map00010"}]
+    ]
+    via = hsa.gene_pathways_via_ko().collect()
+    assert via.row(0, named=True)["pathway_mappings"] == [
+        {
+            "ko_id": "K00001",
+            "kegg_pathway_id": "ko00010",
+            "pathway_namespace": "ko",
+            "pathway_map_id": "map00010",
+        },
+        {
+            "ko_id": "K00001",
+            "kegg_pathway_id": "map00010",
+            "pathway_namespace": "map",
+            "pathway_map_id": "map00010",
+        },
+    ]
+
+
+def test_selection_retains_many_species_and_nested_input_lineage(
+    tmp_path: Path,
+) -> None:
+    db = KEGGDatabase.from_mapping_directory(write_mapping_tree(tmp_path))
     selection = db.select_groups(
         {
-            " case ": ["sp|P12345|GENE1_HUMAN", "P12345", "MISSING"],
-            "control": ["P12345", "MISSING"],
-            "empty": [],
+            "case": ["sp|P12345|EXAMPLE", "up:P12345", "missing"],
+            "control": ["Q9Y243"],
         },
         namespace="uniprot",
     )
 
-    groups = selection._df_groups  # pyright: ignore[reportPrivateUsage]
-    assert groups is not None
-    assert groups["group_id"].to_list() == [
-        "case",
-        "control",
-        "empty",
-    ]
-    assert selection._df_input_ids["input_id"].to_list() == [  # pyright: ignore[reportPrivateUsage]
-        "MISSING",
-        "P12345",
-    ]
-    assert selection.mappings().collect().select(
-        "group_id", "input_id", "kegg_pathway_id"
+    matches = selection.matches().collect().sort("group_id", "organism_code")
+    assert matches.filter(pl.col("input_id") == "P12345").select(
+        "organism_code", "kegg_gene_id"
     ).to_dicts() == [
-        {
-            "group_id": "case",
-            "input_id": "P12345",
-            "kegg_pathway_id": "hsa00010",
-        },
-        {
-            "group_id": "case",
-            "input_id": "P12345",
-            "kegg_pathway_id": "hsa01100",
-        },
-        {
-            "group_id": "control",
-            "input_id": "P12345",
-            "kegg_pathway_id": "hsa00010",
-        },
-        {
-            "group_id": "control",
-            "input_id": "P12345",
-            "kegg_pathway_id": "hsa01100",
-        },
+        {"organism_code": "hsa", "kegg_gene_id": "hsa:1"},
+        {"organism_code": "mmu", "kegg_gene_id": "mmu:1"},
     ]
-    selection.mappings().collect()
+    annotations = selection.gene_annotations().collect()
+    assert "inputs" in annotations.columns
+    assert annotations.filter(pl.col("kegg_gene_id") == "hsa:1").row(0, named=True)[
+        "inputs"
+    ] == [
+        {
+            "group_id": "case",
+            "input_id": "P12345",
+            "input_namespace": "uniprot",
+        }
+    ]
     assert selection.unmatched_ids().collect().to_dicts() == [
-        {"group_id": "case", "input_id": "MISSING"},
-        {"group_id": "control", "input_id": "MISSING"},
+        {"group_id": "case", "input_id": "missing"}
     ]
-    assert mapping_calls
 
 
-def test_optional_mapping_files_leave_nullable_columns(tmp_path: Path) -> None:
-    files = write_kegg_mapping_fixture(tmp_path)
-    db = KEGGDatabase.from_mapping_files(
-        uniprot_conversion=files["conv_uniprot"],
-        gene_ko=files["gene_ko"],
-        gene_pathway=files["gene_pathway"],
-        organism_code="hsa",
+def test_partial_file_factory_uses_null_and_empty_capability_semantics(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "hsa"
+    source.mkdir()
+    (source / "gene_list.tsv").write_text(
+        "hsa:1\tCDS\t1\tGENE1; description\n", encoding="utf-8"
     )
+    (source / "gene_ko.tsv").write_text("", encoding="utf-8")
+    db = KEGGDatabase.from_mapping_files(source, organism_code="hsa")
+
+    row = db.gene_annotations().collect().row(0, named=True)
+    assert row["gene_aliases"] == []
+    assert row["ko_mappings"] == []
+    assert row["uniprot_mappings"] is None
+    with pytest.raises(CapabilityError, match="gene_pathway"):
+        db.gene_pathways()
+    with pytest.raises(CapabilityError, match="uniprot_conversion"):
+        db.select_ids(["P12345"], namespace="uniprot").matches()
+
+
+def test_strict_parser_reports_role_path_and_line(tmp_path: Path) -> None:
+    root = write_mapping_tree(tmp_path)
+    (root / "hsa" / "gene_ko.tsv").write_text("mmu:1\tko:K00001\n", encoding="utf-8")
+    db = KEGGDatabase.from_mapping_directory(root).with_organisms(["hsa"])
+
+    with pytest.raises(
+        (IntegrityError, pl.exceptions.ComputeError),
+        match=r"gene_ko.*line=1.*does not match",
+    ):
+        db.gene_annotations().collect()
+
+
+def test_publication_has_three_tables_capabilities_and_source_parity(
+    tmp_path: Path,
+) -> None:
+    source = KEGGDatabase.from_mapping_directory(
+        write_mapping_tree(tmp_path), release_version="2026-06"
+    ).with_organisms(["hsa"])
+    path = tmp_path / "mapping.duckdb"
+    result = source.write_duckdb(path)
+
+    assert result.tables == ("organism", "gene_annotation", "ko_annotation")
+    reopened = KEGGDatabase.from_duckdb(path)
+    assert (
+        reopened.gene_annotations()
+        .collect()
+        .equals(source.gene_annotations().collect())
+    )
+    assert (
+        reopened.ko_annotations()
+        .collect()
+        .sort("ko_id")
+        .equals(source.ko_annotations().collect().sort("ko_id"))
+    )
+    with reopened.connect() as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+        assert metadata["bioextract.resource_schema_version"] == "kegg-mapping-v1.0"
+        assert metadata["bioextract.source_schema_profile"] == (
+            "kegg-organism-mapping-files-v2"
+        )
+        assert metadata["bioextract.organism_scope_mode"] == "selected"
+        assert metadata["bioextract.release_version"] == "2026-06"
+        assert metadata["bioextract.capability.ko_pathway"] == "true"
+        sources = connection.execute(
+            "SELECT logical_name, display_path, bytes, sha256 "
+            "FROM _bioextract.source_file ORDER BY logical_name"
+        ).fetchall()
+        assert len(sources) == 7
+        assert all(
+            byte_count is None and digest is None
+            for _, _, byte_count, digest in sources
+        )
+
+
+def test_lazy_plan_construction_does_not_enumerate_or_open_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = write_mapping_tree(tmp_path)
+    database = KEGGDatabase.from_mapping_directory(root)
+
+    def forbidden(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise AssertionError("lazy plan construction touched source data")
+
+    monkeypatch.setattr(Path, "iterdir", forbidden)
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    frame = database.gene_annotations()
+    assert frame.collect_schema()["kegg_gene_id"] == pl.String
+
+
+def test_mapping_publisher_does_not_read_sources_for_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = write_mapping_tree(tmp_path)
+    database = KEGGDatabase.from_mapping_directory(root).with_organisms(["hsa"])
+
+    def forbidden(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise AssertionError("provenance unexpectedly materialized source bytes")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    path = tmp_path / "once.duckdb"
+    database.write_duckdb(path)
+    with duckdb.connect(str(path), read_only=True) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM _bioextract.source_file "
+            "WHERE bytes IS NULL AND sha256 IS NULL"
+        ).fetchone() == (7,)
+
+
+def test_mapping_publication_failure_cleans_stage_and_preserves_target(
+    tmp_path: Path,
+) -> None:
+    root = write_mapping_tree(tmp_path)
+    valid = KEGGDatabase.from_mapping_directory(root).with_organisms(["hsa"])
+    target = tmp_path / "mapping.duckdb"
+    valid.write_duckdb(target)
+    before = target.read_bytes()
+    (root / "hsa" / "gene_ko.tsv").write_text("mmu:1\tko:K00001\n", encoding="utf-8")
+
+    with pytest.raises(IntegrityError, match="cause=invalid_required_field"):
+        valid.write_duckdb(target, if_exists="replace")
+
+    assert target.read_bytes() == before
+    assert not list(tmp_path.glob(".mapping.duckdb.*.duckdb"))
+    assert not list(tmp_path.glob("bioextract-kegg-duckdb-*"))
+
+
+def test_native_writer_preserves_zero_byte_roles_and_deduplicates_edges(
+    tmp_path: Path,
+) -> None:
+    root = write_mapping_tree(tmp_path)
+    gene_ko = root / "hsa" / "gene_ko.tsv"
+    gene_ko.write_text("hsa:1\tko:K00001\nhsa:1\tko:K00001\n", encoding="utf-8")
+    (root / "hsa" / "conv_uniprot.tsv").write_text("", encoding="utf-8")
+    path = tmp_path / "mapping.duckdb"
+
+    KEGGDatabase.from_mapping_directory(root).with_organisms(["hsa"]).write_duckdb(path)
 
     row = (
-        db.select_ids(["Q9Y243"], namespace="uniprot")
-        .mappings()
+        KEGGDatabase.from_duckdb(path)
+        .gene_annotations()
         .collect()
-        .row(
-            0,
-            named=True,
-        )
+        .filter(pl.col("kegg_gene_id") == "hsa:1")
+        .row(0, named=True)
     )
-    assert row["ncbi_gene_id"] is None
-    assert row["gene_symbol"] is None
-    assert row["gene_description"] is None
+    assert row["ko_mappings"] == [{"ko_id": "K00001"}]
+    with duckdb.connect(str(path), read_only=True) as connection:
+        assert connection.execute(
+            "SELECT bytes, sha256 FROM _bioextract.source_file "
+            "WHERE logical_name='organism/hsa/uniprot_conversion'"
+        ).fetchone() == (None, None)
+        assert not connection.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_name LIKE '_kegg_%'"
+        ).fetchall()
 
 
-def test_write_duckdb_reopens_mapping_without_sidecar(tmp_path: Path) -> None:
-    db = create_mapping_db(write_kegg_mapping_fixture(tmp_path))
+@pytest.mark.parametrize(
+    "payload",
+    [b"hsa:1\n", b"hsa:1\tko:K00001\ttoo-many\n"],
+)
+def test_native_writer_rejects_malformed_role_rows(
+    tmp_path: Path,
+    payload: bytes,
+) -> None:
+    root = write_mapping_tree(tmp_path)
+    (root / "hsa" / "gene_ko.tsv").write_bytes(payload)
 
-    path = tmp_path / "kegg.duckdb"
-    result = db.write_duckdb(path)
+    with pytest.raises(
+        IntegrityError,
+        match=r"role='gene_ko'.*cause=(engine_parse|csv_rejects)",
+    ):
+        KEGGDatabase.from_mapping_directory(root).with_organisms(["hsa"]).write_duckdb(
+            tmp_path / "mapping.duckdb"
+        )
 
-    assert result.path == path
-    assert not (tmp_path / "manifest.json").exists()
+
+def test_native_writer_rejects_conflicting_metadata_after_duplicate_dedup(
+    tmp_path: Path,
+) -> None:
+    root = write_mapping_tree(tmp_path)
+    (root / "hsa" / "gene_list.tsv").write_text(
+        "hsa:1\tCDS\t1..100\tGENE1; first\nhsa:1\tCDS\t1..100\tGENE1; second\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(IntegrityError, match="role='gene_list'.*conflicting_metadata"):
+        KEGGDatabase.from_mapping_directory(root).with_organisms(["hsa"]).write_duckdb(
+            tmp_path / "mapping.duckdb"
+        )
+
+
+def test_reopened_publication_can_narrow_but_not_expand(tmp_path: Path) -> None:
+    path = tmp_path / "mapping.duckdb"
+    KEGGDatabase.from_mapping_directory(write_mapping_tree(tmp_path)).write_duckdb(path)
     reopened = KEGGDatabase.from_duckdb(path)
-    assert reopened.mappings().collect().equals(db.mappings().collect())
-    with reopened.connect() as connection:
-        assert connection.execute("SELECT count(*) FROM mapping").fetchone() == (3,)
+
+    assert (
+        reopened.with_organisms(["mmu"])
+        .organisms()
+        .collect()
+        .to_dicts()[0]["organism_code"]
+        == "mmu"
+    )
+    with pytest.raises(CapabilityError, match="does not contain"):
+        reopened.with_organisms(["eco"])
 
 
-def test_mapping_validates_kind_and_snapshot_kind(tmp_path: Path) -> None:
-    files = write_kegg_mapping_fixture(tmp_path)
-    db = create_mapping_db(files)
+def test_explicit_role_does_not_fall_back_and_duplicate_paths_fail(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "hsa"
+    source.mkdir()
+    role = source / "gene_ko.tsv"
+    role.write_text("hsa:1\tko:K00001\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="namespace"):
-        db.select_ids(["P12345"], namespace="symbol")  # type: ignore[arg-type]
+    with pytest.raises(FileNotFoundError):
+        KEGGDatabase.from_mapping_files(
+            source,
+            organism_code="hsa",
+            gene_ko=source / "missing.tsv",
+        )
+    with pytest.raises(ValueError, match="multiple roles"):
+        KEGGDatabase.from_mapping_files(
+            organism_code="hsa",
+            gene_ko=role,
+            gene_pathway=role,
+        )
 
-    file_brite = tmp_path / "br08901.json"
-    file_brite.write_text('{"name": "ko00001", "children": []}', encoding="utf-8")
-    db_brite = KEGGDatabase.from_brite_json(file_brite)
-    with pytest.raises((ValueError, pl.exceptions.ComputeError), match="BRITE"):
-        db_brite.mappings().collect()
 
+def test_publication_rejects_capability_tampering(tmp_path: Path) -> None:
+    path = tmp_path / "mapping.duckdb"
+    KEGGDatabase.from_mapping_directory(write_mapping_tree(tmp_path)).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value='maybe' "
+            "WHERE key='bioextract.capability.gene_ko'"
+        )
 
-def test_mapping_validates_organism_code(tmp_path: Path) -> None:
-    files = write_kegg_mapping_fixture(tmp_path)
-    files["gene_ko"].write_text("mmu:1\tko:K00001\n", encoding="utf-8")
-    db = create_mapping_db(files)
-
-    with pytest.raises((ValueError, pl.exceptions.ComputeError), match="organism_code"):
-        db.mappings().collect()
+    with pytest.raises(IntegrityError, match="capabilities must be true or false"):
+        KEGGDatabase.from_duckdb(path)

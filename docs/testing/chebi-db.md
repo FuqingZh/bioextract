@@ -17,7 +17,7 @@ Automated tests cover:
 - direct relations plus cycle-safe `is_a` ancestor/descendant traversal;
 - canonical fail-fast behavior, old-target preservation, staging/WAL cleanup,
   orphan-row skipping, and validation issue persistence;
-- metadata v1 exact five-table requirements, rejection of every other version,
+- metadata v2 exact five-table requirements, rejection of every other version,
   inventory validation, and count validation;
 - independent native read-only `connect()` calls and arbitrary SQL;
 - source-backed handles rejecting query operations before publication.

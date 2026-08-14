@@ -1,0 +1,114 @@
+{
+  "date": "2026-08-14",
+  "source": "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/kegg/mapping/2026-06/raw",
+  "polars_version": "1.40.1",
+  "scope_100_sha256": "d76decc0292f4b84bff93e4ae0d045c458f8dac49b25c1d0bc7de7cf7dac211d",
+  "scope_1000_sha256": "31998ba5b43d83ec1b906cf7078e58389befefae08862849c343bf29c8fffa85",
+  "role_only_comparison_scope_100": {
+    "python_read_rows": {
+      "elapsed_seconds": 4.141708800103515,
+      "cpu_seconds": 3.594307000000001,
+      "peak_rss_bytes": 245149696,
+      "source_file_count": 500,
+      "source_bytes": 71026496,
+      "row_counts": {
+        "gene_ko": 301847,
+        "gene_list": 440328,
+        "gene_pathway": 469811,
+        "ncbi_gene_conversion": 226594,
+        "uniprot_conversion": 240266
+      }
+    },
+    "polars_scan_csv_unique": {
+      "elapsed_seconds": 1.423695432022214,
+      "cpu_seconds": 60.11319399999999,
+      "peak_rss_bytes": 1471193088,
+      "source_file_count": 500,
+      "source_bytes": 71026496,
+      "row_counts": {
+        "gene_ko": 301847,
+        "gene_list": 440328,
+        "gene_pathway": 469811,
+        "ncbi_gene_conversion": 226594,
+        "uniprot_conversion": 240266
+      }
+    }
+  },
+  "role_only_comparison_scope_1000": {
+    "python_read_rows": {
+      "elapsed_seconds": 23.492385742021725,
+      "cpu_seconds": 23.459415999999997,
+      "peak_rss_bytes": 334110720,
+      "source_file_count": 5000,
+      "source_bytes": 722886015,
+      "row_counts": {
+        "gene_ko": 3058746,
+        "gene_list": 4567266,
+        "gene_pathway": 4739744,
+        "ncbi_gene_conversion": 2540352,
+        "uniprot_conversion": 2158011
+      }
+    },
+    "polars_scan_csv_unique": {
+      "elapsed_seconds": 20.488956396933645,
+      "cpu_seconds": 467.586473,
+      "peak_rss_bytes": 5769584640,
+      "source_file_count": 5000,
+      "source_bytes": 722886015,
+      "row_counts": {
+        "gene_ko": 3058746,
+        "gene_list": 4567266,
+        "gene_pathway": 4739744,
+        "ncbi_gene_conversion": 2540352,
+        "uniprot_conversion": 2158011
+      },
+      "nonempty_paths_in_output": {
+        "gene_ko": 1000,
+        "gene_list": 808,
+        "gene_pathway": 999,
+        "ncbi_gene_conversion": 131,
+        "uniprot_conversion": 569
+      },
+      "same_read_source_hash": false
+    },
+    "polars_scan_csv_unique_threads_1": {
+      "elapsed_seconds": 35.87908035516739,
+      "cpu_seconds": 37.790768,
+      "peak_rss_bytes": 4883484672,
+      "same_row_counts": true,
+      "same_read_source_hash": false
+    }
+  },
+  "contract_probe": {
+    "zero_byte_collects": true,
+    "zero_byte_appears_in_path_column": false,
+    "good_plus_zero_byte_rows": 1,
+    "errors": {
+      "missing.tsv": {
+        "type": "ColumnNotFoundError",
+        "message": "did not find column right, consider passing `missing_columns='insert'`"
+      },
+      "extra.tsv": {
+        "type": "SchemaError",
+        "message": "provided schema does not match number of columns in file (2 != 3 in file)"
+      },
+      "invalid-utf8.tsv": {
+        "type": "ComputeError",
+        "message": "invalid utf-8 sequence"
+      }
+    },
+    "malformed_error_includes_path": false,
+    "malformed_error_includes_line": false
+  },
+  "decision": {
+    "polars_multi_file_ingestion": "rejected_for_current_kegg_mapping_v1_contract",
+    "reasons": [
+      "The 1,000-scope role-only wall-time reduction was 12.8 percent, below the P1 15 percent acceptance threshold.",
+      "Peak RSS increased from 0.31 GiB to 5.37 GiB; a one-thread run still reached 4.55 GiB.",
+      "The scan cannot attach source SHA-256 values to the same bytes read by the engine.",
+      "Zero-byte files are accepted but omitted from include_file_paths output.",
+      "Malformed-file errors do not retain the required source path and one-based line diagnostics."
+    ],
+    "production_code_changed": false
+  }
+}

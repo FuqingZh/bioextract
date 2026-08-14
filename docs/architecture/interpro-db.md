@@ -120,7 +120,7 @@ The write path is lazy:
 1. scan `protein2ipr.dat.gz`
 2. lazy-join XML-derived entry/member lookup frames when present
 3. stream each relation through temporary transfer Parquet into staged DuckDB
-4. validate metadata v1 and atomically commit the completed database
+4. validate metadata v2 and atomically commit the completed database
 
 This keeps the main publication path aligned with the shared tidy contract
 without forcing a full materialized DataFrame before write.
@@ -130,7 +130,7 @@ methods (`mappings()`, `pfam_annotations()`, and `unmatched_ids()`) return
 native `polars.LazyFrame` objects; callers choose `.collect()`,
 `.collect_batches()`, or `sink_*()`.
 
-`from_duckdb()` accepts only metadata v1 publications with exact InterPro
+`from_duckdb()` accepts only metadata v2 publications with exact InterPro
 resource identity, resource schema version, source profile, capability list,
 source-role inventory, table names and roles, physical column types, row
 counts, exact five-table provenance schemas and keys, and column provenance.

@@ -1,30 +1,25 @@
 from __future__ import annotations
 
-import hashlib
 import json
-from collections.abc import Callable
 from pathlib import Path
 
 import duckdb
 import pytest
 
-from bioextract.errors import CapabilityError
+from bioextract.errors import CapabilityError, IntegrityError
 from bioextract.kegg import KEGGDatabase
 
 
 def _mapping_source(tmp_path: Path) -> KEGGDatabase:
-    uniprot = tmp_path / "conv_uniprot.tsv"
-    gene_ko = tmp_path / "gene_ko.tsv"
-    gene_pathway = tmp_path / "gene_pathway.tsv"
-    uniprot.write_text("up:P12345\thsa:1\n", encoding="utf-8")
-    gene_ko.write_text("hsa:1\tko:K00001\n", encoding="utf-8")
-    gene_pathway.write_text("hsa:1\tpath:hsa00010\n", encoding="utf-8")
-    return KEGGDatabase.from_mapping_files(
-        uniprot_conversion=uniprot,
-        gene_ko=gene_ko,
-        gene_pathway=gene_pathway,
-        organism_code="hsa",
+    source = tmp_path / "hsa"
+    source.mkdir(exist_ok=True)
+    (source / "gene_list.tsv").write_text(
+        "hsa:1\tCDS\t1..10\tGENE1; description\n", encoding="utf-8"
     )
+    (source / "conv_uniprot.tsv").write_text("up:P12345\thsa:1\n", encoding="utf-8")
+    (source / "gene_ko.tsv").write_text("hsa:1\tko:K00001\n", encoding="utf-8")
+    (source / "gene_pathway.tsv").write_text("hsa:1\tpath:hsa00010\n", encoding="utf-8")
+    return KEGGDatabase.from_mapping_files(source, organism_code="hsa")
 
 
 def _brite_source(tmp_path: Path) -> KEGGDatabase:
@@ -58,50 +53,29 @@ def _brite_source(tmp_path: Path) -> KEGGDatabase:
     return KEGGDatabase.from_brite_json(source)
 
 
-@pytest.mark.parametrize(
-    ("source_factory", "scope", "profile", "table"),
-    [
-        (
-            _mapping_source,
-            "mapping",
-            "kegg-organism-mapping-files-v1",
-            "mapping",
-        ),
-        (_brite_source, "brite", "kegg-brite-json-v1", "pathway"),
-    ],
-)
-def test_single_relation_profiles_publish_metadata_v1_and_reopen(
+def test_mapping_publication_uses_exact_v2_identity_and_three_tables(
     tmp_path: Path,
-    source_factory: Callable[[Path], KEGGDatabase],
-    scope: str,
-    profile: str,
-    table: str,
 ) -> None:
-    path = tmp_path / f"{scope}.duckdb"
-    result = source_factory(tmp_path).write_duckdb(path)
+    path = tmp_path / "mapping.duckdb"
+    result = _mapping_source(tmp_path).write_duckdb(path)
 
-    assert result.tables == (table,)
-    reopened = KEGGDatabase.from_duckdb(path)
-    first = reopened.connect()
-    second = reopened.connect()
-    try:
-        assert first is not second
+    assert result.tables == ("organism", "gene_annotation", "ko_annotation")
+    with KEGGDatabase.from_duckdb(path).connect() as connection:
         metadata = dict(
-            first.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
-        assert metadata["bioextract.metadata_schema_version"] == "1"
-        assert metadata["bioextract.resource_name"] == "kegg"
-        assert metadata["bioextract.scope"] == scope
-        assert metadata["bioextract.source_schema_profile"] == profile
-        assert first.execute(
-            "SELECT table_name, table_role FROM _bioextract.table_info"
-        ).fetchall() == [(table, "canonical")]
-        assert first.execute(f"SELECT count(*) FROM {table}").fetchone() == (1,)
-        with pytest.raises(duckdb.Error):
-            first.execute("CREATE TABLE forbidden(value INTEGER)")
-    finally:
-        first.close()
-        second.close()
+        assert metadata["bioextract.metadata_schema_version"] == "2"
+        assert metadata["bioextract.resource_schema_version"] == "kegg-mapping-v1.0"
+        assert metadata["bioextract.source_schema_profile"] == (
+            "kegg-organism-mapping-files-v2"
+        )
+        assert "bioextract.sources" not in metadata
+        assert {
+            row[0]
+            for row in connection.execute(
+                "SELECT table_name FROM _bioextract.table_info"
+            ).fetchall()
+        } == {"organism", "gene_annotation", "ko_annotation"}
 
 
 def test_mapping_publication_preserves_selection_semantics(tmp_path: Path) -> None:
@@ -117,145 +91,118 @@ def test_mapping_publication_preserves_selection_semantics(tmp_path: Path) -> No
         namespace="uniprot",
     )
 
-    assert actual.mappings().collect().equals(expected.mappings().collect())
-    assert actual.unmatched_ids().collect().equals(expected.unmatched_ids().collect())
+    actual_matches = actual.matches().collect()
+    expected_matches = expected.matches().collect()
+    assert actual_matches.sort(actual_matches.columns).equals(
+        expected_matches.sort(expected_matches.columns)
+    )
+    actual_unmatched = actual.unmatched_ids().collect()
+    expected_unmatched = expected.unmatched_ids().collect()
+    assert actual_unmatched.sort(actual_unmatched.columns).equals(
+        expected_unmatched.sort(expected_unmatched.columns)
+    )
 
 
-def test_empty_mapping_publication_reopens_with_stable_schema(tmp_path: Path) -> None:
-    source = _mapping_source(tmp_path)
-    for path in tmp_path.glob("*.tsv"):
-        path.write_text("", encoding="utf-8")
-    publication = tmp_path / "empty.duckdb"
-    source.write_duckdb(publication)
-
-    reopened = KEGGDatabase.from_duckdb(publication).mappings().collect()
-    assert reopened.schema == source.mappings().collect().schema
-    assert reopened.is_empty()
-
-
-def test_profile_inventory_and_source_role_mismatches_are_rejected(
+def test_mapping_publication_rejects_table_and_capability_tampering(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "mapping.duckdb"
     _mapping_source(tmp_path).write_duckdb(path)
-
     with duckdb.connect(str(path)) as connection:
-        connection.execute("UPDATE _bioextract.table_info SET table_role='unexpected'")
-    with pytest.raises(ValueError, match="table inventory"):
+        connection.execute(
+            "UPDATE _bioextract.table_info SET table_role='unexpected' "
+            "WHERE table_name='gene_annotation'"
+        )
+    with pytest.raises(IntegrityError, match="row-count drift"):
+        KEGGDatabase.from_duckdb(path)
+
+    path.unlink()
+    _mapping_source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "DELETE FROM _bioextract.metadata WHERE key='bioextract.capability.gene_ko'"
+        )
+    with pytest.raises(IntegrityError, match="capability inventory"):
         KEGGDatabase.from_duckdb(path)
 
 
-def test_atomic_if_exists_preserves_previous_publication(tmp_path: Path) -> None:
+def test_mapping_publication_rejects_cross_species_gene(tmp_path: Path) -> None:
+    path = tmp_path / "mapping.duckdb"
+    _mapping_source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "UPDATE gene_annotation SET organism_code='mmu' WHERE kegg_gene_id='hsa:1'"
+        )
+
+    with pytest.raises(IntegrityError, match="cross organism"):
+        KEGGDatabase.from_duckdb(path)
+
+
+def test_mapping_publication_keeps_provenance_lazy_and_atomic_destination(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "mapping.duckdb"
     source = _mapping_source(tmp_path)
     source.write_duckdb(path)
     before = path.read_bytes()
 
+    with duckdb.connect(str(path), read_only=True) as connection:
+        rows = connection.execute(
+            "SELECT display_path, bytes, sha256 FROM _bioextract.source_file"
+        ).fetchall()
+    assert rows and all(
+        byte_count is None and digest is None for _, byte_count, digest in rows
+    )
     with pytest.raises(FileExistsError):
         source.write_duckdb(path)
     assert path.read_bytes() == before
 
 
-def test_source_hash_requests_are_honored_for_tidy_profiles(tmp_path: Path) -> None:
-    source = _brite_source(tmp_path)
+def test_old_mapping_publication_profile_is_not_accepted(tmp_path: Path) -> None:
+    path = tmp_path / "mapping.duckdb"
+    _mapping_source(tmp_path).write_duckdb(path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value='kegg-organism-mapping-files-v1' "
+            "WHERE key='bioextract.source_schema_profile'"
+        )
+
+    with pytest.raises(ValueError, match="Unsupported KEGG source schema profile"):
+        KEGGDatabase.from_duckdb(path)
+
+
+def test_brite_publication_contract_remains_unchanged(tmp_path: Path) -> None:
     path = tmp_path / "brite.duckdb"
-    source.write_duckdb(path, include_source_hashes=True)
+    _brite_source(tmp_path).write_duckdb(path)
+    reopened = KEGGDatabase.from_duckdb(path)
 
-    with duckdb.connect(str(path), read_only=True) as connection:
-        observed = connection.execute(
-            "SELECT display_path, sha256 FROM _bioextract.source_file"
-        ).fetchone()
-    assert observed is not None
-    assert observed[1] == hashlib.sha256(Path(observed[0]).read_bytes()).hexdigest()
-
-
-def test_mapping_publication_rejects_incompatible_column_types(tmp_path: Path) -> None:
-    path = tmp_path / "mapping.duckdb"
-    _mapping_source(tmp_path).write_duckdb(path)
-    with duckdb.connect(str(path)) as connection:
-        connection.execute(
-            "ALTER TABLE mapping ALTER kegg_gene_id TYPE INTEGER USING 1"
+    with reopened.connect() as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
-
-    with pytest.raises(ValueError, match="table schema"):
-        KEGGDatabase.from_duckdb(path)
-
-
-def test_mapping_publication_validates_recorded_organism(tmp_path: Path) -> None:
-    path = tmp_path / "mapping.duckdb"
-    _mapping_source(tmp_path).write_duckdb(path)
-    with duckdb.connect(str(path)) as connection:
-        connection.execute(
-            "UPDATE _bioextract.metadata SET value='mmu' "
-            "WHERE key='bioextract.organism_code'"
-        )
-
-    with pytest.raises(ValueError, match="recorded organism_code"):
-        KEGGDatabase.from_duckdb(path)
+        assert metadata["bioextract.metadata_schema_version"] == "2"
+        assert metadata["bioextract.source_schema_profile"] == "kegg-brite-json-v1"
+        assert connection.execute("SELECT count(*) FROM pathway").fetchone() == (1,)
+    with pytest.raises((CapabilityError, ValueError), match="BRITE"):
+        reopened.select_ids(["P12345"], namespace="uniprot")
 
 
-@pytest.mark.parametrize("column", ["organism_code", "kegg_gene_id"])
-def test_mapping_publication_rejects_null_identity(tmp_path: Path, column: str) -> None:
-    path = tmp_path / "mapping.duckdb"
-    _mapping_source(tmp_path).write_duckdb(path)
-    with duckdb.connect(str(path)) as connection:
-        connection.execute(f'UPDATE mapping SET "{column}"=NULL')
-
-    with pytest.raises(ValueError, match="recorded organism_code"):
-        KEGGDatabase.from_duckdb(path)
-
-
-def test_tidy_profiles_validate_source_roles(tmp_path: Path) -> None:
+def test_brite_rejects_source_role_and_provenance_tampering(tmp_path: Path) -> None:
     path = tmp_path / "brite.duckdb"
     _brite_source(tmp_path).write_duckdb(path)
     with duckdb.connect(str(path)) as connection:
         connection.execute(
             "UPDATE _bioextract.source_file SET logical_name='renamed_brite_json'"
         )
-        metadata = dict(
-            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
-        )
-        sources = json.loads(metadata["bioextract.sources"])
-        sources[0]["logical_name"] = "renamed_brite_json"
-        connection.execute(
-            "UPDATE _bioextract.metadata SET value=? WHERE key='bioextract.sources'",
-            [json.dumps(sources, separators=(",", ":"), sort_keys=True)],
-        )
-
     with pytest.raises(ValueError, match="source role inventory"):
         KEGGDatabase.from_duckdb(path)
 
-
-def test_mapping_publication_rejects_forged_column_provenance(tmp_path: Path) -> None:
-    path = tmp_path / "mapping.duckdb"
-    _mapping_source(tmp_path).write_duckdb(path)
-    with duckdb.connect(str(path)) as connection:
-        connection.execute(
-            "INSERT INTO _bioextract.column_mapping VALUES "
-            "('mapping', 'forged', 'forged', 'forged')"
-        )
-
-    with pytest.raises(ValueError, match="column provenance inventory"):
-        KEGGDatabase.from_duckdb(path)
-
-
-def test_brite_publication_rejects_forged_column_provenance(tmp_path: Path) -> None:
-    path = tmp_path / "brite.duckdb"
+    path.unlink()
     _brite_source(tmp_path).write_duckdb(path)
     with duckdb.connect(str(path)) as connection:
         connection.execute(
             "INSERT INTO _bioextract.column_mapping VALUES "
             "('pathway', 'forged', 'forged', 'forged')"
         )
-
-    with pytest.raises(ValueError, match="BRITE column provenance inventory"):
+    with pytest.raises(ValueError, match="column provenance inventory"):
         KEGGDatabase.from_duckdb(path)
-
-
-def test_brite_publication_rejects_mapping_selection(tmp_path: Path) -> None:
-    path = tmp_path / "brite.duckdb"
-    _brite_source(tmp_path).write_duckdb(path)
-    database = KEGGDatabase.from_duckdb(path)
-
-    with pytest.raises((CapabilityError, ValueError), match="BRITE"):
-        database.select_ids(["P12345"], namespace="uniprot")

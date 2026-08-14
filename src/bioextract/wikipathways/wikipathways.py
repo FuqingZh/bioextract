@@ -14,8 +14,9 @@ import polars as pl
 from bioextract._lazy import register_replayable_source
 from bioextract._publication import (
     BIOEXTRACT_RELATIONS,
+    METADATA_SCHEMA_VERSION,
     DuckDBWriteResult,
-    validate_duckdb_metadata_v1,
+    validate_duckdb_metadata_v2,
 )
 from bioextract._shared import (
     create_group_input_frames,
@@ -63,9 +64,8 @@ class _ReopenedWikiPathwaysTidyDataset(TidyDataset):
         table_names: Mapping[str, str] | None = None,
         if_exists: str = "fail",
         source_columns: Mapping[str, Collection[str]] | None = None,
-        include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
-        del path, table_names, if_exists, source_columns, include_source_hashes
+        del path, table_names, if_exists, source_columns
         raise CapabilityError(
             "write_duckdb() requires a WikiPathways GMT source handle"
         )
@@ -164,7 +164,7 @@ class WikiPathwaysDatabase:
         is pinned to the exact file that passed validation.
 
         Args:
-            path: A bioextract WikiPathways metadata-v1 DuckDB publication.
+            path: A bioextract WikiPathways metadata-v2 DuckDB publication.
 
         Returns:
             A publication-backed handle for extraction and selection.
@@ -1013,9 +1013,12 @@ def _validate_wikipathways_publication(path: Path) -> tuple[str, str | None]:
             metadata = {str(row[0]): str(row[1]) for row in metadata_rows}
             if len(metadata) != len(metadata_rows):
                 raise ValueError("WikiPathways publication has duplicate metadata keys")
-            if metadata.get("bioextract.metadata_schema_version") != "1":
+            if (
+                metadata.get("bioextract.metadata_schema_version")
+                != METADATA_SCHEMA_VERSION
+            ):
                 raise ValueError("Unsupported WikiPathways metadata schema version")
-            validate_duckdb_metadata_v1(connection, metadata)
+            validate_duckdb_metadata_v2(connection, metadata)
             if metadata.get("bioextract.resource_name") != "wikipathways":
                 raise ValueError(
                     "DuckDB file is not a bioextract WikiPathways publication"
@@ -1058,7 +1061,8 @@ def _validate_wikipathways_publication(path: Path) -> tuple[str, str | None]:
                 not source_rows
                 or {str(row[0]) for row in source_rows} != expected_roles
                 or any(
-                    int(row[1]) < 0 or str(row[2]) != MEDIA_TYPE_GMT
+                    (row[1] is not None and int(row[1]) < 0)
+                    or str(row[2]) != MEDIA_TYPE_GMT
                     for row in source_rows
                 )
             ):

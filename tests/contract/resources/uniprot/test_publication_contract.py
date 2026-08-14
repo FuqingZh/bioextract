@@ -154,7 +154,8 @@ def test_idmapping_duckdb_contract_and_reopen_parity(tmp_path: Path) -> None:
         metadata = dict(
             first.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
-        assert metadata["bioextract.metadata_schema_version"] == "1"
+        assert metadata["bioextract.metadata_schema_version"] == "2"
+        assert "bioextract.sources" not in metadata
         assert metadata["bioextract.source_schema_profile"] == (
             "uniprot-idmapping-selected-22-column-v1"
         )
@@ -232,11 +233,6 @@ def test_idmapping_reopen_requires_exact_source_role(tmp_path: Path) -> None:
     with duckdb.connect(str(path)) as connection:
         connection.execute(
             "UPDATE _bioextract.source_file SET logical_name='fabricated_mapping'"
-        )
-        connection.execute(
-            "UPDATE _bioextract.metadata SET value=replace(value, ?, ?) "
-            "WHERE key='bioextract.sources'",
-            ["idmapping_selected", "fabricated_mapping"],
         )
     with pytest.raises(IntegrityError, match="source inventory"):
         UniProtDatabase.from_duckdb(path)
@@ -323,9 +319,8 @@ def test_idmapping_reopen_requires_boolean_all_taxa(
         UniProtDatabase.from_duckdb(path)
 
 
-@pytest.mark.parametrize("sources", [{}, [{}]])
-def test_idmapping_reopen_translates_malformed_embedded_sources(
-    tmp_path: Path, sources: object
+def test_idmapping_reopen_rejects_forbidden_duplicate_source_inventory(
+    tmp_path: Path,
 ) -> None:
     path = tmp_path / "mapping.duckdb"
     UniProtDatabase.from_idmapping(
@@ -333,10 +328,9 @@ def test_idmapping_reopen_translates_malformed_embedded_sources(
     ).write_duckdb(path, allow_all_taxa=True)
     with duckdb.connect(str(path)) as connection:
         connection.execute(
-            "UPDATE _bioextract.metadata SET value=? WHERE key='bioextract.sources'",
-            [json.dumps(sources)],
+            "INSERT INTO _bioextract.metadata VALUES ('bioextract.sources', '[]')"
         )
-    with pytest.raises(IntegrityError):
+    with pytest.raises(IntegrityError, match="forbids the duplicated"):
         UniProtDatabase.from_duckdb(path)
 
 
@@ -453,7 +447,7 @@ SQ   SEQUENCE   3 AA;  307 MW;  6AAEBDB000000000 CRC64;
         )
 
 
-def test_metadata_v1_requires_validation_issue_table(tmp_path: Path) -> None:
+def test_metadata_v2_requires_validation_issue_table(tmp_path: Path) -> None:
     path = tmp_path / "uniprot.duckdb"
     UniProtDatabase.from_knowledgebase(
         entries=_write_dat(tmp_path / "entries.dat.gz")

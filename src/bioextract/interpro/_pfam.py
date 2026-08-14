@@ -11,7 +11,6 @@ from bioextract._tidy import (
     TidyAsset,
     TidyDataset,
     TidySource,
-    calculate_file_sha256,
 )
 
 from .util import scan_protein2ipr_frame
@@ -68,7 +67,6 @@ def build_pfam_tidy_dataset(
     *,
     file_protein2ipr: Path,
     file_interpro_xml: Path,
-    include_source_hashes: bool = False,
 ) -> TidyDataset:
     """Build compact Pfam assets from explicitly assigned InterPro source roles.
 
@@ -76,8 +74,6 @@ def build_pfam_tidy_dataset(
         file_protein2ipr: Protein-to-InterPro mapping source.
         file_interpro_xml: InterPro XML metadata source. Its official database
             metadata supplies the release identity.
-        include_source_hashes: Whether to calculate source SHA-256 values for a
-            later manifest write.
 
     Returns:
         A tidy dataset with lazy `protein_term`, `term`, and `term_xref` frames.
@@ -158,14 +154,6 @@ def build_pfam_tidy_dataset(
     }
     _validate_frame_schemas(frames)
 
-    source_hashes = (
-        {
-            file_protein2ipr: calculate_file_sha256(file_protein2ipr),
-            file_interpro_xml: calculate_file_sha256(file_interpro_xml),
-        }
-        if include_source_hashes
-        else {}
-    )
     return TidyDataset(
         resource_name="interpro",
         frames=frames,
@@ -174,13 +162,11 @@ def build_pfam_tidy_dataset(
                 logical_name="protein_to_interpro",
                 path=file_protein2ipr,
                 media_type=MEDIA_TYPE_TSV_GZIP,
-                sha256=source_hashes.get(file_protein2ipr),
             ),
             TidySource(
                 logical_name="interpro_xml",
                 path=file_interpro_xml,
                 media_type=MEDIA_TYPE_XML_GZIP,
-                sha256=source_hashes.get(file_interpro_xml),
             ),
         ),
         resource_schema_version=PFAM_SCHEMA_VERSION,

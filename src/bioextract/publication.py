@@ -11,7 +11,7 @@ import duckdb
 from bioextract._publication import (
     METADATA_SCHEMA_VERSION,
     _connect_publication,  # pyright: ignore[reportPrivateUsage]
-    validate_duckdb_metadata_v1,
+    validate_duckdb_metadata_v2,
 )
 from bioextract.errors import IntegrityError
 
@@ -31,8 +31,8 @@ class PublicationMetadata:
     """Preserve one embedded publication metadata entry.
 
     Examples:
-        >>> PublicationMetadata("bioextract.metadata_schema_version", "1").value
-        '1'
+        >>> PublicationMetadata("bioextract.metadata_schema_version", "2").value
+        '2'
     """
 
     key: str
@@ -58,13 +58,16 @@ class PublicationSourceFile:
     """Preserve one source-file provenance record.
 
     Examples:
-        >>> PublicationSourceFile("terms", "inputs/terms.obo", 42, "text/obo", None).bytes
-        42
+        >>> source = PublicationSourceFile(
+        ...     "terms", "inputs/terms.obo", None, "text/obo", None
+        ... )
+        >>> source.bytes is None
+        True
     """
 
     logical_name: str
     display_path: str
-    bytes: int
+    bytes: int | None
     media_type: str
     sha256: str | None
 
@@ -197,7 +200,7 @@ def inspect_publication(
             raise ValueError(
                 f"Publication metadata schema must be v{METADATA_SCHEMA_VERSION}"
             )
-        validate_duckdb_metadata_v1(connection, metadata_values)
+        validate_duckdb_metadata_v2(connection, metadata_values)
         _validate_identity_values(metadata_values)
 
         tables = tuple(
@@ -215,7 +218,7 @@ def inspect_publication(
             PublicationSourceFile(
                 str(logical_name),
                 str(display_path),
-                int(byte_count),
+                None if byte_count is None else int(byte_count),
                 str(media_type),
                 None if sha256 is None else str(sha256),
             )
@@ -308,10 +311,10 @@ def _validate_identity_values(metadata: dict[str, str]) -> None:
         "bioextract.generated_at",
     ):
         if not metadata[key].strip():
-            raise ValueError(f"Metadata v1 value must be non-empty: {key}")
+            raise ValueError(f"Metadata v2 value must be non-empty: {key}")
     source_schema_version = metadata.get("bioextract.source_schema_version")
     if source_schema_version is not None and not source_schema_version.strip():
-        raise ValueError("Metadata v1 source_schema_version must be non-empty")
+        raise ValueError("Metadata v2 source_schema_version must be non-empty")
 
 
 def _validate_table_inventory(

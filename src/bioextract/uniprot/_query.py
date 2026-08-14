@@ -12,7 +12,10 @@ import polars as pl
 from polars._typing import SchemaDict
 
 from bioextract._lazy import register_deferred_frame_source
-from bioextract._publication import validate_duckdb_metadata_v1
+from bioextract._publication import (
+    METADATA_SCHEMA_VERSION,
+    validate_duckdb_metadata_v2,
+)
 
 from ._knowledgebase import (
     RESOURCE_SCHEMA_VERSION,
@@ -634,9 +637,12 @@ def validate_publication(path: Path) -> tuple[str, Mapping[str, str]]:
         metadata = dict(
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
-        if metadata.get("bioextract.metadata_schema_version") != "1":
+        if (
+            metadata.get("bioextract.metadata_schema_version")
+            != METADATA_SCHEMA_VERSION
+        ):
             raise ValueError("Unsupported UniProt metadata schema version")
-        required_v1 = {
+        required_v2 = {
             "bioextract.resource_name",
             "bioextract.resource_schema_version",
             "bioextract.source_schema_profile",
@@ -644,12 +650,11 @@ def validate_publication(path: Path) -> tuple[str, Mapping[str, str]]:
             "bioextract.generated_at",
             "bioextract.validation_status",
             "bioextract.validation_issue_count",
-            "bioextract.sources",
         }
-        missing_v1 = sorted(required_v1 - set(metadata))
-        if missing_v1:
-            raise ValueError(f"UniProt metadata v1 is missing keys: {missing_v1}")
-        validate_duckdb_metadata_v1(connection, metadata)
+        missing_v2 = sorted(required_v2 - set(metadata))
+        if missing_v2:
+            raise ValueError(f"UniProt metadata v2 is missing keys: {missing_v2}")
+        validate_duckdb_metadata_v2(connection, metadata)
         issue_count = connection.execute(
             "SELECT count(*) FROM _bioextract.validation_issue"
         ).fetchone()

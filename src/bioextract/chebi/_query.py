@@ -12,20 +12,21 @@ import polars as pl
 from polars._typing import SchemaDict
 
 from bioextract._lazy import register_deferred_frame_source
-from bioextract._publication import validate_duckdb_metadata_v1
+from bioextract._publication import validate_duckdb_metadata_v2
 from bioextract._shared import validate_group_ids
 from bioextract.errors import CapabilityError
 
 if TYPE_CHECKING:
     from .chebi import ChEBIDatabase
 
-_METADATA_VERSIONS = {"1"}
+_METADATA_VERSIONS = {"2"}
 SOURCE_SCHEMA_PROFILE = "chebi-release-bundle-v1"
 _BASE_METADATA_TABLES = {
     "metadata",
     "source_file",
     "table_info",
     "column_mapping",
+    "validation_issue",
 }
 _CHEBI_ID = re.compile(r"^(?:CHEBI:)?([0-9]+)$", re.IGNORECASE)
 _BUILTIN_NAMESPACES = {"chebi", "inchi", "inchi_key"}
@@ -868,7 +869,7 @@ def open_chebi_publication(path: str | Path) -> _ChEBIPublication:
             raise ValueError(
                 f"Unsupported ChEBI metadata schema version: {metadata_version!r}"
             )
-        validate_duckdb_metadata_v1(connection, metadata)
+        validate_duckdb_metadata_v2(connection, metadata)
         if metadata.get("bioextract.source_schema_profile") != SOURCE_SCHEMA_PROFILE:
             raise ValueError("Unsupported ChEBI source schema profile")
         if metadata.get("bioextract.resource_name") != "chebi":

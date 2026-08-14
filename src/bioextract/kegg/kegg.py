@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import copy
 import os
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Literal, cast, overload
@@ -11,14 +10,10 @@ from typing import Literal, cast, overload
 import duckdb
 import polars as pl
 
-from bioextract._lazy import register_replayable_source
 from bioextract._publication import (
+    METADATA_SCHEMA_VERSION,
     DuckDBWriteResult,
-    validate_duckdb_metadata_v1,
-)
-from bioextract._shared import (
-    create_group_input_frames,
-    create_input_id_frame,
+    validate_duckdb_metadata_v2,
 )
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
 from bioextract.errors import CapabilityError
@@ -34,30 +29,33 @@ from .brite.constant import (
     SCHEMA_VERSION as BRITE_SCHEMA_VERSION,
 )
 from .brite.tidy import build_tidy_frames as build_brite_tidy_frames
-from .mapping.constant import (
-    ASSET_SPECS as MAPPING_ASSET_SPECS,
+from .mapping.constant import KEGGNamespace
+from .mapping.publication import (
+    open_mapping_publication,
+    write_mapping_publication,
 )
-from .mapping.constant import (
-    MEDIA_TYPE_TSV,
-    SCHEMA_GROUP_INPUT_IDS,
-    SCHEMA_GROUPS,
-    SCHEMA_MAPPING,
-    SCHEMA_UNMAPPED,
-    KEGGNamespace,
+from .mapping.query import (
+    KeggSelection,
 )
-from .mapping.constant import (
-    SCHEMA_VERSION as MAPPING_SCHEMA_VERSION,
+from .mapping.query import (
+    gene_pathways as mapping_gene_pathways,
 )
-from .mapping.util import (
-    build_mapping_frame,
-    extract_mapping_frame,
-    extract_unmatched_ids_frame,
-    read_conv_ncbi_geneid_frame,
-    read_conv_uniprot_frame,
-    read_gene_ko_frame,
-    read_gene_list_frame,
-    read_gene_pathway_frame,
-    validate_namespace,
+from .mapping.query import (
+    gene_pathways_via_ko as mapping_gene_pathways_via_ko,
+)
+from .mapping.query import (
+    ko_pathways as mapping_ko_pathways,
+)
+from .mapping.query import (
+    relation as mapping_relation,
+)
+from .mapping.query import (
+    validate_namespace as validate_mapping_namespace,
+)
+from .mapping.source import (
+    MappingSnapshot,
+    create_directory_snapshot,
+    create_files_snapshot,
 )
 from .metabolic.core import (
     KEGGMetabolicNamespace,
@@ -95,12 +93,7 @@ class _KeggSnapshotKind(StrEnum):
 class _KeggSnapshot:
     kind: _KeggSnapshotKind
     file_brite_json: Path | None = None
-    file_conv_uniprot: Path | None = None
-    file_gene_ko: Path | None = None
-    file_gene_pathway: Path | None = None
-    organism_code: str | None = None
-    file_gene_list: Path | None = None
-    file_conv_ncbi_geneid: Path | None = None
+    mapping: MappingSnapshot | None = None
     metabolic: MetabolicSnapshot | None = None
 
 
@@ -129,12 +122,11 @@ class KEGGDatabase:
         ... )
         >>> mapping.select_ids(
         ...     ["P12345"], namespace="uniprot"
-        ... ).mappings().select("kegg_gene_id").collect().to_series().to_list()
-        ['hsa:1', 'hsa:1']
+        ... ).matches().select("kegg_gene_id").collect().to_series().to_list()
+        ['hsa:1']
     """
 
     snapshot: _KeggSnapshot
-    _df_mapping: pl.DataFrame | None = field(default=None, init=False, repr=False)
     _metabolic_publication: MetabolicPublication | None = field(
         default=None, init=False, repr=False
     )
@@ -245,6 +237,15 @@ class KEGGDatabase:
             result._metabolic_publication = publication
             result._publication_path = publication_path
             return result
+        if profile == "kegg-organism-mapping-files-v2":
+            result = cls(
+                snapshot=_KeggSnapshot(
+                    kind=_KeggSnapshotKind.MAPPING_PUBLICATION,
+                    mapping=open_mapping_publication(publication_path),
+                ),
+            )
+            result._publication_path = publication_path
+            return result
         kind = _validate_tidy_publication(publication_path, profile=profile)
         result = cls(snapshot=_KeggSnapshot(kind=kind))
         result._publication_path = publication_path
@@ -287,163 +288,169 @@ class KEGGDatabase:
         )
 
     @classmethod
-    def from_mapping_files(
+    def from_mapping_directory(
         cls,
+        source: os.PathLike[str] | str,
         *,
-        uniprot_conversion: os.PathLike[str] | str,
-        gene_ko: os.PathLike[str] | str,
-        gene_pathway: os.PathLike[str] | str,
-        organism_code: str,
-        gene_list: os.PathLike[str] | str | None = None,
-        ncbi_gene_conversion: os.PathLike[str] | str | None = None,
+        organism_list: os.PathLike[str] | str | None = None,
+        ko_pathway: os.PathLike[str] | str | None = None,
+        release_version: str | None = None,
     ) -> KEGGDatabase:
-        """Create a dataset handle from one organism's KEGG mapping files.
+        """Create a lazy multi-organism mapping handle from one direct root.
 
-        The three required files are KEGG ``conv``/``link`` responses for
-        UniProt IDs, KO IDs, and pathways. The optional files add NCBI Gene IDs
-        and gene display metadata without changing the output schema.
-
-        Args:
-            uniprot_conversion: KEGG UniProt-to-gene conversion table.
-            gene_ko: KEGG gene-to-KO link table.
-            gene_pathway: KEGG gene-to-pathway link table.
-            organism_code: KEGG organism code expected as the gene-ID prefix.
-            gene_list: Optional KEGG gene list with symbol and description.
-            ncbi_gene_conversion: Optional NCBI-Gene-to-KEGG conversion table.
-
-        Returns:
-            A mapping-mode handle for extraction, selection, and tidy output.
-
-        Raises:
-            FileNotFoundError: If any provided file does not exist.
-            ValueError: If ``organism_code`` is empty.
+        Construction validates the root and optional global overlays but does
+        not enumerate organism directories or open biological files. Each
+        lazy execution observes the organism directories then available below
+        ``source``.
 
         Examples:
-            Open one organism's mapping files and read a normalized gene mapping:
-
-            >>> db = KEGGDatabase.from_mapping_files(
-            ...     uniprot_conversion="data/kegg/conv_uniprot.tsv",
-            ...     gene_ko="data/kegg/gene_ko.tsv",
-            ...     gene_pathway="data/kegg/gene_pathway.tsv",
-            ...     organism_code="hsa",
-            ... )
-            >>> db.mappings().select(
-            ...     "kegg_gene_id", "uniprot_id", "ko_id"
-            ... ).collect().row(0, named=True)
-            {'kegg_gene_id': 'hsa:1', 'uniprot_id': 'P12345', 'ko_id': 'K00001'}
+            >>> db = KEGGDatabase.from_mapping_directory("data/kegg/mapping")
+            >>> isinstance(db.organisms(), pl.LazyFrame)
+            True
         """
-        organism_code = str(organism_code).strip()
-        if not organism_code:
-            raise ValueError("KEGG organism_code must be non-empty after normalization")
-
-        file_conv_uniprot = _validate_file(
-            uniprot_conversion,
-            label="KEGG conv_uniprot file",
-        )
-        file_gene_ko = _validate_file(
-            gene_ko,
-            label="KEGG gene_ko file",
-        )
-        file_gene_pathway = _validate_file(
-            gene_pathway,
-            label="KEGG gene_pathway file",
-        )
-        file_gene_list = gene_list
-        if file_gene_list is not None:
-            file_gene_list = _validate_file(
-                file_gene_list,
-                label="KEGG gene_list file",
-            )
-        file_conv_ncbi_geneid = ncbi_gene_conversion
-        if file_conv_ncbi_geneid is not None:
-            file_conv_ncbi_geneid = _validate_file(
-                file_conv_ncbi_geneid,
-                label="KEGG conv_ncbi_geneid file",
-            )
-
         return cls(
             snapshot=_KeggSnapshot(
                 kind=_KeggSnapshotKind.MAPPING_FILES,
-                file_conv_uniprot=file_conv_uniprot,
-                file_gene_ko=file_gene_ko,
-                file_gene_pathway=file_gene_pathway,
-                organism_code=organism_code,
-                file_gene_list=file_gene_list,
-                file_conv_ncbi_geneid=file_conv_ncbi_geneid,
+                mapping=create_directory_snapshot(
+                    source,
+                    organism_list=organism_list,
+                    ko_pathway=ko_pathway,
+                    release_version=release_version,
+                ),
+            )
+        )
+
+    @classmethod
+    def from_mapping_files(
+        cls,
+        source: os.PathLike[str] | str | None = None,
+        *,
+        organism_code: str,
+        gene_list: os.PathLike[str] | str | None = None,
+        uniprot_conversion: os.PathLike[str] | str | None = None,
+        ncbi_gene_conversion: os.PathLike[str] | str | None = None,
+        gene_ko: os.PathLike[str] | str | None = None,
+        gene_pathway: os.PathLike[str] | str | None = None,
+        organism_list: os.PathLike[str] | str | None = None,
+        ko_pathway: os.PathLike[str] | str | None = None,
+        release_version: str | None = None,
+    ) -> KEGGDatabase:
+        """Create a partial one-organism mapping handle from a direct root,
+        explicit role files, or both.
+
+        Explicit files replace conventional children of ``source``. Missing
+        roles remain unavailable capabilities; at least one organism role is
+        required. Global roles are never discovered from a parent directory.
+
+        Examples:
+            >>> db = KEGGDatabase.from_mapping_files(
+            ...     "data/kegg/hsa", organism_code="hsa"
+            ... )
+            >>> isinstance(db.gene_annotations(), pl.LazyFrame)
+            True
+        """
+        return cls(
+            snapshot=_KeggSnapshot(
+                kind=_KeggSnapshotKind.MAPPING_FILES,
+                mapping=create_files_snapshot(
+                    source,
+                    organism_code=organism_code,
+                    gene_list=gene_list,
+                    uniprot_conversion=uniprot_conversion,
+                    ncbi_gene_conversion=ncbi_gene_conversion,
+                    gene_ko=gene_ko,
+                    gene_pathway=gene_pathway,
+                    organism_list=organism_list,
+                    ko_pathway=ko_pathway,
+                    release_version=release_version,
+                ),
             ),
         )
 
-    def mappings(self) -> pl.LazyFrame:
-        """Return the normalized many-to-many organism mapping lazily.
+    def with_organisms(self, organism_codes: Sequence[str]) -> KEGGDatabase:
+        """Return a mapping handle physically scoped to selected organisms.
 
         Examples:
-            >>> db.mappings().select("kegg_gene_id").collect()  # doctest: +SKIP
+            >>> scoped = db.with_organisms(["hsa"])  # doctest: +SKIP
+            >>> scoped.organisms().collect()["organism_code"].to_list()  # doctest: +SKIP
+            ['hsa']
+        """
+        mapping = self._require_mapping_snapshot("scope KEGG organisms")
+        return replace(
+            self,
+            snapshot=replace(
+                self.snapshot,
+                mapping=mapping.with_organisms(organism_codes),
+            ),
+        )
+
+    def organisms(self) -> pl.LazyFrame:
+        """Return organism members and optional official metadata lazily.
+
+        Examples:
+            >>> db.organisms().select("organism_code").collect()  # doctest: +SKIP
             shape: (..., 1)
         """
-        snapshot = copy.copy(self)
-        return register_replayable_source(
-            schema=SCHEMA_MAPPING,
-            batches=lambda batch_size: _iter_kegg_frame(
-                snapshot._eager_mappings(), batch_size
-            ),
+        return mapping_relation(
+            self._require_mapping_snapshot("read KEGG organisms"), "organism"
         )
 
-    def _eager_mappings(self) -> pl.DataFrame:
-        """Extract the normalized many-to-many organism mapping.
-
-        Returns:
-            One row per distinct joined mapping combination across KEGG gene,
-            UniProt, NCBI Gene, KO, and pathway IDs. Columns backed by omitted
-            optional files remain nullable.
-
-        Raises:
-            ValueError: If called for a BRITE snapshot or if input KEGG gene IDs
-                do not match the configured organism code.
+    def gene_annotations(self) -> pl.LazyFrame:
+        """Return one nested aggregate row per composite KEGG gene lazily.
 
         Examples:
-            Preserve the two pathway memberships of one KEGG gene:
-
-            >>> db = KEGGDatabase.from_mapping_files(
-            ...     uniprot_conversion="data/kegg/conv_uniprot.tsv",
-            ...     gene_ko="data/kegg/gene_ko.tsv",
-            ...     gene_pathway="data/kegg/gene_pathway.tsv",
-            ...     organism_code="hsa",
-            ... )
-            >>> db.mappings().filter(
-            ...     pl.col("kegg_gene_id") == "hsa:1"
-            ... ).select("uniprot_id", "kegg_pathway_id").collect().to_dicts()
-            [{'uniprot_id': 'P12345', 'kegg_pathway_id': 'hsa00010'}, {'uniprot_id': 'P12345', 'kegg_pathway_id': 'hsa01100'}]
+            >>> db.gene_annotations().select("kegg_gene_id").collect()  # doctest: +SKIP
+            shape: (..., 1)
         """
-        self._require_mapping_snapshot("extract KEGG mapping")
-        if self._df_mapping is None:
-            if self.snapshot.kind == _KeggSnapshotKind.MAPPING_PUBLICATION:
-                with self.connect() as connection:
-                    cursor = connection.execute("SELECT * FROM mapping")
-                    physical_schema = dict(SCHEMA_MAPPING)
-                    frame = pl.DataFrame(
-                        cursor.fetchall(),
-                        schema=physical_schema,
-                        orient="row",
-                    )
-                self._df_mapping = frame
-            else:
-                self._df_mapping = build_mapping_frame(
-                    organism_code=self.snapshot.organism_code or "",
-                    df_conv_uniprot=read_conv_uniprot_frame(
-                        self._required_path(self.snapshot.file_conv_uniprot)
-                    ),
-                    df_conv_ncbi_geneid=read_conv_ncbi_geneid_frame(
-                        self.snapshot.file_conv_ncbi_geneid
-                    ),
-                    df_gene_ko=read_gene_ko_frame(
-                        self._required_path(self.snapshot.file_gene_ko)
-                    ),
-                    df_gene_pathway=read_gene_pathway_frame(
-                        self._required_path(self.snapshot.file_gene_pathway)
-                    ),
-                    df_gene_list=read_gene_list_frame(self.snapshot.file_gene_list),
-                )
-        return self._df_mapping
+        return mapping_relation(
+            self._require_mapping_snapshot("read KEGG gene annotations"),
+            "gene_annotation",
+        )
+
+    def ko_annotations(self) -> pl.LazyFrame:
+        """Return the global KO universe and optional pathway mappings lazily.
+
+        Examples:
+            >>> db.ko_annotations().select("ko_id").collect()  # doctest: +SKIP
+            shape: (..., 1)
+        """
+        return mapping_relation(
+            self._require_mapping_snapshot("read KEGG KO annotations"),
+            "ko_annotation",
+        )
+
+    def gene_pathways(self) -> pl.LazyFrame:
+        """Return direct gene-to-pathway observations as nested lists.
+
+        Examples:
+            >>> db.gene_pathways().collect()  # doctest: +SKIP
+            shape: (..., 3)
+        """
+        return mapping_gene_pathways(
+            self._require_mapping_snapshot("read KEGG gene pathways")
+        )
+
+    def ko_pathways(self) -> pl.LazyFrame:
+        """Return direct KO-to-pathway observations as nested lists.
+
+        Examples:
+            >>> db.ko_pathways().collect()  # doctest: +SKIP
+            shape: (..., 2)
+        """
+        return mapping_ko_pathways(
+            self._require_mapping_snapshot("read KEGG KO pathways")
+        )
+
+    def gene_pathways_via_ko(self) -> pl.LazyFrame:
+        """Return auditable gene-to-KO-to-pathway traversal results lazily.
+
+        Examples:
+            >>> db.gene_pathways_via_ko().collect()  # doctest: +SKIP
+            shape: (..., 3)
+        """
+        return mapping_gene_pathways_via_ko(
+            self._require_mapping_snapshot("traverse KEGG pathways via KO")
+        )
 
     @overload
     def select_ids(
@@ -499,7 +506,7 @@ class KEGGDatabase:
             >>> selection = db.select_ids(
             ...     ["sp|P12345|GENE1_HUMAN"], namespace="uniprot"
             ... )
-            >>> selection.mappings().select(
+            >>> selection.matches().select(
             ...     "input_id", "kegg_gene_id"
             ... ).unique().collect().to_dicts()
             [{'input_id': 'P12345', 'kegg_gene_id': 'hsa:1'}]
@@ -514,15 +521,12 @@ class KEGGDatabase:
                 namespace=metabolic_namespace,
                 include_obsolete=include_obsolete,
             )
-        self._require_mapping_snapshot("select KEGG IDs")
+        mapping = self._require_mapping_snapshot("select KEGG IDs")
         mapping_namespace = cast("KEGGNamespace", namespace)
-        validate_namespace(mapping_namespace)
-        df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
-        return KeggSelection(
-            dataset=self,
-            _df_input_ids=df_input_ids,
-            _df_groups=None,
-            _df_group_membership=None,
+        validate_mapping_namespace(mapping_namespace)
+        return KeggSelection._from_ids(  # pyright: ignore[reportPrivateUsage]
+            mapping,
+            ids,
             namespace=mapping_namespace,
         )
 
@@ -581,7 +585,7 @@ class KEGGDatabase:
             >>> selection = db.select_groups(
             ...     {"up": ["P12345"]}, namespace="uniprot"
             ... )
-            >>> selection.mappings().select(
+            >>> selection.matches().select(
             ...     "group_id", "input_id"
             ... ).unique().collect().to_dicts()
             [{'group_id': 'up', 'input_id': 'P12345'}]
@@ -596,19 +600,12 @@ class KEGGDatabase:
                 namespace=metabolic_namespace,
                 include_obsolete=include_obsolete,
             )
-        self._require_mapping_snapshot("select grouped KEGG IDs")
+        mapping = self._require_mapping_snapshot("select grouped KEGG IDs")
         mapping_namespace = cast("KEGGNamespace", namespace)
-        validate_namespace(mapping_namespace)
-        grp_in_frames = create_group_input_frames(
+        validate_mapping_namespace(mapping_namespace)
+        return KeggSelection._from_groups(  # pyright: ignore[reportPrivateUsage]
+            mapping,
             ids_by_group,
-            schema_groups=SCHEMA_GROUPS,
-            schema_group_input_ids=SCHEMA_GROUP_INPUT_IDS,
-        )
-        return KeggSelection(
-            dataset=self,
-            _df_input_ids=grp_in_frames.df_input_ids,
-            _df_groups=grp_in_frames.df_groups,
-            _df_group_membership=grp_in_frames.df_group_membership,
             namespace=mapping_namespace,
         )
 
@@ -627,16 +624,6 @@ class KEGGDatabase:
             >>> sorted(brite.build_tidy().frames)
             ['pathway']
 
-            Build an organism mapping dataset:
-
-            >>> mapping = KEGGDatabase.from_mapping_files(
-            ...     uniprot_conversion="data/kegg/conv_uniprot.tsv",
-            ...     gene_ko="data/kegg/gene_ko.tsv",
-            ...     gene_pathway="data/kegg/gene_pathway.tsv",
-            ...     organism_code="hsa",
-            ... )
-            >>> sorted(mapping.build_tidy().frames)
-            ['mapping']
         """
         if self.snapshot.kind == _KeggSnapshotKind.BRITE_JSON:
             file_brite_json = self._required_path(self.snapshot.file_brite_json)
@@ -664,30 +651,21 @@ class KEGGDatabase:
                 scope="brite",
             )
 
-        self._require_mapping_snapshot("build KEGG mapping tidy dataset")
-        return TidyDataset(
-            frames={"mapping": self.mappings()},
-            source=self._mapping_tidy_sources(),
-            resource_schema_version=MAPPING_SCHEMA_VERSION,
-            source_schema_profile="kegg-organism-mapping-files-v1",
-            build_id_prefix=f"kegg-mapping-{self.snapshot.organism_code}",
-            assets=tuple(
-                TidyAsset(path=path, kind=kind, frame_name=frame_name)
-                for path, kind, frame_name in MAPPING_ASSET_SPECS
-            ),
-            resource_name="kegg",
-            scope="mapping",
-            extra_metadata={
-                "bioextract.organism_code": self.snapshot.organism_code or ""
-            },
-        )
+        if self.snapshot.kind in {
+            _KeggSnapshotKind.MAPPING_FILES,
+            _KeggSnapshotKind.MAPPING_PUBLICATION,
+        }:
+            raise CapabilityError(
+                "KEGG mapping build_tidy() was removed; use the native lazy "
+                "relations or write_duckdb()"
+            )
+        raise CapabilityError("build_tidy() requires a KEGG BRITE source handle")
 
     def write_duckdb(
         self,
         path: os.PathLike[str] | str,
         *,
         if_exists: Literal["fail", "replace"] = "fail",
-        include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
         """Atomically publish a KEGG source profile as DuckDB.
 
@@ -696,14 +674,16 @@ class KEGGDatabase:
             >>> result.path.name  # doctest: +SKIP
             'kegg.duckdb'
         """
-        if self.snapshot.kind in {
-            _KeggSnapshotKind.BRITE_JSON,
-            _KeggSnapshotKind.MAPPING_FILES,
-        }:
+        if self.snapshot.kind == _KeggSnapshotKind.BRITE_JSON:
             return self.build_tidy().write_duckdb(
                 path,
                 if_exists=if_exists,
-                include_source_hashes=include_source_hashes,
+            )
+        if self.snapshot.kind == _KeggSnapshotKind.MAPPING_FILES:
+            return write_mapping_publication(
+                self._require_mapping_snapshot("publish KEGG mappings"),
+                Path(path),
+                if_exists=if_exists,
             )
         if self.snapshot.kind != _KeggSnapshotKind.METABOLIC_FILES:
             raise CapabilityError("write_duckdb() requires a KEGG source handle")
@@ -714,7 +694,6 @@ class KEGGDatabase:
             snapshot,
             Path(path),
             if_exists=if_exists,
-            include_source_hashes=include_source_hashes,
         )
 
     def connect(self) -> duckdb.DuckDBPyConnection:
@@ -752,43 +731,7 @@ class KEGGDatabase:
             )
         return self._metabolic_publication
 
-    def _mapping_tidy_sources(self) -> tuple[TidySource, ...]:
-        sources = [
-            TidySource(
-                logical_name="uniprot_conversion",
-                path=self._required_path(self.snapshot.file_conv_uniprot),
-                media_type=MEDIA_TYPE_TSV,
-            ),
-            TidySource(
-                logical_name="gene_ko",
-                path=self._required_path(self.snapshot.file_gene_ko),
-                media_type=MEDIA_TYPE_TSV,
-            ),
-            TidySource(
-                logical_name="gene_pathway",
-                path=self._required_path(self.snapshot.file_gene_pathway),
-                media_type=MEDIA_TYPE_TSV,
-            ),
-        ]
-        if self.snapshot.file_gene_list is not None:
-            sources.append(
-                TidySource(
-                    logical_name="gene_list",
-                    path=self.snapshot.file_gene_list,
-                    media_type=MEDIA_TYPE_TSV,
-                )
-            )
-        if self.snapshot.file_conv_ncbi_geneid is not None:
-            sources.append(
-                TidySource(
-                    logical_name="ncbi_gene_conversion",
-                    path=self.snapshot.file_conv_ncbi_geneid,
-                    media_type=MEDIA_TYPE_TSV,
-                )
-            )
-        return tuple(sources)
-
-    def _require_mapping_snapshot(self, action: str) -> None:
+    def _require_mapping_snapshot(self, action: str) -> MappingSnapshot:
         if self.snapshot.kind not in {
             _KeggSnapshotKind.MAPPING_FILES,
             _KeggSnapshotKind.MAPPING_PUBLICATION,
@@ -796,195 +739,15 @@ class KEGGDatabase:
             raise ValueError(
                 f"Cannot {action} from a KEGG BRITE JSON snapshot or publication"
             )
+        if self.snapshot.mapping is None:
+            raise CapabilityError("KEGG mapping snapshot is missing")
+        return self.snapshot.mapping
 
     @staticmethod
     def _required_path(path: Path | None) -> Path:
         if path is None:
             raise ValueError("Required KEGG resource path is missing")
         return path
-
-
-@dataclass(slots=True)
-class KeggSelection:
-    """Deferred single or grouped query against a KEGG mapping snapshot.
-
-    Selections are created by :meth:`KEGGDatabase.select_ids` or
-    :meth:`KEGGDatabase.select_groups`. Matched output retains the normalized
-    ``input_id`` and its ``input_namespace``; grouped selections additionally prepend
-    ``group_id``.
-
-    Examples:
-        Materialize matched rows and report IDs that did not map:
-
-        >>> db = KEGGDatabase.from_mapping_files(
-        ...     uniprot_conversion="data/kegg/conv_uniprot.tsv",
-        ...     gene_ko="data/kegg/gene_ko.tsv",
-        ...     gene_pathway="data/kegg/gene_pathway.tsv",
-        ...     organism_code="hsa",
-        ... )
-        >>> selection = db.select_ids(
-        ...     ["P12345", "MISSING"], namespace="uniprot"
-        ... )
-        >>> selection.mappings().select("kegg_gene_id").collect().unique().to_series().to_list()
-        ['hsa:1']
-        >>> selection.unmatched_ids().collect().to_dicts()
-        [{'input_id': 'MISSING'}]
-    """
-
-    dataset: KEGGDatabase
-    _df_input_ids: pl.DataFrame = field(repr=False)
-    _df_groups: pl.DataFrame | None = field(repr=False)
-    _df_group_membership: pl.DataFrame | None = field(repr=False)
-    namespace: KEGGNamespace
-    _df_mapping: pl.DataFrame | None = field(default=None, repr=False)
-    _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
-
-    @property
-    def is_grouped(self) -> bool:
-        """Report whether this selection carries `group_id` through outputs.
-
-        Examples:
-            Inspect a grouped selection:
-
-            >>> db = KEGGDatabase.from_mapping_files(
-            ...     uniprot_conversion="data/kegg/conv_uniprot.tsv",
-            ...     gene_ko="data/kegg/gene_ko.tsv",
-            ...     gene_pathway="data/kegg/gene_pathway.tsv",
-            ...     organism_code="hsa",
-            ... )
-            >>> selection = db.select_groups(
-            ...     {"up": ["P12345"]}, namespace="uniprot"
-            ... )
-            >>> selection.is_grouped
-            True
-        """
-        return self._df_groups is not None
-
-    def mappings(self) -> pl.LazyFrame:
-        """Return selected KEGG mapping rows lazily.
-
-        Examples:
-            >>> selection.mappings().select("kegg_gene_id").collect()  # doctest: +SKIP
-            shape: (..., 1)
-        """
-        snapshot = copy.copy(self)
-        columns = (["group_id"] if self._df_group_membership is not None else []) + [
-            "input_id",
-            "input_namespace",
-            *SCHEMA_MAPPING,
-        ]
-        schema = {column: SCHEMA_MAPPING.get(column, pl.String) for column in columns}
-        return register_replayable_source(
-            schema=schema,
-            batches=lambda batch_size: _iter_kegg_frame(
-                snapshot._eager_mapping_selection(), batch_size
-            ),
-        )
-
-    def _eager_mapping_selection(self) -> pl.DataFrame:
-        """Extract every KEGG mapping row matched by the selected input IDs.
-
-        Examples:
-            Materialize KEGG genes matched by one UniProt accession:
-
-            >>> db = KEGGDatabase.from_mapping_files(
-            ...     uniprot_conversion="data/kegg/conv_uniprot.tsv",
-            ...     gene_ko="data/kegg/gene_ko.tsv",
-            ...     gene_pathway="data/kegg/gene_pathway.tsv",
-            ...     organism_code="hsa",
-            ... )
-            >>> selection = db.select_ids(["P12345"], namespace="uniprot")
-            >>> selection.mappings().select("kegg_gene_id").collect().to_series().to_list()
-            ['hsa:1', 'hsa:1']
-        """
-        if self._df_mapping is None:
-            mapping = extract_mapping_frame(
-                self.dataset._eager_mappings(),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-                self._df_input_ids,
-                namespace=self.namespace,
-                cols_group_id=(),
-            )
-            if self._df_group_membership is not None:
-                columns = ["group_id", *mapping.columns]
-                mapping = (
-                    self._df_group_membership.join(
-                        mapping,
-                        on="input_id",
-                        how="inner",
-                    )
-                    .select(columns)
-                    .unique()
-                    .sort(columns)
-                )
-            self._df_mapping = mapping
-        return self._df_mapping
-
-    def unmatched_ids(self) -> pl.LazyFrame:
-        """Return selected KEGG IDs without a mapping row lazily.
-
-        Examples:
-            >>> selection.unmatched_ids().collect()  # doctest: +SKIP
-            shape: (..., 1)
-        """
-        snapshot = copy.copy(self)
-        columns = (
-            ["group_id", "input_id"]
-            if self._df_group_membership is not None
-            else ["input_id"]
-        )
-        return register_replayable_source(
-            schema=dict.fromkeys(columns, pl.String),
-            batches=lambda batch_size: _iter_kegg_frame(
-                snapshot._eager_unmatched_ids(), batch_size
-            ),
-        )
-
-    def _eager_unmatched_ids(self) -> pl.DataFrame:
-        """Extract normalized input IDs with no KEGG mapping row.
-
-        Grouped selections report an ID as unmapped independently within each
-        group and include ``group_id`` in the result.
-
-        Examples:
-            Retain a normalized input accession that did not map:
-
-            >>> db = KEGGDatabase.from_mapping_files(
-            ...     uniprot_conversion="data/kegg/conv_uniprot.tsv",
-            ...     gene_ko="data/kegg/gene_ko.tsv",
-            ...     gene_pathway="data/kegg/gene_pathway.tsv",
-            ...     organism_code="hsa",
-            ... )
-            >>> selection = db.select_ids(
-            ...     ["P12345", "MISSING"], namespace="uniprot"
-            ... )
-            >>> selection.unmatched_ids().collect().to_dicts()
-            [{'input_id': 'MISSING'}]
-        """
-        if self._df_unmapped is None:
-            mapping = self._eager_mapping_selection()
-            if self._df_group_membership is None:
-                self._df_unmapped = extract_unmatched_ids_frame(
-                    self._df_input_ids,
-                    mapping,
-                    cols_group_id=(),
-                )
-            else:
-                mapped_input_ids = mapping.select("input_id").unique()
-                self._df_unmapped = (
-                    self._df_group_membership.join(
-                        mapped_input_ids,
-                        on="input_id",
-                        how="anti",
-                    )
-                    .select("group_id", "input_id")
-                    .sort("group_id", "input_id")
-                )
-        return self._df_unmapped
-
-
-def _iter_kegg_frame(frame: pl.DataFrame, batch_size: int):
-    for offset in range(0, frame.height, batch_size):
-        yield frame.slice(offset, batch_size)
 
 
 def _validate_file(
@@ -1026,12 +789,6 @@ def _validate_tidy_publication(
             BRITE_SCHEMA_VERSION,
             {"pathway": "canonical"},
         ),
-        "kegg-organism-mapping-files-v1": (
-            _KeggSnapshotKind.MAPPING_PUBLICATION,
-            "mapping",
-            MAPPING_SCHEMA_VERSION,
-            {"mapping": "canonical"},
-        ),
     }
     expected = profiles.get(profile)
     if expected is None:
@@ -1041,9 +798,12 @@ def _validate_tidy_publication(
         metadata = dict(
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
-        if metadata.get("bioextract.metadata_schema_version") != "1":
+        if (
+            metadata.get("bioextract.metadata_schema_version")
+            != METADATA_SCHEMA_VERSION
+        ):
             raise ValueError("Unsupported KEGG metadata schema version")
-        validate_duckdb_metadata_v1(connection, metadata)
+        validate_duckdb_metadata_v2(connection, metadata)
         if (
             metadata.get("bioextract.resource_name") != "kegg"
             or metadata.get("bioextract.scope") != scope
@@ -1059,25 +819,12 @@ def _validate_tidy_publication(
                 "SELECT logical_name FROM _bioextract.source_file"
             ).fetchall()
         }
-        required_source_roles = (
-            {"brite_json"}
-            if scope == "brite"
-            else {"uniprot_conversion", "gene_ko", "gene_pathway"}
-        )
-        allowed_source_roles = (
-            required_source_roles
-            if scope == "brite"
-            else required_source_roles | {"gene_list", "ncbi_gene_conversion"}
-        )
+        required_source_roles = {"brite_json"}
+        allowed_source_roles = required_source_roles
         if not required_source_roles <= source_roles or not source_roles <= (
             allowed_source_roles
         ):
             raise ValueError(f"KEGG {scope} source role inventory is unsupported")
-        if (
-            scope == "mapping"
-            and not metadata.get("bioextract.organism_code", "").strip()
-        ):
-            raise ValueError("KEGG mapping publication requires organism_code")
         recorded_rows = connection.execute(
             "SELECT table_name, table_role, row_count FROM _bioextract.table_info"
         ).fetchall()
@@ -1092,21 +839,7 @@ def _validate_tidy_publication(
         if recorded != expected_tables or physical != set(expected_tables):
             raise ValueError(f"KEGG {scope} table inventory does not match metadata")
         for table_name, _, row_count in recorded_rows:
-            expected_columns = (
-                list(SCHEMA_BRITE)
-                if table_name == "pathway"
-                else [
-                    "organism_code",
-                    "kegg_gene_id",
-                    "uniprot_id",
-                    "ncbi_gene_id",
-                    "ko_id",
-                    "kegg_pathway_id",
-                    "pathway_map_id",
-                    "gene_symbol",
-                    "gene_description",
-                ]
-            )
+            expected_columns = list(SCHEMA_BRITE)
             actual_columns = [
                 (str(row[1]), str(row[2]))
                 for row in connection.execute(
@@ -1127,23 +860,6 @@ def _validate_tidy_publication(
                 "FROM _bioextract.column_mapping"
             ).fetchall()
         }
-        if scope == "brite" and observed_column_mapping:
+        if observed_column_mapping:
             raise ValueError("KEGG BRITE column provenance inventory is unsupported")
-        if scope == "mapping":
-            if observed_column_mapping:
-                raise ValueError(
-                    "KEGG mapping column provenance inventory is unsupported"
-                )
-            organism_code = metadata["bioextract.organism_code"]
-            mismatch = connection.execute(
-                "SELECT count(*) FROM mapping "
-                "WHERE organism_code IS NULL OR kegg_gene_id IS NULL "
-                "OR organism_code != ? "
-                "OR NOT starts_with(kegg_gene_id, ?)",
-                [organism_code, f"{organism_code}:"],
-            ).fetchone()
-            if mismatch is None or int(mismatch[0]) != 0:
-                raise ValueError(
-                    "KEGG mapping rows do not match the recorded organism_code"
-                )
     return kind

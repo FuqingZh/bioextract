@@ -12,8 +12,9 @@ import polars as pl
 from bioextract._lazy import register_deferred_frame_source
 from bioextract._publication import (
     BIOEXTRACT_RELATIONS,
+    METADATA_SCHEMA_VERSION,
     DuckDBWriteResult,
-    validate_duckdb_metadata_v1,
+    validate_duckdb_metadata_v2,
 )
 from bioextract._shared import (
     create_group_input_frames,
@@ -62,9 +63,8 @@ class _ReopenedReactomeTidyDataset(TidyDataset):
         table_names: Mapping[str, str] | None = None,
         if_exists: str = "fail",
         source_columns: Mapping[str, Collection[str]] | None = None,
-        include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
-        del path, table_names, if_exists, source_columns, include_source_hashes
+        del path, table_names, if_exists, source_columns
         raise CapabilityError("write_duckdb() requires a Reactome source-file handle")
 
 
@@ -186,7 +186,7 @@ class ReactomeDatabase:
         file that passed validation.
 
         Args:
-            path: A bioextract Reactome metadata-v1 DuckDB publication.
+            path: A bioextract Reactome metadata-v2 DuckDB publication.
 
         Returns:
             A publication-backed handle with the capabilities recorded by the
@@ -997,9 +997,12 @@ def _validate_reactome_publication(path: Path) -> frozenset[str]:
             metadata = {str(row[0]): str(row[1]) for row in metadata_rows}
             if len(metadata) != len(metadata_rows):
                 raise ValueError("Reactome publication has duplicate metadata keys")
-            if metadata.get("bioextract.metadata_schema_version") != "1":
+            if (
+                metadata.get("bioextract.metadata_schema_version")
+                != METADATA_SCHEMA_VERSION
+            ):
                 raise ValueError("Unsupported Reactome metadata schema version")
-            validate_duckdb_metadata_v1(connection, metadata)
+            validate_duckdb_metadata_v2(connection, metadata)
             if metadata.get("bioextract.resource_name") != "reactome":
                 raise ValueError("DuckDB file is not a bioextract Reactome publication")
             if metadata.get("bioextract.source_schema_profile") != (
@@ -1022,7 +1025,7 @@ def _validate_reactome_publication(path: Path) -> frozenset[str]:
                 not source_roles
                 or len(source_roles) != len(source_rows)
                 or not source_roles <= allowed_roles
-                or any(int(row[1]) < 0 for row in source_rows)
+                or any(row[1] is not None and int(row[1]) < 0 for row in source_rows)
             ):
                 raise ValueError("Reactome source capability inventory is unsupported")
 

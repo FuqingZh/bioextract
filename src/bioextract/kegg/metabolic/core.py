@@ -18,7 +18,7 @@ from polars._typing import SchemaDict
 from bioextract._lazy import register_deferred_frame_source
 from bioextract._publication import (
     DuckDBWriteResult,
-    validate_duckdb_metadata_v1,
+    validate_duckdb_metadata_v2,
 )
 from bioextract._shared import validate_group_ids
 from bioextract.errors import CapabilityError
@@ -687,7 +687,6 @@ def write_duckdb(
     path: Path,
     *,
     if_exists: Literal["fail", "replace"] = "fail",
-    include_source_hashes: bool = False,
 ) -> DuckDBWriteResult:
     from .publication import publish
 
@@ -695,7 +694,6 @@ def write_duckdb(
         snapshot,
         path,
         if_exists=if_exists,
-        include_source_hashes=include_source_hashes,
     )
 
 
@@ -731,9 +729,9 @@ def open_publication(path: Path) -> MetabolicPublication:
                 "SELECT key, value FROM _bioextract.metadata"
             ).fetchall()
         }
-        if metadata.get("bioextract.metadata_schema_version") != "1":
+        if metadata.get("bioextract.metadata_schema_version") != METADATA_VERSION:
             raise ValueError("Unsupported KEGG metadata schema version")
-        validate_duckdb_metadata_v1(con, metadata)
+        validate_duckdb_metadata_v2(con, metadata)
         if metadata.get("bioextract.source_schema_profile") != SOURCE_SCHEMA_PROFILE:
             raise ValueError("Unsupported KEGG source schema profile")
         if (
@@ -767,22 +765,19 @@ def open_publication(path: Path) -> MetabolicPublication:
             for value in metadata.get("bioextract.capabilities", "").split(",")
             if value
         )
-        if metadata.get("bioextract.metadata_schema_version") == "1":
-            if "bioextract.capabilities" not in metadata:
+        if "bioextract.capabilities" not in metadata:
+            raise ValueError(
+                "KEGG metadata v2 publication is missing capability metadata"
+            )
+        unknown = sorted(capabilities - set(_CAPABILITY_TABLES))
+        if unknown:
+            raise ValueError(f"KEGG publication has unknown capabilities: {unknown}")
+        for capability in capabilities:
+            if not (tables & _CAPABILITY_TABLES[capability]):
                 raise ValueError(
-                    "KEGG metadata v2 publication is missing capability metadata"
+                    "KEGG capability metadata disagrees with table inventory: "
+                    f"{capability}"
                 )
-            unknown = sorted(capabilities - set(_CAPABILITY_TABLES))
-            if unknown:
-                raise ValueError(
-                    f"KEGG publication has unknown capabilities: {unknown}"
-                )
-            for capability in capabilities:
-                if not (tables & _CAPABILITY_TABLES[capability]):
-                    raise ValueError(
-                        "KEGG capability metadata disagrees with table inventory: "
-                        f"{capability}"
-                    )
             for table in tables:
                 if not any(
                     table in _CAPABILITY_TABLES[capability]

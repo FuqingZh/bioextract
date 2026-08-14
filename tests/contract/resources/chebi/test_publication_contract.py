@@ -201,7 +201,7 @@ def test_chebi_rejects_legacy_and_unknown_metadata_contracts(
             "WHERE key='bioextract.resource_schema_version'"
         )
         connection.execute("DROP TABLE _bioextract.validation_issue")
-    with pytest.raises(ValueError, match="five _bioextract relations"):
+    with pytest.raises(ValueError, match="metadata tables"):
         ChEBIDatabase.from_duckdb(legacy)
 
     unknown = tmp_path / "unknown.duckdb"
@@ -214,12 +214,12 @@ def test_chebi_rejects_legacy_and_unknown_metadata_contracts(
     with pytest.raises(ValueError, match="metadata schema version"):
         ChEBIDatabase.from_duckdb(unknown)
 
-    missing_v1_table = tmp_path / "missing-v1-table.duckdb"
-    missing_v1_table.write_bytes(current.read_bytes())
-    with duckdb.connect(str(missing_v1_table)) as connection:
+    missing_v2_table = tmp_path / "missing-v2-table.duckdb"
+    missing_v2_table.write_bytes(current.read_bytes())
+    with duckdb.connect(str(missing_v2_table)) as connection:
         connection.execute("DROP TABLE _bioextract.validation_issue")
-    with pytest.raises(ValueError, match="five _bioextract relations"):
-        ChEBIDatabase.from_duckdb(missing_v1_table)
+    with pytest.raises(ValueError, match="metadata tables"):
+        ChEBIDatabase.from_duckdb(missing_v2_table)
 
     for index, profile in enumerate(("", "unknown-profile")):
         unsupported_profile = tmp_path / f"unsupported-profile-{index}.duckdb"

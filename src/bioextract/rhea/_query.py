@@ -11,7 +11,7 @@ import polars as pl
 from polars._typing import SchemaDict
 
 from bioextract._lazy import register_replayable_source
-from bioextract._publication import validate_duckdb_metadata_v1
+from bioextract._publication import validate_duckdb_metadata_v2
 from bioextract._shared import validate_group_ids
 from bioextract.errors import CapabilityError, IntegrityError
 
@@ -26,8 +26,9 @@ _METADATA_TABLES = {
     "source_file",
     "table_info",
     "column_mapping",
+    "validation_issue",
 }
-_METADATA_SCHEMA_VERSIONS = {"1"}
+_METADATA_SCHEMA_VERSIONS = {"2"}
 _EXTERNAL_DATABASE_BY_NAMESPACE: Mapping[RheaNamespace, str] = {
     "ec": "EC",
     "go": "GO",
@@ -990,7 +991,7 @@ def open_rhea_publication(path: str | Path) -> _RheaPublication:
                 "Unsupported Rhea publication metadata: "
                 f"bioextract.metadata_schema_version={metadata_schema_version!r}"
             )
-        validate_duckdb_metadata_v1(connection, metadata)
+        validate_duckdb_metadata_v2(connection, metadata)
         if metadata.get("bioextract.source_schema_profile") != SOURCE_SCHEMA_PROFILE:
             raise ValueError("Unsupported Rhea source schema profile")
         resource_schema_key = "bioextract.resource_schema_version"

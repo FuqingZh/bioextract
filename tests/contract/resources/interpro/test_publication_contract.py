@@ -63,7 +63,7 @@ def _source(
         ),
     ],
 )
-def test_capability_publication_has_exact_metadata_v1_inventory_and_reopens(
+def test_capability_publication_has_exact_metadata_v2_inventory_and_reopens(
     tmp_path: Path,
     with_xml: bool,
     profile: str,
@@ -81,7 +81,8 @@ def test_capability_publication_has_exact_metadata_v1_inventory_and_reopens(
         metadata = dict(
             first.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
-        assert metadata["bioextract.metadata_schema_version"] == "1"
+        assert metadata["bioextract.metadata_schema_version"] == "2"
+        assert "bioextract.sources" not in metadata
         assert metadata["bioextract.resource_name"] == "interpro"
         assert metadata["bioextract.resource_schema_version"] == "interpro-v1"
         assert metadata["bioextract.source_schema_profile"] == profile
@@ -215,7 +216,7 @@ def test_reopened_handle_reports_missing_publication_source_capability(
     ("statement", "message"),
     [
         (
-            "UPDATE _bioextract.metadata SET value='2' "
+            "UPDATE _bioextract.metadata SET value='1' "
             "WHERE key='bioextract.metadata_schema_version'",
             "metadata schema version",
         ),
@@ -247,7 +248,7 @@ def test_reopened_handle_reports_missing_publication_source_capability(
         (
             "UPDATE _bioextract.source_file SET media_type='forged' "
             "WHERE logical_name='protein_to_interpro'",
-            "Embedded source inventory",
+            "source media-type inventory",
         ),
     ],
 )
@@ -353,20 +354,17 @@ def test_xml_profile_reopens_multiple_distinct_xrefs_for_one_pfam(
         assert connection.execute("SELECT count(*) FROM term_xref").fetchone() == (2,)
 
 
-@pytest.mark.parametrize("value", ["null", "{}"])
-def test_from_duckdb_rejects_wrong_embedded_source_json_shape(
+def test_from_duckdb_rejects_forbidden_duplicate_source_inventory(
     tmp_path: Path,
-    value: str,
 ) -> None:
     path = tmp_path / "interpro.duckdb"
     _source(tmp_path).write_duckdb(path)
     with duckdb.connect(str(path)) as connection:
         connection.execute(
-            "UPDATE _bioextract.metadata SET value=? WHERE key='bioextract.sources'",
-            [value],
+            "INSERT INTO _bioextract.metadata VALUES ('bioextract.sources', '[]')"
         )
 
-    with pytest.raises(IntegrityError):
+    with pytest.raises(IntegrityError, match="forbids the duplicated"):
         InterProDatabase.from_duckdb(path)
 
 

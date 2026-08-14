@@ -40,7 +40,14 @@ def _publication(
         resource_schema_version="fixture-v1",
         source_schema_profile="fixture-source-v1",
         source_schema_version="official-v2",
-        sources=(SourceFileRecord("source", source, "text/tab-separated-values"),),
+        sources=(
+            SourceFileRecord(
+                "source",
+                source,
+                "text/tab-separated-values",
+                source.stat().st_size,
+            ),
+        ),
         scope="canonical",
         release_version="2026-08",
         release_version_source="official_metadata",
@@ -159,8 +166,8 @@ def test_count_verification_and_mismatch(tmp_path: Path) -> None:
     ("corruption", "message"),
     [
         (
-            "UPDATE _bioextract.metadata SET value='[]' WHERE key='bioextract.sources'",
-            "source inventory",
+            "INSERT INTO _bioextract.metadata VALUES ('bioextract.sources', '[]')",
+            "forbids the duplicated",
         ),
         (
             "INSERT INTO _bioextract.table_info VALUES "
@@ -248,15 +255,9 @@ def test_connection_closes_when_validation_fails(
 def test_inspection_does_not_need_recorded_source_path(tmp_path: Path) -> None:
     path = _publication(tmp_path)
     with duckdb.connect(str(path)) as connection:
-        old_path = str(tmp_path / "source.tsv")
         display_path = "../provenance-only/missing-source.tsv"
         connection.execute(
             "UPDATE _bioextract.source_file SET display_path=?", [display_path]
-        )
-        connection.execute(
-            "UPDATE _bioextract.metadata SET value=replace(value, ?, ?) "
-            "WHERE key='bioextract.sources'",
-            [old_path, display_path],
         )
     result = publication.inspect_publication(path)
     assert result.source_files[0].display_path == display_path

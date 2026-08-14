@@ -114,6 +114,8 @@ def test_resource_factories_do_not_expose_limits() -> None:
     factories = (
         go.GODatabase.from_obo,
         kegg.KEGGDatabase.from_brite_json,
+        kegg.KEGGDatabase.from_mapping_directory,
+        kegg.KEGGDatabase.from_mapping_files,
         kegg.KEGGDatabase.from_metabolic_files,
         reactome.ReactomeDatabase.from_files,
         wikipathways.WikiPathwaysDatabase.from_gmt,
@@ -125,9 +127,12 @@ def test_resource_factories_do_not_expose_limits() -> None:
         omnipath.OmniPathDatabase.from_files,
         rhea.RheaDatabase.from_files,
     )
-    assert all(
-        "limits" not in inspect.signature(factory).parameters for factory in factories
-    )
+    for factory in factories:
+        parameters = inspect.signature(factory).parameters
+        assert "limits" not in parameters
+        assert "limit" not in parameters
+        assert "max_rows" not in parameters
+        assert "batch_size" not in parameters
 
 
 def test_resource_factory_parameter_names_follow_domain_roles() -> None:
@@ -148,13 +153,23 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
         go.GODatabase.from_obo: ("path",),
         go.GODatabase.from_duckdb: ("path",),
         kegg.KEGGDatabase.from_brite_json: ("path",),
+        kegg.KEGGDatabase.from_mapping_directory: (
+            "source",
+            "organism_list",
+            "ko_pathway",
+            "release_version",
+        ),
         kegg.KEGGDatabase.from_mapping_files: (
-            "uniprot_conversion",
-            "gene_ko",
-            "gene_pathway",
+            "source",
             "organism_code",
             "gene_list",
+            "uniprot_conversion",
             "ncbi_gene_conversion",
+            "gene_ko",
+            "gene_pathway",
+            "organism_list",
+            "ko_pathway",
+            "release_version",
         ),
         kegg.KEGGDatabase.from_metabolic_files: (
             "source",

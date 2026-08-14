@@ -292,7 +292,12 @@ def write_knowledgebase(
             for table, schema in TABLE_SCHEMAS.items()
         )
         sources = [
-            SourceFileRecord("knowledgebase_entries", entries, _media_type(entries))
+            SourceFileRecord(
+                "knowledgebase_entries",
+                entries,
+                _media_type(entries),
+                entries.stat().st_size,
+            )
         ]
         if canonical_sequences is not None:
             sources.append(
@@ -300,6 +305,7 @@ def write_knowledgebase(
                     "canonical_fasta",
                     canonical_sequences,
                     _media_type(canonical_sequences),
+                    canonical_sequences.stat().st_size,
                 )
             )
         if isoform_sequences is not None:
@@ -308,6 +314,7 @@ def write_knowledgebase(
                     "isoform_fasta",
                     isoform_sequences,
                     _media_type(isoform_sequences),
+                    isoform_sequences.stat().st_size,
                 )
             )
         return write_duckdb_publication(

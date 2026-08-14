@@ -1074,6 +1074,7 @@ def _source_record(logical_name: str, path: Path) -> SourceFileRecord:
         logical_name=logical_name,
         path=path,
         media_type=_media_type(path),
+        bytes=path.stat().st_size,
     )
 
 
