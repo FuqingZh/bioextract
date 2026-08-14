@@ -17,7 +17,7 @@ The focused suite verifies:
 - multi-IsoId products retain one main product row plus ordered old-ID rows;
 - repeated External/owned product contexts remain distinct, while varsplic
   materializes only the unique Alternative owner;
-- metadata v1 resource/source profile fields and optional release identity;
+- metadata v2 resource/source profile fields and optional release identity;
 - atomic DuckDB publication, inventory parity, and read-only native SQL;
 - primary/secondary/isoform-ID namespace selection, grouping, core extractors,
   and unmatched IDs.

@@ -114,3 +114,8 @@ def test_kegg_implementation_packages_export_no_public_symbols() -> None:
     metabolic = importlib.import_module("bioextract.kegg.metabolic")
     assert brite.__all__ == []
     assert metabolic.__all__ == []
+
+
+def test_kegg_mapping_break_removes_wide_compatibility() -> None:
+    assert not hasattr(bioextract.KEGGDatabase, "mappings")
+    assert not hasattr(bioextract.KEGGDatabase, "extract_mapping")

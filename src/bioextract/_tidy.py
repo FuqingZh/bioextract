@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import os
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
@@ -23,8 +22,10 @@ class TidySource:
     Attributes:
         logical_name: Required role name that identifies this source within the
             publication independently of its path or basename.
-        path: Source file whose path and byte size are recorded.
+        path: Source file whose path is recorded; the adapter may provide its
+            already-known byte size through ``bytes``.
         media_type: Stable media-type label for the source format.
+        bytes: Optional source size already known by the adapter.
         sha256: Optional precomputed source digest.
     """
 
@@ -32,6 +33,7 @@ class TidySource:
     path: Path
     media_type: str
     sha256: str | None = None
+    bytes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,7 +112,6 @@ class TidyDataset:
         table_names: Mapping[str, str] | None = None,
         if_exists: str = "fail",
         source_columns: Mapping[str, Collection[str]] | None = None,
-        include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
         """Publish all configured relations as one provenance-aware DuckDB.
 
@@ -150,7 +151,7 @@ class TidyDataset:
             resource_schema_version=self.resource_schema_version,
             source_schema_profile=self.source_schema_profile,
             source_schema_version=self.source_schema_version,
-            sources=self._source_records_with_hashes(include_source_hashes),
+            sources=self._source_records,
             scope=self.scope,
             release_version=self.release_version,
             release_version_source=self.release_version_source,
@@ -183,28 +184,8 @@ class TidyDataset:
                     logical_name=logical_name,
                     path=source.path,
                     media_type=source.media_type,
+                    bytes=source.bytes,
                     sha256=source.sha256,
                 )
             )
         return tuple(records)
-
-    def _source_records_with_hashes(
-        self, include_source_hashes: bool
-    ) -> tuple[SourceFileRecord, ...]:
-        records = self._source_records
-        if not include_source_hashes:
-            return records
-        return tuple(
-            SourceFileRecord(
-                logical_name=record.logical_name,
-                path=record.path,
-                media_type=record.media_type,
-                sha256=record.sha256 or calculate_file_sha256(record.path),
-            )
-            for record in records
-        )
-
-
-def calculate_file_sha256(file_path: Path) -> str:
-    with file_path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()

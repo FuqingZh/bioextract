@@ -17,7 +17,7 @@ Idmapping publication is one `mapping` table with resource schema
 directly into final `snake_case` fields (including `uniprot_id` and `tax_id`),
 and the exact capability
 `bioextract.capability.mapping=true`. `from_duckdb()` distinguishes this
-profile from `uniprot-knowledgebase-duckdb-v1` using metadata v1, capabilities,
+profile from `uniprot-knowledgebase-duckdb-v1` using metadata v2, capabilities,
 exact table inventory, and physical schema. Both profiles return fresh
 caller-owned read-only connections. Publication paths are resolved and file
 identity is pinned so a replaced file must be explicitly reopened.

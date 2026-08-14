@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import re
 import tempfile
@@ -13,7 +12,7 @@ from pathlib import Path
 import duckdb
 import polars as pl
 
-METADATA_SCHEMA_VERSION = "1"
+METADATA_SCHEMA_VERSION = "2"
 BIOEXTRACT_RELATIONS = {
     "metadata",
     "source_file",
@@ -33,16 +32,15 @@ _CANONICAL_METADATA_KEYS = {
     "bioextract.generated_at",
     "bioextract.validation_status",
     "bioextract.validation_issue_count",
-    "bioextract.sources",
     "bioextract.scope",
     "bioextract.column_mapping",
 }
-_METADATA_V1_TABLE_SCHEMAS = {
+_METADATA_V2_TABLE_SCHEMAS = {
     "metadata": (("key", "VARCHAR", True, True), ("value", "VARCHAR", True, False)),
     "source_file": (
         ("logical_name", "VARCHAR", True, True),
         ("display_path", "VARCHAR", True, False),
-        ("bytes", "UBIGINT", True, False),
+        ("bytes", "UBIGINT", False, False),
         ("media_type", "VARCHAR", True, False),
         ("sha256", "VARCHAR", False, False),
     ),
@@ -81,6 +79,7 @@ class SourceFileRecord:
     logical_name: str
     path: Path
     media_type: str
+    bytes: int | None
     sha256: str | None = None
 
 
@@ -122,11 +121,11 @@ class ValidationIssue:
     message: str = ""
 
 
-def validate_duckdb_metadata_v1(
+def validate_duckdb_metadata_v2(
     connection: duckdb.DuckDBPyConnection,
     metadata: Mapping[str, str],
 ) -> None:
-    """Validate the first supported metadata contract and source parity."""
+    """Validate the metadata-v2 provenance tables and canonical values."""
     metadata_tables = {
         str(row[0])
         for row in connection.execute(
@@ -136,10 +135,10 @@ def validate_duckdb_metadata_v1(
     }
     if metadata_tables != BIOEXTRACT_RELATIONS:
         raise ValueError(
-            "Metadata v1 requires exactly the five _bioextract relations: "
+            "Metadata v2 requires exactly the five _bioextract relations: "
             f"expected={sorted(BIOEXTRACT_RELATIONS)}, actual={sorted(metadata_tables)}"
         )
-    for table_name, expected_schema in _METADATA_V1_TABLE_SCHEMAS.items():
+    for table_name, expected_schema in _METADATA_V2_TABLE_SCHEMAS.items():
         observed_schema = tuple(
             (str(row[1]), str(row[2]), bool(row[3]), bool(row[5]))
             for row in connection.execute(
@@ -148,9 +147,10 @@ def validate_duckdb_metadata_v1(
         )
         if observed_schema != expected_schema:
             raise ValueError(
-                f"Metadata v1 provenance table schema is unsupported: {table_name}"
+                f"Metadata v2 provenance table schema is unsupported: {table_name}"
             )
     required = {
+        "bioextract.metadata_schema_version",
         "bioextract.resource_name",
         "bioextract.resource_schema_version",
         "bioextract.source_schema_profile",
@@ -158,49 +158,53 @@ def validate_duckdb_metadata_v1(
         "bioextract.generated_at",
         "bioextract.validation_status",
         "bioextract.validation_issue_count",
-        "bioextract.sources",
     }
     missing = sorted(required - set(metadata))
     if missing:
-        raise ValueError(f"Metadata v1 is missing required keys: {missing}")
+        raise ValueError(f"Metadata v2 is missing required keys: {missing}")
+    if metadata["bioextract.metadata_schema_version"] != METADATA_SCHEMA_VERSION:
+        raise ValueError(
+            "Metadata schema version is unsupported: "
+            f"{metadata['bioextract.metadata_schema_version']!r}"
+        )
+    if "bioextract.sources" in metadata:
+        raise ValueError("Metadata v2 forbids the duplicated bioextract.sources key")
     release_version = metadata.get("bioextract.release_version")
     release_version_source = metadata.get("bioextract.release_version_source")
     if (release_version is None) != (release_version_source is None):
         raise ValueError(
-            "Metadata v1 release_version and release_version_source must occur together"
+            "Metadata v2 release_version and release_version_source must occur together"
         )
     if release_version is not None:
         if not release_version.strip():
-            raise ValueError("Metadata v1 release_version must be non-empty")
+            raise ValueError("Metadata v2 release_version must be non-empty")
         if release_version_source not in {"caller", "official_metadata"}:
             raise ValueError(
-                "Metadata v1 release_version_source must be caller or official_metadata"
+                "Metadata v2 release_version_source must be caller or official_metadata"
             )
     validate_duckdb_validation_state(connection, metadata)
     source_rows = connection.execute(
         "SELECT logical_name, display_path, bytes, media_type, sha256 "
         "FROM _bioextract.source_file ORDER BY logical_name"
     ).fetchall()
-    embedded_sources = json.loads(metadata["bioextract.sources"])
-    table_sources = [
-        {
-            "logical_name": row[0],
-            "path": row[1],
-            "bytes": int(row[2]),
-            "media_type": row[3],
-            **({"sha256": row[4]} if row[4] is not None else {}),
-        }
-        for row in source_rows
-    ]
-    if sorted(embedded_sources, key=lambda item: item["logical_name"]) != table_sources:
-        raise ValueError("Embedded source inventory does not match source_file")
+    for logical_name, display_path, byte_count, media_type, sha256 in source_rows:
+        if not str(logical_name).strip():
+            raise ValueError("Metadata v2 source logical_name must be non-empty")
+        if not str(display_path).strip():
+            raise ValueError("Metadata v2 source display_path must be non-empty")
+        if byte_count is not None and int(byte_count) < 0:
+            raise ValueError("Metadata v2 source bytes must be non-negative")
+        if not str(media_type).strip():
+            raise ValueError("Metadata v2 source media_type must be non-empty")
+        if sha256 is not None and re.fullmatch(r"[0-9a-f]{64}", str(sha256)) is None:
+            raise ValueError("Metadata v2 source sha256 must be lowercase hexadecimal")
 
 
 def validate_duckdb_validation_state(
     connection: duckdb.DuckDBPyConnection,
     metadata: Mapping[str, str],
 ) -> None:
-    """Validate the metadata v1 issue table, count, and status invariant."""
+    """Validate the metadata-v2 issue table, count, and status invariant."""
     validation_status = metadata.get("bioextract.validation_status")
     if validation_status not in {"passed", "passed_with_warnings"}:
         raise ValueError(
@@ -302,7 +306,6 @@ def write_duckdb_publication(
                     resource_schema_version=resource_schema_version,
                     source_schema_profile=source_schema_profile,
                     source_schema_version=source_schema_version,
-                    sources=sources,
                     scope=scope,
                     release_version=release_version,
                     release_version_source=release_version_source,
@@ -355,7 +358,6 @@ def _publication_metadata(
     resource_schema_version: str,
     source_schema_profile: str,
     source_schema_version: str | None,
-    sources: Sequence[SourceFileRecord],
     scope: str | None,
     release_version: str | None,
     release_version_source: str | None,
@@ -377,11 +379,6 @@ def _publication_metadata(
             "passed_with_warnings" if validation_issue_count else "passed"
         ),
         "bioextract.validation_issue_count": str(validation_issue_count),
-        "bioextract.sources": json.dumps(
-            [_source_payload(source) for source in sources],
-            separators=(",", ":"),
-            sort_keys=True,
-        ),
     }
     if scope is not None:
         metadata["bioextract.scope"] = scope
@@ -423,7 +420,7 @@ def _create_metadata_schema(connection: duckdb.DuckDBPyConnection) -> None:
         CREATE TABLE _bioextract.source_file (
             logical_name VARCHAR PRIMARY KEY,
             display_path VARCHAR NOT NULL,
-            bytes UBIGINT NOT NULL,
+            bytes UBIGINT,
             media_type VARCHAR NOT NULL,
             sha256 VARCHAR
         )
@@ -488,7 +485,7 @@ def _write_duckdb_metadata(
             (
                 source.logical_name,
                 str(source.path),
-                source.path.stat().st_size,
+                source.bytes,
                 source.media_type,
                 source.sha256,
             )
@@ -532,16 +529,6 @@ def _write_duckdb_metadata(
                 for issue_id, issue in enumerate(validation_issues, start=1)
             ],
         )
-
-
-def _source_payload(source: SourceFileRecord) -> dict[str, str | int]:
-    return {
-        "logical_name": source.logical_name,
-        "path": str(source.path),
-        "bytes": source.path.stat().st_size,
-        "media_type": source.media_type,
-        **({"sha256": source.sha256} if source.sha256 is not None else {}),
-    }
 
 
 def _validate_duckdb_publication(
@@ -594,35 +581,16 @@ def _validate_duckdb_publication(
             "bioextract.generated_at",
             "bioextract.validation_status",
             "bioextract.validation_issue_count",
-            "bioextract.sources",
         }
         missing_metadata = sorted(required_metadata - set(metadata))
         if missing_metadata:
             raise RuntimeError(
                 f"DuckDB publication is missing metadata keys: {missing_metadata}"
             )
-        source_rows = connection.execute(
-            "SELECT logical_name, display_path, bytes, media_type, sha256 "
-            "FROM _bioextract.source_file ORDER BY logical_name"
-        ).fetchall()
-        embedded_sources = json.loads(metadata["bioextract.sources"])
-        table_sources = [
-            {
-                "logical_name": row[0],
-                "path": row[1],
-                "bytes": int(row[2]),
-                "media_type": row[3],
-                **({"sha256": row[4]} if row[4] is not None else {}),
-            }
-            for row in source_rows
-        ]
-        if (
-            sorted(embedded_sources, key=lambda item: item["logical_name"])
-            != table_sources
-        ):
-            raise RuntimeError(
-                "DuckDB embedded source inventory does not match source_file"
-            )
+        try:
+            validate_duckdb_metadata_v2(connection, metadata)
+        except ValueError as error:
+            raise RuntimeError(str(error)) from error
         if int(metadata.get("bioextract.validation_issue_count", "-1")) != issue_count:
             raise RuntimeError(
                 "DuckDB validation issue count does not match publication metadata"
@@ -662,11 +630,24 @@ def _connect_publication(
     path: Path,
     *,
     read_only: bool = False,
+    threads: int | None = None,
+    temp_directory: Path | None = None,
+    memory_limit: str | None = None,
+    max_temp_directory_size: str | None = None,
 ) -> duckdb.DuckDBPyConnection:
+    config: dict[str, str | bool | int | float | list[str]] = {
+        "threads": str(threads or pl.thread_pool_size())
+    }
+    if temp_directory is not None:
+        config["temp_directory"] = str(temp_directory)
+    if memory_limit is not None:
+        config["memory_limit"] = memory_limit
+    if max_temp_directory_size is not None:
+        config["max_temp_directory_size"] = max_temp_directory_size
     return duckdb.connect(
         str(path),
         read_only=read_only,
-        config={"threads": str(pl.thread_pool_size())},
+        config=config,
     )
 
 

@@ -1,0 +1,110 @@
+{
+  "date": "2026-08-14",
+  "status": "p3_accepted_fixed_scope",
+  "source": "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/kegg/mapping/2026-06/raw",
+  "local_scope_source": "/tmp/bioextract-kegg-p3.2rZU7H/local1000",
+  "release_version": "2026-06",
+  "scope_count": 1000,
+  "scope_sha256": "31998ba5b43d83ec1b906cf7078e58389befefae08862849c343bf29c8fffa85",
+  "source_file_count": 5002,
+  "source_bytes": 726258291,
+  "duckdb": {
+    "version": "1.5.5",
+    "threads": 8,
+    "memory_limit": "270308530176B",
+    "max_temp_directory_size": "153572253696B",
+    "temp_directory": "per-publication-staged-temporary-directory"
+  },
+  "p1_local_reference": {
+    "elapsed_seconds": 252.636465195,
+    "peak_rss_bytes": 3095339008,
+    "output_bytes": 369897472,
+    "row_counts": {
+      "organism": 1000,
+      "gene_annotation": 5607912,
+      "ko_annotation": 26133
+    }
+  },
+  "native_local_runs": [
+    {
+      "elapsed_seconds": 203.191149116,
+      "cpu_seconds": 554.650087,
+      "peak_rss_bytes": 1918783488,
+      "sampled_peak_rss_bytes": 1889222656,
+      "sampled_peak_open_file_descriptors": 19,
+      "sampled_peak_temp_bytes": 0,
+      "sampled_peak_stage_bytes": 247665659,
+      "output_bytes": 243019776,
+      "output_sha256": "eebb8ea5d94cf23f4a4ac2dbe63005e1165002aa3aa22b92ab11a4409f0d1a5a"
+    },
+    {
+      "elapsed_seconds": 157.529905184,
+      "cpu_seconds": 435.577877,
+      "peak_rss_bytes": 1942790144,
+      "sampled_peak_rss_bytes": 1885798400,
+      "sampled_peak_open_file_descriptors": 19,
+      "sampled_peak_temp_bytes": 0,
+      "sampled_peak_stage_bytes": 242679916,
+      "output_bytes": 241184768,
+      "output_sha256": "2d1cd03014ad1e33a2911e6c2b7f56082e1ffa30089e4be094bbb3a331de8d0a"
+    },
+    {
+      "elapsed_seconds": 166.628125374,
+      "cpu_seconds": 454.176756,
+      "peak_rss_bytes": 1956524032,
+      "sampled_peak_rss_bytes": 1932718080,
+      "sampled_peak_open_file_descriptors": 22,
+      "sampled_peak_temp_bytes": 0,
+      "sampled_peak_stage_bytes": 242414238,
+      "output_bytes": 240922624,
+      "output_sha256": "a04c1b5d2832f9f0c14bd8a7c9ca6c00400922ea83fa85013e836b90a31d7d66"
+    }
+  ],
+  "decision_metrics": {
+    "native_median_elapsed_seconds": 166.628125374,
+    "native_worst_elapsed_seconds": 203.191149116,
+    "median_improvement_fraction": 0.3406,
+    "worst_run_improvement_fraction": 0.1957,
+    "native_max_peak_rss_bytes": 1956524032,
+    "rss_reduction_fraction_vs_p1": 0.3679,
+    "all_row_counts_match": true,
+    "all_capabilities_match": true,
+    "all_nested_edge_checksums_match_across_runs": true,
+    "peak_temp_bytes": 0,
+    "cleanup_verified": true
+  },
+  "nested_edge_reconciliation": {
+    "uniprot": {
+      "count": 2158011,
+      "sha256": "83165fc7f3f15342d3e53808941fbae9594827906bc49fd47cb5147fbfe972ed"
+    },
+    "ncbi_gene": {
+      "count": 2540352,
+      "sha256": "c143b84bd4f8c4f8e255bd5590a00863cb62c7f5e5b95fec205a282438868c88"
+    },
+    "gene_ko": {
+      "count": 3058746,
+      "sha256": "a773aad563266523f24563a7c973ced078fc2a2e6dfa742f3591aa8cdfcefe3f"
+    },
+    "gene_pathway": {
+      "count": 4739744,
+      "sha256": "104147e732efe7b47a6b8ba615790bd78a5f726df46f581acece09a034518aec"
+    },
+    "ko_pathway": {
+      "count": 97556,
+      "sha256": "c8f05050c18b0c5f2ba9d52e83ff756aeb501c41d61dc6237baf964e0e5872"
+    }
+  },
+  "bounded_cephfs_observations_seconds": [
+    166.509384911,
+    165.362969876,
+    251.238885673,
+    250.963621718
+  ],
+  "reverse_selection": {
+    "all_checksums_reconciled_with_temporary_flat_sql": true,
+    "aggregate_public_api_seconds": [4.713313663, 6.28695214],
+    "temporary_flat_sql_seconds": [0.030881707, 0.446533199],
+    "peak_rss_bytes": 4195573760
+  }
+}

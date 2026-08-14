@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import os
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -17,8 +16,9 @@ from bioextract._lazy import (
 )
 from bioextract._publication import (
     BIOEXTRACT_RELATIONS,
+    METADATA_SCHEMA_VERSION,
     DuckDBWriteResult,
-    validate_duckdb_metadata_v1,
+    validate_duckdb_metadata_v2,
 )
 from bioextract._shared import (
     create_group_input_frames,
@@ -478,7 +478,6 @@ class InterProDatabase:
         path: os.PathLike[str] | str,
         *,
         if_exists: str = "fail",
-        include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
         """Publish every relation available from this source handle as DuckDB.
 
@@ -498,7 +497,6 @@ class InterProDatabase:
         return self.build_tidy().write_duckdb(
             path,
             if_exists=if_exists,
-            include_source_hashes=include_source_hashes,
         )
 
     def _xml_frame(self, frame_name: str) -> pl.DataFrame:
@@ -1039,7 +1037,10 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
             metadata = dict(metadata_rows)
             if len(metadata) != len(metadata_rows):
                 raise ValueError("InterPro publication has duplicate metadata keys")
-            if metadata.get("bioextract.metadata_schema_version") != "1":
+            if (
+                metadata.get("bioextract.metadata_schema_version")
+                != METADATA_SCHEMA_VERSION
+            ):
                 raise ValueError("Unsupported InterPro metadata schema version")
             validation_issue_ids = [
                 int(row[0])
@@ -1077,7 +1078,7 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
                 raise ValueError(
                     "InterPro publication has duplicate column-provenance keys"
                 )
-            validate_duckdb_metadata_v1(connection, metadata)
+            validate_duckdb_metadata_v2(connection, metadata)
             if metadata.get("bioextract.resource_name") != "interpro":
                 raise ValueError("DuckDB file is not a bioextract InterPro publication")
             if metadata.get("bioextract.resource_schema_version") != SCHEMA_VERSION:
@@ -1145,22 +1146,6 @@ def _validate_interpro_publication(path: Path) -> tuple[frozenset[str], str | No
             source_roles = {str(row[0]) for row in source_rows}
             if source_roles != expected_sources:
                 raise ValueError("InterPro source role inventory is unsupported")
-            embedded_sources = json.loads(metadata["bioextract.sources"])
-            table_sources = [
-                {
-                    "logical_name": str(row[0]),
-                    "path": str(row[1]),
-                    "bytes": int(row[2]),
-                    "media_type": str(row[3]),
-                    **({"sha256": str(row[4])} if row[4] is not None else {}),
-                }
-                for row in source_rows
-            ]
-            if (
-                sorted(embedded_sources, key=lambda item: item["logical_name"])
-                != table_sources
-            ):
-                raise ValueError("InterPro embedded source inventory is unsupported")
             expected_media_types = {
                 "protein_to_interpro": MEDIA_TYPE_TSV_GZIP,
                 "interpro_xml": MEDIA_TYPE_XML_GZIP,

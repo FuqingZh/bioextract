@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import tarfile
@@ -531,7 +530,6 @@ def _source_records(
     snapshot: MetabolicSnapshot,
     *,
     include_archive: bool,
-    include_source_hashes: bool,
 ) -> list[SourceFileRecord]:
     logical_sources: dict[str, tuple[Path, ...]]
     if snapshot.archive is not None and include_archive:
@@ -542,17 +540,13 @@ def _source_records(
     records: list[SourceFileRecord] = []
     for role, paths in logical_sources.items():
         for index, source in enumerate(paths):
-            digest = (
-                hashlib.sha256(source.read_bytes()).hexdigest()
-                if include_source_hashes
-                else None
-            )
             records.append(
                 SourceFileRecord(
-                    f"{role}:{index}",
-                    source,
-                    _source_media_type(source),
-                    digest,
+                    logical_name=f"{role}:{index}",
+                    path=source,
+                    media_type=_source_media_type(source),
+                    bytes=None,
+                    sha256=None,
                 )
             )
     return records
@@ -563,7 +557,6 @@ def publish(
     path: Path,
     *,
     if_exists: Literal["fail", "replace"],
-    include_source_hashes: bool,
 ) -> DuckDBWriteResult:
     with tempfile.TemporaryDirectory(prefix="bioextract-kegg-metabolic-") as directory:
         root = Path(directory)
@@ -601,7 +594,6 @@ def publish(
         sources = _source_records(
             snapshot,
             include_archive=archive_used,
-            include_source_hashes=include_source_hashes,
         )
         return write_duckdb_publication(
             spool.relations(),

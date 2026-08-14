@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import tempfile
 from collections.abc import Iterable, Mapping
@@ -12,12 +11,14 @@ from typing import Literal
 import duckdb
 import polars as pl
 
-from bioextract._publication import validate_duckdb_metadata_v1
+from bioextract._publication import (
+    METADATA_SCHEMA_VERSION,
+    validate_duckdb_metadata_v2,
+)
 
 from .constant import SCHEMA_VERSION, SOURCE_SCHEMA_PROFILE
 from .rhea import RheaWriteResult
 from .util import (
-    calculate_sha256,
     coefficient_numeric,
     compound_type,
     infer_media_type,
@@ -37,7 +38,6 @@ def write_rhea_duckdb(
     scope: str,
     path: Path,
     if_exists: Literal["fail", "replace"],
-    include_source_hashes: bool,
 ) -> RheaWriteResult:
     """Build a Rhea database in staging and atomically commit it."""
 
@@ -102,7 +102,6 @@ def write_rhea_duckdb(
             scope=scope,
             release_number=release_number,
             release_date=release_date,
-            include_source_hashes=include_source_hashes,
         )
         row_counts = _record_table_inventory(connection)
         connection.close()
@@ -141,7 +140,7 @@ def _create_metadata_tables(connection: duckdb.DuckDBPyConnection) -> None:
         CREATE TABLE _bioextract.source_file (
             logical_name VARCHAR PRIMARY KEY,
             display_path VARCHAR NOT NULL,
-            bytes UBIGINT NOT NULL,
+            bytes UBIGINT,
             media_type VARCHAR NOT NULL,
             sha256 VARCHAR
         )
@@ -723,7 +722,6 @@ def _record_metadata(
     scope: str,
     release_number: int | None,
     release_date: str | None,
-    include_source_hashes: bool,
 ) -> None:
     try:
         bioextract_version = metadata.version("bioextract")
@@ -733,35 +731,20 @@ def _record_metadata(
         (
             name,
             display_paths[name],
-            path.stat().st_size,
+            None,
             infer_media_type(path),
-            calculate_sha256(path) if include_source_hashes else None,
+            None,
         )
         for name, path in sources.items()
     ]
-    source_payloads = [
-        {
-            "logical_name": name,
-            "path": display_path,
-            "bytes": size,
-            "media_type": media_type,
-            **({"sha256": sha256} if sha256 is not None else {}),
-        }
-        for name, display_path, size, media_type, sha256 in source_rows
-    ]
     values = {
-        "bioextract.metadata_schema_version": "1",
+        "bioextract.metadata_schema_version": METADATA_SCHEMA_VERSION,
         "bioextract.resource_name": "rhea",
         "bioextract.resource_schema_version": SCHEMA_VERSION,
         "bioextract.source_schema_profile": SOURCE_SCHEMA_PROFILE,
         "bioextract.scope": scope,
         "bioextract.generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "bioextract.package_version": bioextract_version,
-        "bioextract.sources": json.dumps(
-            source_payloads,
-            separators=(",", ":"),
-            sort_keys=True,
-        ),
         "bioextract.release_version": (
             None if release_number is None else str(release_number)
         ),
@@ -818,7 +801,7 @@ def _validate_staged_database(
         metadata = dict(
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
-        validate_duckdb_metadata_v1(connection, metadata)
+        validate_duckdb_metadata_v2(connection, metadata)
         required_metadata = {
             "bioextract.metadata_schema_version",
             "bioextract.resource_name",
@@ -827,7 +810,6 @@ def _validate_staged_database(
             "bioextract.scope",
             "bioextract.generated_at",
             "bioextract.package_version",
-            "bioextract.sources",
         }
         missing = sorted(required_metadata - set(metadata))
         if missing:

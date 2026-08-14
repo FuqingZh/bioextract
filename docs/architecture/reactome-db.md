@@ -247,7 +247,7 @@ Canonical publication uses `write_duckdb(path)`. `protein_pathway`,
 projections are not stored. Provenance and row counts live in `_bioextract`.
 
 `ReactomeDatabase.from_duckdb(path)` reopens full or partial publications that
-conform to metadata v1 and `reactome-mapping-files-v1`. Reopen validation is
+conform to metadata v2 and `reactome-mapping-files-v1`. Reopen validation is
 bounded to provenance, source capabilities, the exact table/view inventory,
 and physical column schemas; recorded biological row counts are trusted rather
 than recomputed. Existing selection, grouped-selection, enrichment, relation,

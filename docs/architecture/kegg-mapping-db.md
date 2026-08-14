@@ -1,207 +1,135 @@
-# KEGG Mapping Db Architecture
+# KEGG Mapping Database Architecture
 
-Version: v1.0
-Date: 2026-07-14
+Version: v2.1
+Date: 2026-08-14
 Status: current
 
-## Goal
+## Boundary
 
-`bioextract.kegg.KEGGDatabase` supports local KEGG organism mapping snapshots
-in addition to the existing BRITE JSON tidy path. The mapping path turns
-explicit KEGG raw files into stable gene, KO, and pathway relationships.
+`KEGGDatabase` reads caller-supplied local KEGG mapping files. It does not
+download data, infer releases from paths, read biofetch manifests, or require a
+complete KEGG release. A directory containing 200 valid organism directories
+is a valid all-available build of those 200 members.
 
-The first version covers:
-
-- explicit file-based construction, with no hidden directory naming contract
-- UniProt, NCBI GeneID, and KEGG gene input selection
-- single and grouped selections
-- one wide `mapping` relation in a metadata-v1 DuckDB publication
-- embedded source-role provenance with no sidecar manifest
-
-The first version intentionally does not cover:
-
-- full-organism batch publishing
-- online KEGG API calls
-- enrichment p-value calculation
-- pathway hierarchy parsing beyond map-ID derivation
-- KO-to-reference-pathway inference when `gene_pathway.tsv` is absent
-
-## Raw Inputs
-
-`KEGGDatabase.from_mapping_files()` accepts exact file paths:
-
-```text
-conv_uniprot.tsv
-gene_ko.tsv
-gene_pathway.tsv
-gene_list.tsv
-conv_ncbi_gene.tsv
-```
-
-`conv_uniprot.tsv`, `gene_ko.tsv`, and `gene_pathway.tsv` are required for the
-first version because together they define UniProt-to-pathway and
-UniProt-to-KO mappings. `gene_list.tsv` and `conv_ncbi_gene.tsv` are optional
-metadata and alternate-ID inputs.
-
-The organism code is explicit:
+## Construction And Scope
 
 ```python
-KEGGDatabase.from_mapping_files(..., organism_code="hsa")
-```
+db = KEGGDatabase.from_mapping_directory(
+    "/data/kegg/mapping/2026-06/raw",
+    release_version="2026-06",
+)
+hsa = db.with_organisms(["hsa"])
 
-It is also used to validate that observed KEGG gene IDs belong to the expected
-organism namespace when the raw files are non-empty.
-
-## Public API
-
-```python
-from bioextract import KEGGDatabase
-
-db = KEGGDatabase.from_mapping_files(
-    uniprot_conversion="conv_uniprot.tsv",
-    gene_ko="gene_ko.tsv",
-    gene_pathway="gene_pathway.tsv",
+partial = KEGGDatabase.from_mapping_files(
+    "/data/kegg/mapping/2026-06/raw/hsa",
     organism_code="hsa",
-    gene_list="gene_list.tsv",
-    ncbi_gene_conversion="conv_ncbi_gene.tsv",
 )
-
-lf_mapping = db.mappings()
-
-selection = db.select_ids(["P12345", "Q9Y243"], namespace="uniprot")
-lf_selected = selection.mappings()
-lf_unmapped = selection.unmatched_ids()
-
-grouped = db.select_groups(
-    {"up": ["P12345"], "down": ["Q9Y243"]},
-    namespace="uniprot",
-)
-lf_grouped = grouped.mappings()
-
-result = db.write_duckdb("kegg-mapping.duckdb")
-published = KEGGDatabase.from_duckdb(result.path)
-with published.connect() as connection:
-    row_count = connection.sql("SELECT count(*) FROM mapping").fetchone()[0]
 ```
 
-The accepted `namespace` values are:
+`from_mapping_directory(source, *, organism_list, ko_pathway,
+release_version)` treats `source` as the direct multi-organism discovery root.
+It enumerates only immediate children matching `^[a-z]{3,4}$`; `ko` and
+`organism` are reserved global directories. Each discovered organism must
+contain the rectangular five-role profile.
+
+`from_mapping_files(source=None, *, organism_code, ...)` treats `source` as one
+organism's direct directory. Explicit role files replace conventional
+children. Missing roles are unavailable capabilities, and at least one
+organism role is required. This factory never climbs to a parent to find global
+roles.
+
+`with_organisms()` is the physical-pruning API. A source handle opens only the
+selected organism directories. A publication handle may narrow to members in
+its `organism` table but cannot expand beyond them.
+
+## Lazy Domain Relations
+
+Every tabular method returns a native replayable `polars.LazyFrame`:
+
+```python
+db.organisms()
+db.gene_annotations()
+db.ko_annotations()
+db.gene_pathways()
+db.ko_pathways()
+db.gene_pathways_via_ko()
+
+selection = db.select_ids(ids, namespace="uniprot")
+selection.matches()
+selection.gene_annotations()
+selection.gene_pathways()
+selection.gene_pathways_via_ko()
+selection.unmatched_ids()
+```
+
+There are no hidden row limits, eager biological caches, `extract_*` aliases,
+or `mappings()` compatibility method. Callers use native Polars `collect()`,
+`sink_*`, `explode()`, and `unnest()`.
+
+Direct gene-pathway observations and gene-to-KO-to-pathway traversal are
+separate relations. The latter retains `ko_id` inside every evidence struct.
+
+## Aggregate Schemas
+
+Every mapping publication contains exactly:
+
+- `organism(organism_code, genome_id, organism_name, taxonomy_lineage)`;
+- `gene_annotation`, one row per `(organism_code, kegg_gene_id)`, with scalar
+  gene attributes and nested `uniprot_mappings`, `ncbi_gene_mappings`,
+  `ko_mappings`, and `pathway_mappings`; and
+- `ko_annotation`, one row per `ko_id` with nested pathway mappings.
+
+Nested relations are `List[Struct]`. `null` means the required source role was
+unavailable, `[]` means it was available but no observation existed, and a
+non-empty list contains distinct locally sorted observations. Top-level row
+order is not a caller contract.
+
+The gene universe is the union of gene IDs in every available organism role.
+The KO universe is the union of organism gene-to-KO observations and the
+optional global KO-pathway relation.
+
+## Parsing And Integrity
+
+Files are UTF-8, headerless TSV. Blank lines are ignored; non-blank rows require
+the exact role-specific column count. Fatal errors identify the logical role,
+path when available, and a cause category; line details are diagnostic rather
+than a scheduling or compatibility promise. Gene IDs must match the current
+organism prefix, KO and pathway IDs use their fixed KEGG grammars, and NCBI
+Gene values remain strings. Exact duplicate relationship rows are idempotent
+and removed silently; conflicting metadata remains fatal.
+
+`gene_list.tsv` has four fields: gene ID, gene type, opaque genomic position,
+and display text. Display text is split once at the first semicolon; comma-
+separated names become one symbol plus sorted aliases.
+
+## Publication
+
+`write_duckdb()` uses one DuckDB-native SQL coordinator. It enumerates the build
+scope once, records a declarative input inventory, scans global roles once, and
+processes organism roles in private hash windows. Each window bulk-scans an
+explicit path list, validates and pre-aggregates its many-side relations, then
+releases the window state before the next one. The writer uses an adjacent
+staging database and per-publication temporary spill directory, with internal
+thread, memory, and temporary-size bounds; these are execution safeguards, not
+row limits or public tuning parameters. It embeds metadata, validates read-only,
+drops all private relations, and atomically replaces the destination. It does
+not run the three public lazy relations independently or create per-organism
+Parquet publication files.
+
+Identity is fixed:
 
 ```text
-uniprot
-ncbi_gene
-kegg_gene
+bioextract.metadata_schema_version = "2"
+bioextract.resource_schema_version = "kegg-mapping-v1.0"
+bioextract.source_schema_profile = "kegg-organism-mapping-files-v2"
+bioextract.scope = "mapping"
 ```
 
-The name follows the global `structure_role` convention: `kind_...` identifies
-the semantic kind of the input ID values.
+Seven exact boolean capability keys describe the five organism roles and two
+global roles. `_bioextract.source_file` is the sole declarative source
+inventory. `bytes` and `sha256` are nullable; the writer does not add a
+provenance-only stat or content pass. No `manifest.lock` or sidecar is read or
+written.
 
-## Output Contract
-
-`mappings()` exposes one wide public lazy relation. Callers choose when to
-collect it. These fields are
-derived from headerless KEGG inputs, so they are created directly with the
-stable public `snake_case` names; no source-header mapping is recorded for
-this relation:
-
-```text
-organism_code
-kegg_gene_id
-uniprot_id
-ncbi_gene_id
-ko_id
-kegg_pathway_id
-pathway_map_id
-gene_symbol
-gene_description
-```
-
-`kegg_gene_id` keeps the KEGG-native namespace such as `hsa:10458`. Other raw
-database prefixes are normalized away:
-
-```text
-up:P12345        -> uniprot_id=P12345
-ncbi-geneid:1    -> ncbi_gene_id=1
-ko:K00001        -> ko_id=K00001
-path:hsa00010    -> kegg_pathway_id=hsa00010
-```
-
-`pathway_map_id` is derived from organism-specific pathway IDs:
-
-```text
-hsa00010 -> map00010
-```
-
-Many-to-many relationships are represented as multiple rows. This keeps the
-artifact simple for downstream joins and lets enrichment callers derive
-pathway or KO `term2gene` tables with projections.
-
-Single selections prepend:
-
-```text
-input_id
-input_namespace
-```
-
-Grouped selections prepend:
-
-```text
-group_id
-input_id
-input_namespace
-```
-
-`unmatched_ids()` returns `input_id` for single selections and
-`group_id, input_id` for grouped selections.
-
-## Tidy Dataset
-
-`write_duckdb()` publishes one physical relation:
-
-```text
-main.mapping
-```
-
-The DuckDB relation uses the same `snake_case` columns as
-`mappings()`; reopening does not perform an inverse rename and
-preserves single/grouped selection and unmatched-ID behavior.
-
-Suggested schema version:
-
-```text
-kegg-mapping-v0.1
-```
-
-The mapping profile is identified by `kegg-organism-mapping-files-v1`, scope
-`mapping`, schema version `kegg-mapping-v0.1`, exact table role `canonical`,
-and embedded `bioextract.organism_code`. `from_duckdb()` rejects mismatched
-profiles, schemas, roles, table inventories, and row counts. Every `connect()`
-call creates a fresh caller-owned read-only connection.
-
-## Implementation Notes
-
-- Keep the public entrypoint on `KEGGDatabase`; do not add another top-level DB type.
-- Keep file paths explicit in `from_mapping_files()`.
-- Keep selection output flat, matching Reactome, WikiPathways, StringDB, and
-  OmniPath grouped selection behavior.
-- Keep mapping execution replayable; do not make a full eager mapping cache part
-  of the public contract.
-- Use Polars joins and projections rather than manual row loops.
-- Raise targeted `ValueError` when mapping-only methods are called on a BRITE
-  snapshot.
-
-## Tests
-
-Focused tests cover:
-
-- `from_mapping_files()` with required and optional files
-- `mappings()` normalization and many-to-many expansion
-- `select_ids(..., namespace="uniprot")`
-- `select_ids(..., namespace="ncbi_gene")`
-- `select_ids(..., namespace="kegg_gene")`
-- `select_groups(..., namespace="uniprot")`
-- unmapped IDs for single and grouped selections
-- missing optional files with null output columns
-- `build_tidy()`, `write_duckdb(path)`, and metadata-v1 reopening
-- fresh read-only native connections and atomic `if_exists` behavior
-- invalid `namespace`
-- mapping APIs called on a BRITE snapshot
+Old wide-table mapping publications and metadata v1 are intentionally rejected
+without aliases or migration views.

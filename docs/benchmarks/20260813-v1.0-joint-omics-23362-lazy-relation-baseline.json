@@ -1,0 +1,180 @@
+{
+  "schema_version": "bioextract-joint-omics-23362-performance-baseline-v1",
+  "date": "2026-08-13",
+  "status": "pre-optimization baseline",
+  "ownership": {
+    "bioextract": "public lazy-relation benchmark and relation execution baseline",
+    "joint_omics": "end-to-end product workload and its 11-artifact contract"
+  },
+  "source_capture": {
+    "temporary_path": "/tmp/joint-omics-bioextract-ab.QOnlxg",
+    "catalog_sha256": "874b3ec1571b27436b5c1b7c5877282bb5a2323742b4f866fceaaa4f16d6ccfd",
+    "benchmark_knowledge_sha256": "1c1c4547be8d10d12d25d8b1f1c4a3b56efd2ff15b14ee09303f1b560098cd82",
+    "benchmark_backend_sha256": "932fe97abf31c8aa8f8542f0713c772b88c47c1ac4a1f1d517d64e0f95a822b3",
+    "summarizer_sha256": "8fe2bbf5bfc1185f7e0c2123d11b320d9c4b10f64050cd1e32e0f4b1edc54b",
+    "v03_lock_sha256": "8a013b65de8f6f89ee393736d2f4981d19652b716bd549d9e66fd1ad63b070bf",
+    "v04_lock_sha256": "aab23087fd4ee355060738a17795a46fc9b02166d86aeca37c02b2a4cb4bc8d7",
+    "v03_bioextract_wheel_sha256": "2e460c53ab7cfa8ee96eb57babc259d367aa85cdd5d619d99ff7efb1579a2f72",
+    "v04_bioextract_wheel_sha256": "1c90e51161bb7c4530dc7c0246c3bd776b2b1e5df65d2f5b040bdc4801c71e97",
+    "v03_joint_omics_adapter_commit": "353137963ed4df10973e44e75479bee45bc8f250",
+    "v03_joint_omics_adapter_sha256": "9477d22dacfb7716753c58d3b1f0f63e8f3ca82a036b9cce158ceab30e307f2b",
+    "v04_joint_omics_adapter_commit": "399df1a913c80ad904f4ae85efe23b2d9d0ebb38",
+    "v04_joint_omics_adapter_sha256": "5b009cb22180293b1a85dddc74b4731dbf0fa8ed8a1c4595cff192cbb5becee3"
+  },
+  "end_to_end": {
+    "protocol": {
+      "machine": "same host for both variants",
+      "input_feature_count": 23362,
+      "selected_proteins": 4,
+      "selected_metabolites": 8,
+      "runs_per_variant": 5,
+      "warmup_per_variant": 1,
+      "measured_order": [
+        "v03-1",
+        "v04-1",
+        "v04-2",
+        "v03-2",
+        "v03-3",
+        "v04-3",
+        "v04-4",
+        "v03-4",
+        "v03-5",
+        "v04-5"
+      ],
+      "python": "3.13.11",
+      "polars": "1.43.2",
+      "duckdb": "1.5.5",
+      "pyarrow": "25.0.1",
+      "thread_environment": {}
+    },
+    "samples": {
+      "v03": [
+        {"run": 1, "wall_s": 13.09, "user_s": 52.77, "system_s": 14.64, "cpu_s": 67.41, "peak_rss_kib": 1453012},
+        {"run": 2, "wall_s": 12.42, "user_s": 53.99, "system_s": 16.16, "cpu_s": 70.15, "peak_rss_kib": 2486432},
+        {"run": 3, "wall_s": 11.84, "user_s": 53.21, "system_s": 14.63, "cpu_s": 67.84, "peak_rss_kib": 2218432},
+        {"run": 4, "wall_s": 12.42, "user_s": 56.14, "system_s": 14.74, "cpu_s": 70.88, "peak_rss_kib": 2097936},
+        {"run": 5, "wall_s": 12.22, "user_s": 52.48, "system_s": 13.96, "cpu_s": 66.44, "peak_rss_kib": 2116444}
+      ],
+      "v04": [
+        {"run": 1, "wall_s": 12.97, "user_s": 77.41, "system_s": 23.86, "cpu_s": 101.27, "peak_rss_kib": 1286516},
+        {"run": 2, "wall_s": 14.35, "user_s": 78.16, "system_s": 24.54, "cpu_s": 102.70, "peak_rss_kib": 2155280},
+        {"run": 3, "wall_s": 12.46, "user_s": 74.79, "system_s": 22.38, "cpu_s": 97.17, "peak_rss_kib": 1253160},
+        {"run": 4, "wall_s": 13.24, "user_s": 86.93, "system_s": 35.00, "cpu_s": 121.93, "peak_rss_kib": 2010368},
+        {"run": 5, "wall_s": 13.03, "user_s": 82.15, "system_s": 31.46, "cpu_s": 113.61, "peak_rss_kib": 2003616}
+      ]
+    },
+    "median": {
+      "v03": {"wall_s": 12.42, "cpu_s": 67.84, "peak_rss_kib": 2116444},
+      "v04": {"wall_s": 13.03, "cpu_s": 102.70, "peak_rss_kib": 2003616},
+      "v04_over_v03": {"wall": 1.0491143317, "cpu": 1.5138561321, "peak_rss": 0.9466898250}
+    },
+    "backend_median": {
+      "protein": {
+        "v03": {"samples": 5, "wall_s": 6.81, "cpu_s": 32.67, "peak_rss_kib": 1315388},
+        "v04": {"samples": 5, "wall_s": 6.71, "cpu_s": 52.19, "peak_rss_kib": 2060228}
+      },
+      "metabolite": {
+        "v03": {"samples": 3, "wall_s": 4.06, "cpu_s": 29.65, "peak_rss_kib": 509912},
+        "v04": {"samples": 3, "wall_s": 5.96, "cpu_s": 49.53, "peak_rss_kib": 441060}
+      }
+    },
+    "artifact_contract": {
+      "artifact_count": 11,
+      "normalized_manifest_sha256": "95ea33817f72f26e29cd456959241b396e36a198fcac5c054640e292c424b4b1",
+      "unique_normalized_hashes_across_10_runs": 1,
+      "artifacts": {
+        "data-mapping_entities.parquet": {"rows": 19, "semantic_sha256": "b704865b83d96a71957604cbbb30f451a12cce875e3b48411f41ac8cd7d9c35c"},
+        "data-mapping_overview_plot.parquet": {"rows": 4, "semantic_sha256": "ed5517c8901e9ebef49448ed695759c087bf57800b79b8e8462a564650ef0bce"},
+        "data-mapping_pathways.parquet": {"rows": 0, "semantic_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"},
+        "data-mapping_reactions.parquet": {"rows": 12, "semantic_sha256": "a87098787d47527e2a288886e417a8e4bbf717507fc2f3b6f1cf29319272abad"},
+        "graph-mapping_overview.png": {"sha256": "72e922467f20c2b19d670cf0bf9bdf6879c621158a2cfecb902a7c6cd78b8e17"},
+        "graph-mapping_overview.svg": {"sha256": "e8f44d87266bae15e902229a7369fb128d5b8e0238f3c32288cbd4f64324e3af"},
+        "info-knowledge_mapping.json": {"semantic_sha256": "6a97a77d5d02c0c69894683ab993af98de66d3c1169b7c8de8e10d9d430cf2a4"},
+        "info-resource_manifest.json": {"semantic_sha256": "10f5580f841c79a091d35a58b163d78aece57dc3ba8b8689769b01d065ae0764"},
+        "info-visualization.json": {"semantic_sha256": "78e9da9fb28c1e49750800809b61ef0a0e0b297b9cbff4b7d8b1d3b5c7bd8761"},
+        "stats-mapping_coverage.tsv": {"sha256": "b3e9452eb089ad6141f3eb003689ab69e78221dfdddf1a8746d2438a51f2478b"},
+        "stats-mapping_issues.tsv": {"sha256": "f095af19b8d7096d0080bd73dddc0abd7d2903fc12c3a4f2ae36f8fbc3be3383"}
+      }
+    }
+  },
+  "lazy_relation_baseline": {
+    "raw_report_sha256": "e3b8c9aec3fec3271cc355d9fb0c0e40940484a254f3d0d9fd28d6e6aa7b0adb",
+    "benchmark_script_sha256": "fa0504bbd688b33af399d550e01a7c0f081f86128f2433e0540acac2b44eec27",
+    "environment": {
+      "label": "bioextract-0.4.0-joint-omics-23362-pre-change",
+      "bioextract": "0.4.0",
+      "python": "3.13.11",
+      "polars": "1.43.2",
+      "duckdb": "1.5.5",
+      "platform": "Linux-4.18.0-348.7.1.el8_5.x86_64-x86_64-with-glibc2.28",
+      "cpu_count": 192,
+      "polars_thread_pool_size": 192,
+      "duckdb_threads": 192,
+      "thread_environment": {}
+    },
+    "inputs": {
+      "taxon_id": "10116",
+      "protein_ids": ["A0A096MIV5", "A0A096MIX0", "A0A096MIX2", "A0A096MJ01"],
+      "kegg_compound_id": "C20959",
+      "publications": {
+        "idmapping": {"bytes": 15730225152, "recorded_rows": 203130941, "table_count": 1, "contract_sha256": "6a8b0c90e0a83836e13d785e24291818771329feba9ce8470ccb037616e2d96f"},
+        "uniprot_kb": {"bytes": 1495281664, "recorded_rows": 38259122, "table_count": 16, "contract_sha256": "a2cd198f62b774f7820b0f9c694d3210726af2092daf4a570d54ce7faa34c121"},
+        "rhea": {"bytes": 335032320, "recorded_rows": 30782630, "table_count": 15, "contract_sha256": "7dddaf64a47acae7b2313327d934db0039859283af63e97fd9f1ecec75f07cec"},
+        "chebi": {"bytes": 960507904, "recorded_rows": 1844499, "table_count": 7, "contract_sha256": "23145c8bb993b0c2ca633c0c23c588172d3a027de9d0a34b64da44fb265fe29d"},
+        "kegg": {"bytes": 16789504, "recorded_rows": 444929, "table_count": 25, "contract_sha256": "1f1021858e7e23a1d1543b7b22fd6977db1d2c8af2aa09674ae2a3a167d7813e"}
+      }
+    },
+    "protocol": {
+      "warmups": 1,
+      "runs": 5,
+      "order": "forward on odd runs and reverse on even runs",
+      "timed_case_reconstructs_database_and_selection": true,
+      "public_api_only": true,
+      "peak_rss_scope": "process-global, not isolated per case"
+    },
+    "summary": {
+      "idmapping_narrow": {"wall_s": {"median": 1.598339, "min": 1.519227, "max": 1.772890}, "cpu_s": {"median": 11.677108, "min": 10.847026, "max": 11.712887}, "rows": 3, "columns": 1, "contract_sha256": "d1d48268662c63b3a43422c97201b12430461a4553b695f999244df8efc3e325"},
+      "idmapping_wide": {"wall_s": {"median": 1.610376, "min": 1.460832, "max": 1.837770}, "cpu_s": {"median": 11.855256, "min": 10.581870, "max": 12.292736}, "rows": 3, "columns": 22, "contract_sha256": "aac73f32f8a0f90ffa2fcc1bfbf8d8645265e9a6a5e371d13ce5389bf93e3a2a"},
+      "rhea_matches": {"wall_s": {"median": 0.475327, "min": 0.378928, "max": 0.576349}, "cpu_s": {"median": 5.808427, "min": 5.603788, "max": 7.410182}, "rows": 0, "contract_sha256": "5d023d37d5fa604feaa8ad52021cd6da5cf48387b437c1fb6900d9c886115855"},
+      "rhea_bundle": {"wall_s": {"median": 1.195658, "min": 1.078390, "max": 1.381403}, "cpu_s": {"median": 24.506214, "min": 23.773520, "max": 27.578066}, "rows_by_relation": {"matches": 0, "reactions": 0, "participants": 0, "unmatched": 4}, "contract_sha256": "7f29fc17afade663116144c991546c30e34942bcf849e51a4388f7bc75617e6f"},
+      "uniprot_proteins": {"wall_s": {"median": 0.681514, "min": 0.602067, "max": 1.587936}, "cpu_s": {"median": 2.561251, "min": 1.981570, "max": 3.944437}, "rows": 0, "contract_sha256": "a5f737e080510dbd909a3a0713cb518021cdb24e5439a2d36df2eb74789d817e"},
+      "uniprot_bundle": {"wall_s": {"median": 1.081193, "min": 1.004060, "max": 1.201699}, "cpu_s": {"median": 5.591040, "min": 4.387081, "max": 6.907268}, "rows_by_relation": {"proteins": 0, "ec_numbers": 0, "unmatched": 4}, "contract_sha256": "c8734368ef719a9d5b38322e6e1da2fc9298101951023d8391a9ca61328e0968"},
+      "chebi_matches": {"wall_s": {"median": 0.396917, "min": 0.334969, "max": 4.597173}, "cpu_s": {"median": 1.443854, "min": 0.697498, "max": 1.914537}, "rows": 0, "contract_sha256": "abdccf27e15a750675ca3c443bdab480177e1faaa134b18378c3c184500bfce0"},
+      "chebi_bundle": {"wall_s": {"median": 1.151935, "min": 0.966857, "max": 2.916084}, "cpu_s": {"median": 4.869626, "min": 3.413137, "max": 6.430988}, "rows_by_relation": {"matches": 0, "compounds": 0, "unmatched": 1}, "contract_sha256": "7417bf42137e628e4c56e79890948ac44b559ed57101c4b1b09e9a5457d8f779"},
+      "kegg_matches": {"wall_s": {"median": 0.605268, "min": 0.548143, "max": 0.690320}, "cpu_s": {"median": 4.824882, "min": 3.469814, "max": 8.457072}, "rows": 1, "contract_sha256": "c7c9f694ab38ed56dd399239ebfe99212d1e1d811bd520c5f64a8dfe5185b91d"},
+      "kegg_reactions_narrow": {"wall_s": {"median": 0.991498, "min": 0.964283, "max": 1.176142}, "cpu_s": {"median": 7.632344, "min": 7.011586, "max": 10.125972}, "rows": 2, "columns": 3, "contract_sha256": "efae0bb37ecef00794f18ae2a99ac976d34a45bbc2f8b1e9bcb0f4a3635e09e6"},
+      "kegg_reactions_wide": {"wall_s": {"median": 1.005978, "min": 0.775183, "max": 1.734567}, "cpu_s": {"median": 7.323148, "min": 5.429247, "max": 11.278296}, "rows": 2, "columns": 9, "contract_sha256": "3bcdca97131eb70dab6127bff035321178e49bd0f9064f0372f87ffa54004bc5"},
+      "kegg_bundle": {"wall_s": {"median": 3.905779, "min": 3.669388, "max": 4.723083}, "cpu_s": {"median": 37.922346, "min": 35.129438, "max": 44.584365}, "rows_by_relation": {"matches": 1, "reactions": 2, "participants": 6, "enzymes": 2, "kos": 2, "modules": 0, "pathways": 0, "unmatched": 0}, "contract_sha256": "0ae796ddc5eb8e46f5b24d09a32791927c58f3ca614410e7c656adcd00d13453"}
+    },
+    "derived_ratios": {
+      "idmapping_narrow_over_wide": {"wall": 0.992524, "cpu": 0.984972},
+      "kegg_reactions_narrow_over_wide": {"wall": 0.985606, "cpu": 1.042220},
+      "rhea_bundle_over_matches": {"wall": 2.515442, "cpu": 4.219079},
+      "uniprot_bundle_over_proteins": {"wall": 1.586457, "cpu": 2.182939},
+      "chebi_bundle_over_matches": {"wall": 2.902204, "cpu": 3.372707},
+      "kegg_bundle_over_matches": {"wall": 6.453003, "cpu": 7.859711},
+      "kegg_bundle_over_reactions_narrow": {"wall": 3.939269, "cpu": 4.968638}
+    },
+    "diagnostic_probe": {
+      "scope": "one untimed read-only run; private wrappers counted internal rebuilds while public bundles executed",
+      "candidate_or_lineage_build_counts": {
+        "chebi_candidate": 3,
+        "kegg_reaction_lineage": 6,
+        "kegg_unique_match": 8,
+        "rhea_relation_execution": 4,
+        "rhea_selected_reaction": 2,
+        "uniprot_identifier_match": 3
+      }
+    }
+  },
+  "decision": {
+    "semantic_migration_validated": true,
+    "end_to_end_speedup_validated": false,
+    "needs": {
+      "shared_selection_execution": "confirmed",
+      "true_source_projection_pushdown": "confirmed",
+      "empty_selection_short_circuit": "confirmed",
+      "selected_id_query_for_idmapping": "workload confirmed; public API shape remains undecided"
+    }
+  }
+}

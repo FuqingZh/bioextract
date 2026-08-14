@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import tarfile
 import zipfile
@@ -8,15 +7,16 @@ from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 
 import duckdb
 import polars as pl
 
 from bioextract._publication import (
     BIOEXTRACT_RELATIONS,
+    METADATA_SCHEMA_VERSION,
     DuckDBWriteResult,
-    validate_duckdb_metadata_v1,
+    validate_duckdb_metadata_v2,
 )
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
 from bioextract.errors import CapabilityError, IntegrityError
@@ -111,9 +111,8 @@ class _ReopenedGoTidyDataset(TidyDataset):
         table_names: Mapping[str, str] | None = None,
         if_exists: str = "fail",
         source_columns: Mapping[str, Collection[str]] | None = None,
-        include_source_hashes: bool = False,
     ) -> DuckDBWriteResult:
-        del path, table_names, if_exists, source_columns, include_source_hashes
+        del path, table_names, if_exists, source_columns
         raise CapabilityError(
             "write_duckdb() requires a GO OBO source handle, not a reopened dataset"
         )
@@ -180,7 +179,7 @@ class GODatabase:
         """Open a validated GO ontology publication for domain and SQL access.
 
         Args:
-            path: A bioextract GO metadata-v1 DuckDB publication.
+            path: A bioextract GO metadata-v2 DuckDB publication.
 
         Returns:
             A publication-backed handle pinned to the validated file identity.
@@ -792,9 +791,12 @@ def _validate_go_publication(path: Path) -> None:
             metadata = {str(row[0]): str(row[1]) for row in metadata_rows}
             if len(metadata) != len(metadata_rows):
                 raise ValueError("GO publication has duplicate metadata keys")
-            if metadata.get("bioextract.metadata_schema_version") != "1":
+            if (
+                metadata.get("bioextract.metadata_schema_version")
+                != METADATA_SCHEMA_VERSION
+            ):
                 raise ValueError("Unsupported GO metadata schema version")
-            validate_duckdb_metadata_v1(connection, metadata)
+            validate_duckdb_metadata_v2(connection, metadata)
             if metadata.get("bioextract.resource_name") != "go":
                 raise ValueError("DuckDB file is not a bioextract GO publication")
             if metadata.get("bioextract.source_schema_profile") != (
@@ -812,13 +814,7 @@ def _validate_go_publication(path: Path) -> None:
             ).fetchall()
             if len(source_rows) != 1 or source_rows[0][0] != "go_obo":
                 raise ValueError("GO source role inventory is unsupported")
-            embedded_sources: object = json.loads(metadata["bioextract.sources"])
-            if (
-                not isinstance(embedded_sources, list)
-                or len(cast(list[object], embedded_sources)) != 1
-            ):
-                raise ValueError("GO embedded source inventory is unsupported")
-            if int(source_rows[0][2]) < 0:
+            if source_rows[0][2] is not None and int(source_rows[0][2]) < 0:
                 raise ValueError("GO source byte count is unsupported")
 
             relations = {

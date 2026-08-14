@@ -112,7 +112,7 @@ R-MMU-000001	R-MMU-1257604
   extraction results.
 - `connect()` returns distinct caller-owned native read-only connections and
   permits arbitrary read SQL while rejecting writes.
-- Metadata v1 resource identity, source schema profile, resource schema,
+- Metadata v2 resource identity, source schema profile, resource schema,
   source capability roles, exact physical table/view inventory, table roles,
   and physical column schemas are rejected when incompatible.
 - Validation accepts non-negative recorded biological row counts without

@@ -332,7 +332,6 @@ class RheaDatabase:
         path: os.PathLike[str] | str,
         *,
         if_exists: Literal["fail", "replace"] = "fail",
-        include_source_hashes: bool = False,
     ) -> RheaWriteResult:
         """Atomically write the selected Rhea components to one DuckDB file.
 
@@ -340,7 +339,6 @@ class RheaDatabase:
             path: Destination database path.
             if_exists: ``"fail"`` preserves an existing destination;
                 ``"replace"`` atomically replaces it after a successful build.
-            include_source_hashes: Calculate SHA-256 values for source provenance.
 
         Returns:
             The committed database path, table inventory, counts, and release
@@ -374,7 +372,6 @@ class RheaDatabase:
                 scope=self.snapshot.scope,
                 path=destination,
                 if_exists=if_exists,
-                include_source_hashes=include_source_hashes,
             )
 
     def connect(self) -> duckdb.DuckDBPyConnection:

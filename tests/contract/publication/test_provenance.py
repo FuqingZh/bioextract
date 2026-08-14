@@ -6,7 +6,7 @@ import duckdb
 import polars as pl
 import pytest
 
-from bioextract._publication import validate_duckdb_metadata_v1
+from bioextract._publication import validate_duckdb_metadata_v2
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
 
 
@@ -122,7 +122,7 @@ def test_publication_rejects_invalid_release_provenance(
         ),
     ],
 )
-def test_v1_reader_rejects_invalid_release_provenance(
+def test_v2_reader_rejects_invalid_release_provenance(
     tmp_path: Path, corruption: str, message: str
 ) -> None:
     path = tmp_path / "release.duckdb"
@@ -133,7 +133,7 @@ def test_v1_reader_rejects_invalid_release_provenance(
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
         with pytest.raises(ValueError, match=message):
-            validate_duckdb_metadata_v1(connection, metadata)
+            validate_duckdb_metadata_v2(connection, metadata)
 
 
 @pytest.mark.parametrize(
@@ -161,7 +161,7 @@ def test_v1_reader_rejects_invalid_release_provenance(
         ),
     ],
 )
-def test_v1_reader_requires_exact_provenance_table_schemas(
+def test_v2_reader_requires_exact_provenance_table_schemas(
     tmp_path: Path,
     table_name: str,
     corruption: str,
@@ -174,10 +174,10 @@ def test_v1_reader_requires_exact_provenance_table_schemas(
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
         with pytest.raises(ValueError, match=rf"schema.*{table_name}"):
-            validate_duckdb_metadata_v1(connection, metadata)
+            validate_duckdb_metadata_v2(connection, metadata)
 
 
-def test_v1_reader_rejects_release_source_without_release(tmp_path: Path) -> None:
+def test_v2_reader_rejects_release_source_without_release(tmp_path: Path) -> None:
     path = tmp_path / "source-only.duckdb"
     dataset = _dataset(tmp_path)
     dataset.release_version = None
@@ -191,7 +191,7 @@ def test_v1_reader_rejects_release_source_without_release(tmp_path: Path) -> Non
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
         with pytest.raises(ValueError, match="must occur together"):
-            validate_duckdb_metadata_v1(connection, metadata)
+            validate_duckdb_metadata_v2(connection, metadata)
 
 
 @pytest.mark.parametrize(
@@ -203,7 +203,7 @@ def test_v1_reader_rejects_release_source_without_release(tmp_path: Path) -> Non
         ("passed", "1", True, "does not match validation_issue_count"),
     ],
 )
-def test_v1_reader_validates_status_and_issue_count_parity(
+def test_v2_reader_validates_status_and_issue_count_parity(
     tmp_path: Path,
     status: str,
     count: str,
@@ -233,10 +233,10 @@ def test_v1_reader_validates_status_and_issue_count_parity(
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
         with pytest.raises(ValueError, match=message):
-            validate_duckdb_metadata_v1(connection, metadata)
+            validate_duckdb_metadata_v2(connection, metadata)
 
 
-def test_v1_reader_reports_missing_validation_issue_table(tmp_path: Path) -> None:
+def test_v2_reader_reports_missing_validation_issue_table(tmp_path: Path) -> None:
     path = tmp_path / "missing-validation-table.duckdb"
     _dataset(tmp_path).write_duckdb(path)
     with duckdb.connect(str(path)) as connection:
@@ -245,7 +245,7 @@ def test_v1_reader_reports_missing_validation_issue_table(tmp_path: Path) -> Non
         )
         connection.execute("DROP TABLE _bioextract.validation_issue")
         with pytest.raises(ValueError, match="validation_issue"):
-            validate_duckdb_metadata_v1(connection, metadata)
+            validate_duckdb_metadata_v2(connection, metadata)
 
 
 @pytest.mark.parametrize("logical_name", ["", "   "])
@@ -317,7 +317,7 @@ def test_duckdb_publication_has_internal_provenance_schema(
         assert connection.execute(
             "SELECT value FROM _bioextract.metadata "
             "WHERE key = 'bioextract.metadata_schema_version'"
-        ).fetchone() == ("1",)
+        ).fetchone() == ("2",)
         assert connection.execute(
             "SELECT count(*) FROM _bioextract.validation_issue"
         ).fetchone() == (0,)

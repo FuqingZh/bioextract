@@ -1,7 +1,7 @@
 # Materialized Dataset Contract
 
-Version: v1.0
-Date: 2026-07-29
+Version: v1.1
+Date: 2026-08-13
 Status: current
 
 ## Purpose
@@ -72,10 +72,12 @@ _bioextract.validation_issue
 
 `metadata` stores resource identity, resource schema version, metadata schema
 version, scope, package version, and generation time. `source_file` stores
-logical source name, display path, bytes, media type, and optional SHA-256.
+logical source name, display path, optional adapter-known bytes, media type,
+and optional SHA-256. Writers do not stat or reread a source solely to fill
+provenance fields.
 `table_info` stores table name, semantic role, and row count.
 `column_mapping` always exists and is empty when source headers required no
-mapping. `validation_issue` always exists in metadata v1 and records
+mapping. `validation_issue` always exists in metadata v2 and records
 non-fatal validation findings; its row count must match metadata.
 
 The namespace contains no biological facts. `information_schema` is not used
@@ -95,12 +97,14 @@ until a complete new staging file is ready.
 
 `TidyDataset` has no directory writer and resources expose no `write_tidy()`
 compatibility surface. Publications always use an explicit single-file
-`write_duckdb(path)` destination. Metadata schema v1 is the first and only
-supported contract. It may include
+`write_duckdb(path)` destination. Metadata schema v2 is the only supported
+contract. It may include
 `bioextract.source_schema_version` only when the upstream source declares an
 authoritative schema label. `bioextract.release_version` remains optional.
 Writers never infer either value from paths, basenames, archives, timestamps,
-or modification times. Legacy development metadata shapes are rejected; v1
-never falls back to or dual-writes `bioextract.schema_version`.
+or modification times. Metadata v1 and legacy development shapes are rejected;
+v2 never falls back to or dual-writes `bioextract.schema_version`.
+`_bioextract.source_file` is the sole source inventory;
+`bioextract.sources` is neither written nor accepted.
 An internal `build_id_prefix` may include a path stem for a human-readable
 execution label, but that label is never release or source-schema evidence.
