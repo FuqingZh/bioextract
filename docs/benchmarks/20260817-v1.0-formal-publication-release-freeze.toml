@@ -31,6 +31,12 @@ metadata_v1_formal_publications_readable = true
 five_publication_reader_probe = "passed"
 harness_status = "missing_from_joint_omics"
 
+[catalog_builder]
+repository = "/home/fqzhang/project/bioinfo-resource-tools"
+commit = "daa9f1d"
+remote_status = "no_remote_configured"
+production_authority = "not_yet_delivered"
+
 [catalog]
 baseline_path = "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/meta/releases/20260813-r1/catalog.toml"
 baseline_sha256 = "4f508c22f7f1fe7111447a8742ca6f8f077db5950246f149771ee3213e445170"
