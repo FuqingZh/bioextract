@@ -1,7 +1,7 @@
 # bioextract Documentation
 
-Version: v1.6
-Date: 2026-08-17
+Version: v1.7
+Date: 2026-08-18
 Status: current
 
 This directory contains durable architecture, data contracts, test standards,
@@ -46,7 +46,7 @@ when a domain does not yet have a dedicated architecture document.
 | GO ontology and KEGG BRITE | [GO and KEGG Tidy](architecture/go-kegg-tidy.md) | [GO and KEGG Tidy](testing/go-kegg-tidy.md) | — |
 | KEGG organism mapping | [KEGG Mapping DB](architecture/kegg-mapping-db.md); P3 DuckDB-native publisher accepted on the fixed 1,000-organism scope, with [release held](implementation-plans/20260813-v1.0-kegg-mapping-aggregate-publication-implementation-plan.md) pending its separate release gate | [KEGG Mapping DB](testing/kegg-mapping-db.md) | [2026-06 candidate benchmark](benchmarks/20260813-v1.0-kegg-mapping-2026-06-candidate.md); [full-build evidence](benchmarks/20260817-v1.0-formal-kegg-mapping-build.json); [rno scoped readback](benchmarks/20260817-v1.0-formal-kegg-mapping-rno-validation.json) |
 | KEGG metabolic | [KEGG Metabolic Database](architecture/kegg-metabolic-db.md) | [KEGG Metabolic Database](testing/kegg-metabolic-db.md) | [2026-07 baseline](benchmarks/20260730-kegg-metabolic-2026-07-benchmark.md) |
-| Reactome | [ReactomeDatabase](architecture/reactome-db.md); [mapping capability expansion plan](implementation-plans/20260817-v1.0-reactome-mapping-capability-expansion-implementation-plan.md) (P1: UniProt All Levels) | [ReactomeDatabase](testing/reactome-db.md) | [bounded v96 P1 smoke](benchmarks/20260817-v1.0-reactome-p1-v96-smoke.json) |
+| Reactome | [ReactomeDatabase](architecture/reactome-db.md); [program index](implementation-plans/20260817-v1.0-reactome-mapping-capability-expansion-implementation-plan.md); [P2 mapping matrix](implementation-plans/20260818-v1.0-reactome-mapping-matrix-expansion-implementation-plan.md); [P3 human entities](implementation-plans/20260818-v1.0-reactome-human-entity-pathway-implementation-plan.md); [P4 human GMT](implementation-plans/20260818-v1.0-reactome-human-gene-set-implementation-plan.md) | [ReactomeDatabase](testing/reactome-db.md) | [bounded v96 P1 smoke](benchmarks/20260817-v1.0-reactome-p1-v96-smoke.json); [complete v0.5 smoke](benchmarks/20260818-v1.0-reactome-v05-v96-smoke.json) |
 | WikiPathways | [WikiPathwaysDatabase](architecture/wikipathways-db.md) | [WikiPathwaysDatabase](testing/wikipathways-db.md) | — |
 | eggNOG | [EggNOGDatabase](architecture/eggnog-db.md) | [EggNOGDatabase](testing/eggnog-db.md) | [5.0.2 baseline](benchmarks/20260608-v1.0-eggnog-5.0.2-benchmark.md) |
 | InterPro and Pfam | [InterProDatabase](architecture/interpro-db.md) | [InterProDatabase](testing/interpro-db.md) | [108.0 baseline](benchmarks/20260714-v1.0-interpro-108-benchmark.md) |
@@ -59,24 +59,29 @@ when a domain does not yet have a dedicated architecture document.
 
 The accepted
 [Reactome Mapping Capability Expansion Plan](implementation-plans/20260817-v1.0-reactome-mapping-capability-expansion-implementation-plan.md)
-freezes the full namespace/target/level role model while authorizing only P1:
-explicit `UniProt2Reactome_All_Levels.txt` source, query, selection,
-publication-v0.2, and reopen support. Lowest-level behavior remains the
-default; reaction and other namespace capabilities plus the v0.2 package
-release remain separately authorized. The current-API lowest-level v96
-candidate is admitted, if accepted, through the `20260817-r1` release plan.
+is now the Reactome program index. P1 delivered explicit
+`UniProt2Reactome_All_Levels.txt` source, query, selection, v0.2 publication,
+reopen, package 0.6.0, and authorized formal-v96/catalog support. The remaining
+implementation authority was ordered as [P2: the ten-file mapping-matrix
+expansion](implementation-plans/20260818-v1.0-reactome-mapping-matrix-expansion-implementation-plan.md),
+[P3: human Complex/EWAS relations](implementation-plans/20260818-v1.0-reactome-human-entity-pathway-implementation-plan.md),
+and [P4: human GMT gene sets](implementation-plans/20260818-v1.0-reactome-human-gene-set-implementation-plan.md),
+targeting v0.3, v0.4, and v0.5 respectively. The implementation and temporary
+v96 publication smoke now cover the complete v0.5 API; existing UniProt
+pathway defaults remain unchanged. The coordinated package, formal Reactome
+v96/KEGG publication, and catalog closeout is the remaining release boundary;
+downstream activation remains separate.
 
 The accepted
 [Formal Metadata v2 And KEGG Mapping Release Plan](implementation-plans/20260817-v1.0-formal-publication-release-implementation-plan.md)
-owns the separately authorized `20260817-r1` formal resource delivery. It
-rebuilds the five frozen bioextract core publications plus the current-API
-Reactome canonical profile with the released bioextract 0.5.0 metadata-v2
-contract, performs a dependency-matched interleaved A/B, prepares one
-all-available-organism KEGG mapping DuckDB, and creates only the immutable
-`meta/releases/20260817-r1/catalog.toml` catalog after its admission gates
-close. Reactome all-level v0.2 remains owned by the separate capability plan.
-`rno` is a reopened-publication selection gate, not a separate formal artifact;
-downstream activation is outside this bioextract plan. The deprecated global
+owns the original `20260817-r1` formal resource-delivery baseline: five frozen
+bioextract core publications, the then-current Reactome profile under
+bioextract 0.5.0, one all-available-organism KEGG mapping DuckDB, and the
+immutable release catalog. The earlier Reactome v0.2 and bioextract 0.6.0
+formal closeout is recorded in the Reactome program index; the current
+coordinated task extends the same release boundary to v0.5. `rno` remains a
+reopened-publication selection gate rather than a separate formal artifact,
+downstream activation is outside the plan, and the deprecated global
 `meta/catalog.toml` is not updated.
 
 The completed

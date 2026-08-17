@@ -522,9 +522,9 @@ def test_v02_publication_preserves_roles_release_and_warning(tmp_path: Path) -> 
             connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
         )
         assert (
-            metadata["bioextract.source_schema_profile"] == "reactome-mapping-files-v2"
+            metadata["bioextract.source_schema_profile"] == "reactome-mapping-files-v5"
         )
-        assert metadata["bioextract.resource_schema_version"] == "reactome-mapping-v0.2"
+        assert metadata["bioextract.resource_schema_version"] == "reactome-mapping-v0.5"
         assert metadata["bioextract.release_version"] == "96"
         assert metadata["bioextract.release_version_source"] == "caller"
         assert metadata["bioextract.validation_status"] == "passed_with_warnings"

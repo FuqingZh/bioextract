@@ -1,129 +1,93 @@
 # ReactomeDatabase Test Standard
 
-Version: v1.1
-Date: 2026-08-17
+Version: v1.2
+Date: 2026-08-18
 Status: current
 
 ## Scope
 
-The ReactomeDatabase suite verifies local official-format parsing, explicit
-lowest/all-level capability semantics, selection behavior, species scoping,
-enrichment projections, hierarchy validation, metadata-v2 publication, and
-DuckDB reopen parity. It does not test online Reactome services or statistical
-enrichment.
+The suite verifies official-format parsing, the twelve mapping roles, explicit
+pathway/reaction dimensions, namespace normalization, human Complex/EWAS
+relations, GMT archive safety, species behavior, metadata-v2 publication, and
+DuckDB reopen parity. It does not test Reactome web services or enrichment
+statistics.
 
 ## Fixtures
 
-Keep compact fixtures headerless and tab-separated. Mapping fixtures use the
-six columns:
+Mapping fixtures are separate, headerless six-field TSV files. They include an
+exact duplicate, evidence-distinct rows, literal quotes, an NCBI non-decimal
+identifier, ChEBI prefixed/decimal inputs, and GtoP numeric inputs.
+
+Complex and EWAS fixtures use their exact ordered headers:
 
 ```text
-uniprot_id
-reactome_pathway_id
-reactome_url
-pathway_name
-evidence_code
-species
+complex  pathway  top_level_pathway
+ewas     pathway  top_level_pathway
 ```
 
-Provide separate `UniProt2Reactome.txt` and
-`UniProt2Reactome_All_Levels.txt` fixtures. The all-level fixture must not be
-passed through the lowest-level role. Include:
+They cover an entity prefix that is not `HSA`, exact duplicate removal, missing
+metadata endpoints, and an invalid top-level ancestor. GMT fixtures are zip
+archives with one `ReactomePathways.gmt` member and cover variable-width rows,
+duplicate memberships, opaque symbols, extra members, malformed UTF-8, and
+conflicting labels.
 
-- an ancestor mapping present only at all levels;
-- an exact duplicate row;
-- two rows differing only by `evidence_code`;
-- an embedded double quote in a reaction-shaped six-field fixture; and
-- a missing pathway metadata ID for publication-warning coverage.
+All tests use `tmp_path`; they do not write to CephFS or the formal resource
+tree.
 
-Tests use `tmp_path` and never write to the formal resource tree or CephFS.
+## Unit And Integration Contract
 
-## Unit Tests
+- Headerless mapping parsing disables quoting, rejects ragged/empty records,
+  deduplicates only exact six-field rows, and preserves evidence differences.
+- Headered entity parsing requires exact header order and records semantic
+  source-to-public column lineage.
+- GMT parsing rejects unsafe archive shapes, streams the expected member,
+  preserves labels/symbols, and rejects one pathway with multiple labels.
+- `from_files()` accepts partial role combinations; absent roles fail at their
+  capability boundary rather than being synthesized.
+- Pathway `pathway_level=None` resolves to lowest-level; reaction selections
+  reject any pathway level. Invalid ChEBI/GtoP identifiers fail before lookup.
+- NCBI non-decimal official identifiers remain selectable.
+- Existing UniProt selected output remains byte-compatible; reaction output is
+  target-specific and source-column-specific.
+- Human entity/GMT relations return all rows unscoped or for Homo sapiens and
+  an empty stable-schema relation for other species.
+- Mapping closure, entity top-level ancestry, cycles, and metadata endpoint
+  warnings are conditional on the supporting source roles.
 
-- The shared mapping-family reader disables CSV quoting and preserves literal
-  quotes.
-- Short, extra-field, null, and empty-field records fail closed.
-- Exact duplicate six-column rows are removed; evidence-distinct rows remain.
-- Pathway and relation readers preserve their declared schemas.
+## Publication And Reopen
 
-## Integration Tests
+Partial and complete fixtures verify that `build_tidy()` and `write_duckdb()`
+publish exactly the available biological roles plus the five metadata-v2
+relations. The complete v0.5 identity is:
 
-### Construction and query
+```text
+reactome-mapping-files-v5
+reactome-mapping-v0.5
+```
 
-- `from_files()` accepts any non-empty combination of the four P1 roles.
-- `uniprot_all_levels` is independent from `uniprot_mapping`.
-- `release_version` trims caller input and rejects an empty value.
-- Missing paths and non-files fail at construction.
-- Default `pathway_mappings()`, `pathway_genes()`, `select_ids()`, and
-  `select_groups()` are lowest-level UniProt behavior.
-- `pathway_level="all_levels"` is explicit for whole-resource and selected
-  queries; absent capability raises `CapabilityError` or the source-handle
-  `ValueError` at the feature boundary.
-- Invalid namespace, target, and level values raise `ValueError`.
-- Evidence-distinct selected rows survive; `pathway_genes()` deduplicates only
-  pathway/UniProt pairs.
-- Grouped mapping and unmatched output retain their existing shapes.
-- Species filtering occurs before enrichment deduplication.
+Tests also verify:
 
-### Publication and reopen
-
-For lowest-only, all-only, pathway-only, relation-only, and combined fixtures:
-
-- `build_tidy().frames` contains only the available canonical role names:
-
-  ```text
-  uniprot_pathway_lowest_level
-  uniprot_pathway_all_level
-  pathway
-  pathway_relation
-  ```
-
-- `write_duckdb()` publishes exactly those biological tables plus the five
-  metadata-v2 tables.
-- Metadata identifies `reactome-mapping-files-v2` and
-  `reactome-mapping-v0.2`.
-- `_bioextract.source_file` contains the exact role inventory.
-- The old `protein_pathway` relation is absent.
-- `release_version` survives publication, inspection, and reopen.
-- Missing pathway metadata creates a visible
-  `missing_pathway_metadata` warning without dropping mapping rows.
-- When all three UniProt pathway roles are present, all-level keys equal the
-  reflexive lowest-level hierarchy closure; a mismatch fails publication.
-- Reopen derives capabilities from the unique source-role inventory and rejects
-  forged roles, wrong profile/version, extra or missing physical tables,
-  physical schema changes, and v0.1 publications.
-- Reopen trusts non-negative recorded biological row counts and does not recount
-  them during validation.
-- Source and reopened whole-resource, species-scoped, selected, grouped,
-  unmatched, enrichment, and relation results agree.
-- Reopened `connect()` calls are distinct read-only caller-owned connections,
-  and atomic replacement invalidates the old handle.
+- exact role/table/media inventories, including `application/zip` for GMT;
+- exact ordered physical schemas and six expected entity column mappings;
+- visible warnings without dropping source rows;
+- source/reopened whole-resource, species, selection, grouped, unmatched,
+  entity, and GMT parity;
+- no old `protein_pathway` relation or v0.4-and-earlier reader;
+- non-negative recorded table counts are trusted without biological recount;
+- read-only independent connections and replacement invalidation.
 
 ## Bounded v96 Smoke
 
-External snapshot smoke is opt-in and read-only. Use the concrete raw subtree
-only after resolving it explicitly; do not recursively scan `/cephfs_data`.
-The smoke writes any temporary publication under a unique `/tmp` directory.
+External snapshot smoke is opt-in and uses the already resolved concrete raw
+subtree. It never recursively scans `/cephfs_data` and writes only to a unique
+temporary directory.
 
-The v96 checks record, at minimum:
-
-```text
-lowest-level rows                    322435
-all-level rows                       934947
-lowest-level unique pathway pairs   317978
-all-level unique pathway pairs      917206
-human lowest-level rows              53996
-human all-level rows                 159114
-human unique UniProt IDs              12136 at both levels
-closure derived-only keys                 0
-closure official-only keys                 0
-```
-
-The smoke also proves that the 13 all-level rows for
-`R-SCE-9865878` remain queryable and that the corresponding publication
-warning is visible. It records runtime and output hashes only when the bounded
-run actually completes; fixture results are not substituted for skipped
-external evidence.
+The complete v0.5 smoke records all 17 biological tables, source row counts,
+exact-duplicate counts, source/publication semantic hashes, four namespace
+closure results, selected/grouped probes, human/nonhuman scope probes, GMT
+member shape, validation warnings, output hash, elapsed time, and peak RSS only
+for operations that actually completed. Fixture results do not substitute for
+skipped external evidence.
 
 ## Commands
 
@@ -132,11 +96,11 @@ BIOEXTRACT_TEST_THREADS=1 pdm run pytest \
   tests/unit/reactome \
   tests/integration/reactome \
   tests/contract/resources/reactome \
-  -q
+  tests/contract/api/test_signatures.py -q
 
 BIOEXTRACT_TEST_THREADS=1 pdm run check
 ```
 
 The complete gate is required for this public API and publication-schema
-change. Formal CephFS replacement, release catalog admission, and package
-release are outside this test standard.
+change. Formal replacement, package release, and catalog activation are
+separate release operations.
