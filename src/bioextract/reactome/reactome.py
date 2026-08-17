@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import copy
 import os
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import polars as pl
+from polars._typing import SchemaDict
 
-from bioextract._lazy import register_deferred_frame_source
+from bioextract._lazy import (
+    _RelationScanRequest,  # pyright: ignore[reportPrivateUsage]  # typed source boundary
+    register_replayable_source,
+)
 from bioextract._publication import (
     BIOEXTRACT_RELATIONS,
     METADATA_SCHEMA_VERSION,
@@ -32,15 +37,16 @@ from .constant import (
     SCHEMA_VERSION,
 )
 from .util import (
-    extract_mapping_frame,
     extract_term2gene_frame,
     extract_term2name_frame,
-    extract_unmatched_ids_frame,
     filter_relation_frame,
     filter_species_frame,
     read_mapping_frame,
     read_pathway_frame,
     read_relation_frame,
+    scan_mapping_frame,
+    scan_pathway_frame,
+    scan_relation_frame,
 )
 
 __all__ = [
@@ -390,10 +396,27 @@ class ReactomeDatabase:
             shape: (..., 2)
         """
         snapshot = copy.copy(self)
-        return register_deferred_frame_source(
-            schema=dict.fromkeys(["reactome_pathway_id", "uniprot_id"], pl.String),
-            frame=lambda: snapshot._eager_pathway_genes(),
-        )
+        schema = dict.fromkeys(["reactome_pathway_id", "uniprot_id"], pl.String)
+        if snapshot._publication_path is not None:
+            return register_replayable_source(
+                schema=schema,
+                batches=lambda request: _iter_publication_relation_batches(
+                    snapshot,
+                    relation="pathway_genes",
+                    schema=schema,
+                    request=request,
+                ),
+            )
+        if not snapshot._has_mapping():
+            snapshot._raise_missing_capability(
+                "Cannot extract Reactome mapping without UniProt2Reactome file",
+                "Reactome publication does not contain protein-pathway mappings",
+            )
+        assert snapshot.snapshot.file_uniprot2reactome is not None
+        lf_mapping = scan_mapping_frame(snapshot.snapshot.file_uniprot2reactome)
+        if snapshot.species is not None:
+            lf_mapping = lf_mapping.filter(pl.col("species") == snapshot.species)
+        return lf_mapping.select(list(schema)).unique().sort(list(schema))
 
     def _eager_pathway_genes(self) -> pl.DataFrame:
         """Extract distinct Reactome-pathway-to-UniProt enrichment pairs.
@@ -426,13 +449,30 @@ class ReactomeDatabase:
             shape: (..., 3)
         """
         snapshot = copy.copy(self)
-        return register_deferred_frame_source(
-            schema=dict.fromkeys(
-                ["reactome_pathway_id", "pathway_name", "species"],
-                pl.String,
-            ),
-            frame=lambda: snapshot._eager_pathway_names(),
+        schema = dict.fromkeys(
+            ["reactome_pathway_id", "pathway_name", "species"],
+            pl.String,
         )
+        if snapshot._publication_path is not None:
+            return register_replayable_source(
+                schema=schema,
+                batches=lambda request: _iter_publication_relation_batches(
+                    snapshot,
+                    relation="pathway_names",
+                    schema=schema,
+                    request=request,
+                ),
+            )
+        if not snapshot._has_pathway():
+            snapshot._raise_missing_capability(
+                "Cannot extract Reactome pathways without pathways file",
+                "Reactome publication does not contain pathway metadata",
+            )
+        assert snapshot.snapshot.file_pathways is not None
+        lf_pathway = scan_pathway_frame(snapshot.snapshot.file_pathways)
+        if snapshot.species is not None:
+            lf_pathway = lf_pathway.filter(pl.col("species") == snapshot.species)
+        return lf_pathway.select(list(schema)).unique().sort(list(schema))
 
     def _eager_pathway_names(self) -> pl.DataFrame:
         """Extract pathway display names and species metadata for enrichment.
@@ -471,13 +511,54 @@ class ReactomeDatabase:
             shape: (..., 2)
         """
         snapshot = copy.copy(self)
-        return register_deferred_frame_source(
-            schema=dict.fromkeys(
-                ["parent_reactome_pathway_id", "child_reactome_pathway_id"],
-                pl.String,
-            ),
-            frame=lambda: snapshot._eager_pathway_relations(),
+        schema = dict.fromkeys(
+            ["parent_reactome_pathway_id", "child_reactome_pathway_id"],
+            pl.String,
         )
+        if snapshot._publication_path is not None:
+            return register_replayable_source(
+                schema=schema,
+                batches=lambda request: _iter_publication_relation_batches(
+                    snapshot,
+                    relation="pathway_relations",
+                    schema=schema,
+                    request=request,
+                ),
+            )
+        if not snapshot._has_relation():
+            snapshot._raise_missing_capability(
+                "Cannot read Reactome relations without relations file",
+                "Reactome publication does not contain pathway relations",
+            )
+        assert snapshot.snapshot.file_relations is not None
+        lf_relations = scan_relation_frame(snapshot.snapshot.file_relations)
+        if snapshot.species is not None:
+            if not snapshot._has_pathway():
+                snapshot._raise_missing_capability(
+                    "Reactome species-scoped relation filtering requires pathways file",
+                    "Reactome species-scoped relation filtering requires pathway metadata",
+                )
+            assert snapshot.snapshot.file_pathways is not None
+            lf_pathway_ids = (
+                scan_pathway_frame(snapshot.snapshot.file_pathways)
+                .filter(pl.col("species") == snapshot.species)
+                .select("reactome_pathway_id")
+                .unique()
+            )
+            lf_relations = lf_relations.join(
+                lf_pathway_ids.rename(
+                    {"reactome_pathway_id": "parent_reactome_pathway_id"}
+                ),
+                on="parent_reactome_pathway_id",
+                how="inner",
+            ).join(
+                lf_pathway_ids.rename(
+                    {"reactome_pathway_id": "child_reactome_pathway_id"}
+                ),
+                on="child_reactome_pathway_id",
+                how="inner",
+            )
+        return lf_relations.select(list(schema)).unique().sort(list(schema))
 
     def _eager_pathway_relations(self) -> pl.DataFrame:
         """Extract Reactome parent-child pathway relations.
@@ -835,8 +916,6 @@ class ReactomeSelection:
     _df_input_ids: pl.DataFrame = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
     _df_group_membership: pl.DataFrame | None = field(repr=False)
-    _df_mapping: pl.DataFrame | None = field(default=None, repr=False)
-    _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
 
     @property
     def is_grouped(self) -> bool:
@@ -871,32 +950,40 @@ class ReactomeSelection:
             "species",
             "reactome_url",
         ]
-        return register_deferred_frame_source(
-            schema=dict.fromkeys(columns, pl.String),
-            frame=snapshot._eager_mappings,
-        )
-
-    def _eager_mappings(self) -> pl.DataFrame:
-        """Extract every pathway mapping matched by the selected UniProt IDs.
-
-        Examples:
-            Materialize the two fixture pathways mapped to TP53:
-
-            >>> db = ReactomeDatabase.from_files(
-            ...     uniprot_mapping="data/reactome/UniProt2Reactome.txt"
-            ... ).with_species("Homo sapiens")
-            >>> selection = db.select_ids(["P04637"])
-            >>> selection.mappings().select("reactome_pathway_id").collect().to_series().to_list()
-            ['R-HSA-6798695', 'R-HSA-69563']
-        """
-        self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-        if self._df_mapping is None:
-            self._df_mapping = extract_mapping_frame(
-                self.dataset._mapping_frame(),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-                self._df_input_ids,
-                df_group_membership=self._df_group_membership,
+        schema = dict.fromkeys(columns, pl.String)
+        if snapshot.dataset._publication_path is not None:  # pyright: ignore[reportPrivateUsage]
+            return register_replayable_source(
+                schema=schema,
+                batches=lambda request: _iter_selection_mapping_batches(
+                    snapshot,
+                    schema=schema,
+                    request=request,
+                ),
             )
-        return self._df_mapping
+        if not snapshot.dataset._has_mapping():  # pyright: ignore[reportPrivateUsage]
+            snapshot.dataset._raise_missing_capability(  # pyright: ignore[reportPrivateUsage]
+                "Cannot extract Reactome mapping without UniProt2Reactome file",
+                "Reactome publication does not contain protein-pathway mappings",
+            )
+        assert snapshot.dataset.snapshot.file_uniprot2reactome is not None
+        input_ids = snapshot._df_input_ids.get_column("input_id").to_list()  # pyright: ignore[reportPrivateUsage]
+        lf_mapping = scan_mapping_frame(
+            snapshot.dataset.snapshot.file_uniprot2reactome
+        ).filter(pl.col("uniprot_id").is_in(input_ids))
+        if snapshot.dataset.species is not None:
+            lf_mapping = lf_mapping.filter(
+                pl.col("species") == snapshot.dataset.species
+            )
+        lf_mapping = lf_mapping.with_columns(pl.col("uniprot_id").alias("input_id"))
+        if snapshot._df_group_membership is not None:  # pyright: ignore[reportPrivateUsage]
+            lf_mapping = (
+                snapshot._df_group_membership.lazy()  # pyright: ignore[reportPrivateUsage]
+                .join(lf_mapping, on="input_id", how="inner")
+                .select(list(schema))
+            )
+        else:
+            lf_mapping = lf_mapping.select(list(schema))
+        return lf_mapping.unique().sort(list(schema))
 
     def unmatched_ids(self) -> pl.LazyFrame:
         """Return selected UniProt IDs without a Reactome mapping lazily.
@@ -911,35 +998,39 @@ class ReactomeSelection:
             if self._df_group_membership is not None
             else ["input_id"]
         )
-        return register_deferred_frame_source(
-            schema=dict.fromkeys(columns, pl.String),
-            frame=snapshot._eager_unmatched_ids,
-        )
-
-    def _eager_unmatched_ids(self) -> pl.DataFrame:
-        """Extract normalized input IDs with no Reactome pathway mapping.
-
-        Grouped selections report an ID as unmapped independently within each
-        group and include ``group_id`` in the result.
-
-        Examples:
-            Retain a normalized accession with no Reactome mapping:
-
-            >>> db = ReactomeDatabase.from_files(
-            ...     uniprot_mapping="data/reactome/UniProt2Reactome.txt"
-            ... )
-            >>> selection = db.select_ids(["P04637", "MISSING"])
-            >>> selection.unmatched_ids().collect().to_dicts()
-            [{'input_id': 'MISSING'}]
-        """
-        self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-        if self._df_unmapped is None:
-            self._df_unmapped = extract_unmatched_ids_frame(
-                self._df_input_ids,
-                self._eager_mappings(),
-                df_group_membership=self._df_group_membership,
+        if snapshot.dataset._publication_path is not None:  # pyright: ignore[reportPrivateUsage]
+            return register_replayable_source(
+                schema=dict.fromkeys(columns, pl.String),
+                batches=lambda request: _iter_selection_unmatched_batches(
+                    snapshot,
+                    request=request,
+                ),
             )
-        return self._df_unmapped
+        if not snapshot.dataset._has_mapping():  # pyright: ignore[reportPrivateUsage]
+            snapshot.dataset._raise_missing_capability(  # pyright: ignore[reportPrivateUsage]
+                "Cannot extract Reactome mapping without UniProt2Reactome file",
+                "Reactome publication does not contain protein-pathway mappings",
+            )
+        assert snapshot.dataset.snapshot.file_uniprot2reactome is not None
+        input_ids = snapshot._df_input_ids.get_column("input_id").to_list()  # pyright: ignore[reportPrivateUsage]
+        lf_mapping = scan_mapping_frame(
+            snapshot.dataset.snapshot.file_uniprot2reactome
+        ).filter(pl.col("uniprot_id").is_in(input_ids))
+        if snapshot.dataset.species is not None:
+            lf_mapping = lf_mapping.filter(
+                pl.col("species") == snapshot.dataset.species
+            )
+        lf_mapping = lf_mapping.select(pl.col("uniprot_id").alias("input_id")).unique()
+        input_rows = (
+            snapshot._df_group_membership.lazy()  # pyright: ignore[reportPrivateUsage]
+            if snapshot._df_group_membership is not None  # pyright: ignore[reportPrivateUsage]
+            else snapshot._df_input_ids.lazy()  # pyright: ignore[reportPrivateUsage]
+        )
+        return (
+            input_rows.join(lf_mapping, on="input_id", how="anti")
+            .select(columns)
+            .sort(columns)
+        )
 
 
 def _validate_reactome_file(
@@ -951,6 +1042,231 @@ def _validate_reactome_file(
     if not file_path.exists():
         raise FileNotFoundError(f"{label} not found: {file_path}")
     return file_path
+
+
+def _iter_publication_relation_batches(
+    database: ReactomeDatabase,
+    *,
+    relation: str,
+    schema: SchemaDict,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    database._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired publication boundary
+    species = database.species
+    if relation == "pathway_genes":
+        if not database._has_mapping():  # pyright: ignore[reportPrivateUsage]
+            database._raise_missing_capability(  # pyright: ignore[reportPrivateUsage]
+                "Cannot extract Reactome mapping without UniProt2Reactome file",
+                "Reactome publication does not contain protein-pathway mappings",
+            )
+        query = "SELECT DISTINCT reactome_pathway_id, uniprot_id FROM protein_pathway"
+        params: list[str] = []
+        if species is not None:
+            query += " WHERE species = ?"
+            params.append(species)
+        query += " ORDER BY reactome_pathway_id, uniprot_id"
+    elif relation == "pathway_names":
+        if not database._has_pathway():  # pyright: ignore[reportPrivateUsage]
+            database._raise_missing_capability(  # pyright: ignore[reportPrivateUsage]
+                "Cannot extract Reactome pathways without pathways file",
+                "Reactome publication does not contain pathway metadata",
+            )
+        query = (
+            "SELECT DISTINCT reactome_pathway_id, pathway_name, species FROM pathway"
+        )
+        params = []
+        if species is not None:
+            query += " WHERE species = ?"
+            params.append(species)
+        query += " ORDER BY reactome_pathway_id"
+    elif relation == "pathway_relations":
+        if not database._has_relation():  # pyright: ignore[reportPrivateUsage]
+            database._raise_missing_capability(  # pyright: ignore[reportPrivateUsage]
+                "Cannot read Reactome relations without relations file",
+                "Reactome publication does not contain pathway relations",
+            )
+        if species is not None and not database._has_pathway():  # pyright: ignore[reportPrivateUsage]
+            database._raise_missing_capability(  # pyright: ignore[reportPrivateUsage]
+                "Reactome species-scoped relation filtering requires pathways file",
+                "Reactome species-scoped relation filtering requires pathway metadata",
+            )
+        query = "SELECT relation.parent_reactome_pathway_id, relation.child_reactome_pathway_id FROM pathway_relation AS relation"
+        params = []
+        if species is not None:
+            query += (
+                " JOIN pathway AS parent_pathway"
+                " ON parent_pathway.reactome_pathway_id = relation.parent_reactome_pathway_id"
+                " JOIN pathway AS child_pathway"
+                " ON child_pathway.reactome_pathway_id = relation.child_reactome_pathway_id"
+                " WHERE parent_pathway.species = ? AND child_pathway.species = ?"
+            )
+            params.extend([species, species])
+        query += " ORDER BY relation.parent_reactome_pathway_id, relation.child_reactome_pathway_id"
+    else:
+        raise KeyError(f"Unknown Reactome relation: {relation}")
+    requested = (
+        None
+        if request.columns is None
+        else [name for name in request.columns if name in schema]
+    )
+    if requested:
+        projection = ", ".join(f'"{name}"' for name in requested)
+        query = f"SELECT {projection} FROM ({query}) AS _bioextract_relation"
+    connection = database.connect()
+    reader: Any = None
+    try:
+        result = connection.execute(query, params)
+        reader = _reactome_arrow_reader(result, request.effective_batch_size)
+        for record_batch in reader:
+            frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+            yield frame.cast(  # type: ignore[reportArgumentType]
+                {name: schema[name] for name in frame.columns},
+                strict=False,
+            )
+    finally:
+        if reader is not None:
+            close = getattr(reader, "close", None)
+            if close is not None:
+                close()
+        connection.close()
+
+
+def _iter_selection_mapping_batches(
+    selection: ReactomeSelection,
+    *,
+    schema: SchemaDict,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    database = selection.dataset
+    database._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired publication boundary
+    input_ids = selection._df_input_ids.get_column("input_id").to_list()  # pyright: ignore[reportPrivateUsage]
+    if not input_ids:
+        return
+    connection = database.connect()
+    reader: Any = None
+    try:
+        connection.execute(
+            "CREATE TEMP TABLE _reactome_input(input_id VARCHAR PRIMARY KEY)"
+        )
+        connection.executemany(
+            "INSERT INTO _reactome_input VALUES (?)",
+            [(str(value),) for value in input_ids],
+        )
+        query = """
+            SELECT DISTINCT
+                input.input_id AS input_id,
+                input.input_id AS uniprot_id,
+                mapping.reactome_pathway_id,
+                mapping.pathway_name,
+                mapping.evidence_code,
+                mapping.species,
+                mapping.reactome_url
+            FROM _reactome_input AS input
+            JOIN protein_pathway AS mapping
+              ON mapping.uniprot_id = input.input_id
+        """
+        params: list[str] = []
+        if database.species is not None:
+            query += " WHERE mapping.species = ?"
+            params.append(database.species)
+        query += " ORDER BY input_id, reactome_pathway_id"
+        requested = (
+            None
+            if request.columns is None
+            else [name for name in request.columns if name in schema]
+        )
+        if requested:
+            projection = ", ".join(f'"{name}"' for name in requested)
+            query = f"SELECT {projection} FROM ({query}) AS _bioextract_relation"
+        result = connection.execute(query, params)
+        reader = _reactome_arrow_reader(result, request.effective_batch_size)
+        for record_batch in reader:
+            frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+            if selection._df_group_membership is not None:  # pyright: ignore[reportPrivateUsage]
+                frame = (
+                    selection._df_group_membership.join(  # pyright: ignore[reportPrivateUsage]
+                        frame,
+                        on="input_id",
+                        how="inner",
+                    )
+                    .select(list(schema))
+                    .unique()
+                    .sort(list(schema))
+                )
+            yield frame.cast(  # type: ignore[reportArgumentType]
+                {name: schema[name] for name in frame.columns},
+                strict=False,
+            )
+    finally:
+        if reader is not None:
+            close = getattr(reader, "close", None)
+            if close is not None:
+                close()
+        connection.close()
+
+
+def _iter_selection_unmatched_batches(
+    selection: ReactomeSelection,
+    *,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    database = selection.dataset
+    database._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired publication boundary
+    input_ids = selection._df_input_ids.get_column("input_id").to_list()  # pyright: ignore[reportPrivateUsage]
+    if not input_ids:
+        return
+    connection = database.connect()
+    try:
+        connection.execute(
+            "CREATE TEMP TABLE _reactome_input(input_id VARCHAR PRIMARY KEY)"
+        )
+        connection.executemany(
+            "INSERT INTO _reactome_input VALUES (?)",
+            [(str(value),) for value in input_ids],
+        )
+        query = (
+            "SELECT DISTINCT input.input_id FROM _reactome_input AS input "
+            "JOIN protein_pathway AS mapping "
+            "ON mapping.uniprot_id = input.input_id"
+        )
+        params: list[str] = []
+        if database.species is not None:
+            query += " WHERE mapping.species = ?"
+            params.append(database.species)
+        rows = connection.execute(query, params).fetchall()
+    finally:
+        connection.close()
+
+    mapped_ids = {str(row[0]) for row in rows}
+    input_frame = selection._df_input_ids.filter(  # pyright: ignore[reportPrivateUsage]
+        ~pl.col("input_id").is_in(mapped_ids)
+    )
+    if selection._df_group_membership is not None:  # pyright: ignore[reportPrivateUsage]
+        input_frame = (
+            selection._df_group_membership.join(  # pyright: ignore[reportPrivateUsage]
+                input_frame,
+                on="input_id",
+                how="inner",
+            )
+            .select("group_id", "input_id")
+            .sort("group_id", "input_id")
+        )
+    requested = (
+        None
+        if request.columns is None
+        else [name for name in request.columns if name in input_frame.columns]
+    )
+    if requested:
+        input_frame = input_frame.select(requested)
+    for offset in range(0, input_frame.height, request.effective_batch_size):
+        yield input_frame.slice(offset, request.effective_batch_size)
+
+
+def _reactome_arrow_reader(result: Any, batch_size: int) -> Any:
+    to_arrow_reader = getattr(result, "to_arrow_reader", None)
+    if to_arrow_reader is not None:
+        return to_arrow_reader(batch_size)
+    return result.fetch_record_batch(rows_per_batch=batch_size)
 
 
 _REACTOME_TABLE_CONTRACTS: dict[str, tuple[str, str, tuple[tuple[str, str], ...]]] = {

@@ -130,7 +130,6 @@ def test_reopened_grouped_selection_preserves_unique_fan_out_and_unmatched(
 
 def test_reopened_selection_queries_only_unique_input_ids(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "interpro.duckdb"
     _source(tmp_path).write_duckdb(path)
@@ -138,10 +137,6 @@ def test_reopened_selection_queries_only_unique_input_ids(
 
     selection = reopened.select_ids(["P12345"])
 
-    def reject_full_mapping(_database: InterProDatabase) -> None:
-        raise AssertionError("selection must not extract the full mapping")
-
-    monkeypatch.setattr(InterProDatabase, "_eager_mappings", reject_full_mapping)
     assert selection.mappings().collect().height == 1
 
 

@@ -3,13 +3,18 @@ from __future__ import annotations
 import copy
 import os
 import warnings
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import polars as pl
+from polars._typing import SchemaDict
 
-from bioextract._lazy import register_deferred_frame_source
+from bioextract._lazy import (
+    _RelationScanRequest,  # pyright: ignore[reportPrivateUsage]  # typed source boundary
+    register_materialized_source,
+    register_replayable_source,
+)
 from bioextract._shared import (
     create_group_input_frames,
     create_input_id_frame,
@@ -22,10 +27,9 @@ from .constant import (
     EggnogNamespace,
 )
 from .util import (
-    extract_unmatched_ids_frame,
     is_gzip_file,
+    iter_selected_mapping_frames,
     read_cog_fun_frame,
-    select_mapping_frame,
 )
 
 __all__ = [
@@ -215,7 +219,7 @@ class EggNOGDatabase:
             shape: (1, ...)
         """
         snapshot = copy.copy(self)
-        return register_deferred_frame_source(
+        return register_materialized_source(
             schema=dict.fromkeys(
                 ["cog_category", "cog_class", "cog_name"],
                 pl.String,
@@ -274,8 +278,6 @@ class EggnogSelection:
         default="eggnog_protein",
         init=False,
     )
-    _df_mapping: pl.DataFrame | None = field(default=None, repr=False)
-    _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
 
     @property
     def is_grouped(self) -> bool:
@@ -310,41 +312,16 @@ class EggnogSelection:
             "cog_class",
             "cog_name",
         ]
-        return register_deferred_frame_source(
-            schema=dict.fromkeys(columns, pl.String),
-            frame=snapshot._eager_mappings,
+        schema = dict.fromkeys(columns, pl.String)
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda request: _iter_mapping_batches(
+                snapshot,
+                schema=schema,
+                request=request,
+            ),
+            is_pure=True,
         )
-
-    def _eager_mappings(self) -> pl.DataFrame:
-        """Extract mapping rows for the normalized selection.
-
-        Returns:
-            A frame prefixed by `input_id` and `input_namespace`; grouped selections
-            additionally begin with `group_id`. Many-to-many annotations remain
-            expanded.
-
-        Examples:
-            Extract the normalized input alongside its COG categories:
-
-            >>> db = EggNOGDatabase.from_sqlite(
-            ...     "fixtures/eggnog/eggnog.db"
-            ... )
-            >>> selection = db.select_ids(["9606.ENSP1"])
-            >>> selection.mappings().select(
-            ...     "input_id", "cog_category"
-            ... ).collect().rows()
-            [('9606.ENSP1', 'E'), ('9606.ENSP1', 'G'), ('9606.ENSP1', 'S')]
-        """
-        if self._df_mapping is None:
-            self._df_mapping = select_mapping_frame(
-                file_eggnog_db=self.dataset.snapshot.file_eggnog_db,
-                dir_tmp=self.dataset.snapshot.dir_tmp,
-                df_input_ids=self._df_input_ids,
-                df_group_membership=self._df_group_membership,
-                namespace=self.namespace,
-                df_cog_fun=self.dataset._read_cog_fun(),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-            )
-        return self._df_mapping
 
     def unmatched_ids(self) -> pl.LazyFrame:
         """Return selected IDs absent from the eggNOG mapping lazily.
@@ -359,35 +336,77 @@ class EggnogSelection:
             if self._df_group_membership is not None
             else ["input_id"]
         )
-        return register_deferred_frame_source(
+        return register_replayable_source(
             schema=dict.fromkeys(columns, pl.String),
-            frame=snapshot._eager_unmatched_ids,
+            batches=lambda request: _iter_unmatched_batches(
+                snapshot,
+                request=request,
+            ),
         )
 
-    def _eager_unmatched_ids(self) -> pl.DataFrame:
-        """Extract normalized input IDs with no eggNOG mapping row.
 
-        Returns:
-            `input_id` for a single selection, or `group_id, input_id` for a
-            grouped selection.
+def _iter_mapping_batches(
+    selection: EggnogSelection,
+    *,
+    schema: SchemaDict,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    requested = (
+        None
+        if request.columns is None
+        else [name for name in request.columns if name in schema]
+    )
+    frames = iter_selected_mapping_frames(
+        file_eggnog_db=selection.dataset.snapshot.file_eggnog_db,
+        dir_tmp=selection.dataset.snapshot.dir_tmp,
+        df_input_ids=selection._df_input_ids,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        df_group_membership=selection._df_group_membership,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        namespace=selection.namespace,
+        df_cog_fun=selection.dataset._read_cog_fun(),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    )
+    for frame in frames:
+        if requested:
+            frame = frame.select(requested)
+        yield frame
 
-        Examples:
-            Report an identifier absent from the local snapshot:
 
-            >>> db = EggNOGDatabase.from_sqlite(
-            ...     "fixtures/eggnog/eggnog.db"
-            ... )
-            >>> selection = db.select_ids(["9606.MISSING"])
-            >>> selection.unmatched_ids().collect().to_dicts()
-            [{'input_id': '9606.MISSING'}]
-        """
-        if self._df_unmapped is None:
-            self._df_unmapped = extract_unmatched_ids_frame(
-                self._df_input_ids,
-                self._eager_mappings(),
-                df_group_membership=self._df_group_membership,
-            )
-        return self._df_unmapped
+def _iter_unmatched_batches(
+    selection: EggnogSelection,
+    *,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    schema: SchemaDict = {
+        "input_id": pl.String,
+    }
+    if selection._df_group_membership is not None:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        schema = {"group_id": pl.String, **schema}
+    mapped_ids: set[str] = set()
+    for frame in iter_selected_mapping_frames(
+        file_eggnog_db=selection.dataset.snapshot.file_eggnog_db,
+        dir_tmp=selection.dataset.snapshot.dir_tmp,
+        df_input_ids=selection._df_input_ids,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        df_group_membership=selection._df_group_membership,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        namespace=selection.namespace,
+        df_cog_fun=selection.dataset._read_cog_fun(),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    ):
+        mapped_ids.update(frame.get_column("input_id").cast(pl.String).to_list())
+    input_rows = (
+        selection._df_group_membership  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        if selection._df_group_membership is not None  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        else selection._df_input_ids  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    )
+    frame = input_rows.filter(~pl.col("input_id").is_in(mapped_ids)).select(
+        list(schema)
+    )
+    requested = (
+        None
+        if request.columns is None
+        else [name for name in request.columns if name in schema]
+    )
+    if requested:
+        frame = frame.select(requested)
+    for offset in range(0, frame.height, request.effective_batch_size):
+        yield frame.slice(offset, request.effective_batch_size)
 
 
 def _validate_file(

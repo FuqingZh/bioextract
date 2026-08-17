@@ -9,9 +9,10 @@ from typing import Any
 
 import duckdb
 import polars as pl
+from polars._typing import SchemaDict
 
 from bioextract._lazy import (
-    register_deferred_frame_source,
+    _RelationScanRequest,  # pyright: ignore[reportPrivateUsage]  # typed source boundary
     register_replayable_source,
 )
 from bioextract._publication import (
@@ -53,12 +54,11 @@ from .constant import (
 from .util import (
     build_mapping_frame,
     extract_mapping_frame,
-    extract_unmatched_ids_frame,
+    iter_mapping_frames,
     iter_protein2ipr_records,
     read_interpro_xml_frames,
     read_mapping_frame,
     scan_mapping_frame,
-    select_mapping_frame,
     validate_mapping_xml_relationships,
 )
 
@@ -96,7 +96,6 @@ class InterProDatabase:
     """
 
     snapshot: _InterProSnapshot
-    _df_mapping: pl.DataFrame | None = field(default=None, init=False, repr=False)
     _frames_xml: dict[str, pl.DataFrame] | None = field(
         default=None, init=False, repr=False
     )
@@ -309,29 +308,21 @@ class InterProDatabase:
             [('P12345', 'PF00051', 10, 80), ('P12345', 'SM00130', 12, 76)]
         """
         snapshot = copy.copy(self)
-        return register_deferred_frame_source(
+        if snapshot._publication_path is not None:
+            return register_replayable_source(
+                schema=SCHEMA_MAPPING,
+                batches=lambda request: _iter_publication_mapping_batches(
+                    snapshot,
+                    request=request,
+                ),
+            )
+        return register_replayable_source(
             schema=SCHEMA_MAPPING,
-            frame=lambda: snapshot._eager_mappings(),
+            batches=lambda request: _iter_source_mapping_batches(
+                snapshot,
+                request=request,
+            ),
         )
-
-    def _eager_mappings(self) -> pl.DataFrame:
-        if self._df_mapping is None:
-            if self._publication_path is not None:
-                with self.connect() as connection:
-                    self._df_mapping = (
-                        pl.read_database(  # pyright: ignore[reportUnknownMemberType]  # Polars-DuckDB boundary
-                            "SELECT * FROM mapping", connection
-                        )
-                        .unique()
-                        .sort(COLS_MAPPING)
-                    )
-            else:
-                self._df_mapping = read_mapping_frame(
-                    self._require_mapping_source(action="read mappings"),
-                    df_interpro_entry=self._xml_frame("entry"),
-                    df_interpro_member=self._xml_frame("member"),
-                )
-        return self._df_mapping
 
     def pfam_annotations(self) -> pl.LazyFrame:
         """Return public UniProt-to-Pfam annotations with InterPro trace.
@@ -357,9 +348,9 @@ class InterProDatabase:
             )
         return register_replayable_source(
             schema=SCHEMA_PFAM_ANNOTATION,
-            batches=lambda batch_size: _iter_database_pfam_batches(
+            batches=lambda request: _iter_database_pfam_batches(
                 self,
-                batch_size=batch_size,
+                request=request,
             ),
         )
 
@@ -600,8 +591,6 @@ class InterProSelection:
     _df_groups: pl.DataFrame | None = field(repr=False)
     _df_group_membership: pl.DataFrame | None = field(repr=False)
     namespace: InterProNamespace = field(default="uniprot", init=False)
-    _df_mapping: pl.DataFrame | None = field(default=None, repr=False)
-    _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
 
     @property
     def is_grouped(self) -> bool:
@@ -647,9 +636,9 @@ class InterProSelection:
         snapshot.dataset = copy.copy(self.dataset)
         return register_replayable_source(
             schema=schema,
-            batches=lambda batch_size: _iter_selection_pfam_batches(
+            batches=lambda request: _iter_selection_pfam_batches(
                 snapshot,
-                batch_size=batch_size,
+                request=request,
             ),
         )
 
@@ -681,66 +670,23 @@ class InterProSelection:
         }
         if self.is_grouped:
             schema = {"group_id": pl.String, **schema}
-        return register_deferred_frame_source(
+        if snapshot.dataset._publication_path is not None:  # pyright: ignore[reportPrivateUsage]
+            return register_replayable_source(
+                schema=schema,
+                batches=lambda request: _iter_selection_mapping_batches(
+                    snapshot,
+                    schema=schema,
+                    request=request,
+                ),
+            )
+        return register_replayable_source(
             schema=schema,
-            frame=lambda: snapshot._eager_mapping(),
+            batches=lambda request: _iter_selection_mapping_batches(
+                snapshot,
+                schema=schema,
+                request=request,
+            ),
         )
-
-    def _eager_mapping(self) -> pl.DataFrame:
-        if self._df_mapping is None:
-            if self.dataset._publication_path is not None:  # pyright: ignore[reportPrivateUsage]
-                selected_mapping = pl.DataFrame(schema=SCHEMA_MAPPING)
-                if not self._df_input_ids.is_empty():
-                    with self.dataset.connect() as connection:
-                        connection.execute(
-                            "CREATE TEMP TABLE _interpro_input_id("
-                            "input_id VARCHAR PRIMARY KEY)"
-                        )
-                        connection.executemany(
-                            "INSERT INTO _interpro_input_id VALUES (?)",
-                            self._df_input_ids.iter_rows(),
-                        )
-                        rows = connection.execute(
-                            "SELECT mapping.* FROM mapping INNER JOIN "
-                            "_interpro_input_id AS input "
-                            'ON mapping.uniprot_id=input."input_id"'
-                        ).fetchall()
-                    selected_mapping = (
-                        (
-                            pl.DataFrame(rows, schema=SCHEMA_MAPPING, orient="row")
-                            if rows
-                            else selected_mapping
-                        )
-                        .unique()
-                        .sort(COLS_MAPPING)
-                    )
-                selected = extract_mapping_frame(
-                    selected_mapping, self._df_input_ids, namespace=self.namespace
-                )
-                if self._df_group_membership is None:
-                    self._df_mapping = selected
-                else:
-                    columns = ["group_id", *selected.columns]
-                    self._df_mapping = (
-                        self._df_group_membership.join(
-                            selected, on="input_id", how="inner"
-                        )
-                        .select(columns)
-                        .unique()
-                        .sort(columns)
-                    )
-            else:
-                self._df_mapping = select_mapping_frame(
-                    self.dataset._require_mapping_source(  # pyright: ignore[reportPrivateUsage]
-                        action="select mappings"
-                    ),
-                    self._df_input_ids,
-                    df_group_membership=self._df_group_membership,
-                    namespace=self.namespace,
-                    df_interpro_entry=self.dataset._xml_frame("entry"),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-                    df_interpro_member=self.dataset._xml_frame("member"),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-                )
-        return self._df_mapping
 
     def unmatched_ids(self) -> pl.LazyFrame:
         """Return selected UniProt IDs absent from the mapping lazily.
@@ -755,35 +701,13 @@ class InterProSelection:
         schema = {"input_id": pl.String}
         if self.is_grouped:
             schema = {"group_id": pl.String, **schema}
-        return register_deferred_frame_source(
+        return register_replayable_source(
             schema=schema,
-            frame=lambda: snapshot._eager_unmatched_ids(),
+            batches=lambda request: _iter_selection_unmatched_batches(
+                snapshot,
+                request=request,
+            ),
         )
-
-    def _eager_unmatched_ids(self) -> pl.DataFrame:
-        """Materialize normalized input IDs with no InterPro mapping row.
-
-        Returns:
-            `input_id` for a single selection, or `group_id, input_id` for a
-            grouped selection.
-
-        Examples:
-            Report an accession absent from the local snapshot:
-
-            >>> db = InterProDatabase.from_mapping_files(
-            ...     protein_to_interpro="fixtures/interpro/108.0/raw/protein2ipr.dat.gz"
-            ... )
-            >>> selection = db.select_ids(["MISSING"])
-            >>> selection.unmatched_ids().collect().to_dicts()
-            [{'input_id': 'MISSING'}]
-        """
-        if self._df_unmapped is None:
-            self._df_unmapped = extract_unmatched_ids_frame(
-                self._df_input_ids,
-                self._eager_mapping(),
-                df_group_membership=self._df_group_membership,
-            )
-        return self._df_unmapped
 
 
 def _build_pfam_annotation_frame(
@@ -816,8 +740,10 @@ def _build_pfam_annotation_frame(
 def _iter_database_pfam_batches(
     database: InterProDatabase,
     *,
-    batch_size: int,
+    request: _RelationScanRequest,
 ) -> Iterator[pl.DataFrame]:
+    batch_size = request.effective_batch_size
+    requested = _requested_columns(request.columns, SCHEMA_PFAM_ANNOTATION)
     if database._publication_path is None:  # pyright: ignore[reportPrivateUsage]
         mapping_path = database._require_mapping_source(  # pyright: ignore[reportPrivateUsage]
             action="read Pfam annotations"
@@ -833,6 +759,8 @@ def _iter_database_pfam_batches(
         )
         _version, xml_mapping = _read_pfam_xml_mapping(xml_path)
         frame = _build_pfam_annotation_frame(mapping, xml_mapping)
+        if requested is not None:
+            frame = frame.select(requested)
         for offset in range(0, frame.height, batch_size):
             yield frame.slice(offset, batch_size)
         return
@@ -855,12 +783,15 @@ def _iter_database_pfam_batches(
             WHERE upper(mapping.member_db) = 'PFAM'
             ORDER BY uniprot_id, pfam_id, interpro_id
         """
-        reader = _interpro_arrow_reader(connection.execute(query), batch_size)
+        reader = _interpro_arrow_reader(
+            connection.execute(_project_query(query, requested)),
+            batch_size,
+        )
         try:
             for record_batch in reader:
                 frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
                 yield frame.cast(  # type: ignore[reportArgumentType]
-                    SCHEMA_PFAM_ANNOTATION,  # type: ignore[reportArgumentType]
+                    {name: SCHEMA_PFAM_ANNOTATION[name] for name in frame.columns},  # type: ignore[reportArgumentType]
                     strict=False,
                 )
         finally:
@@ -871,11 +802,236 @@ def _iter_database_pfam_batches(
         connection.close()
 
 
+def _iter_publication_mapping_batches(
+    database: InterProDatabase,
+    *,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    requested = _requested_columns(request.columns, SCHEMA_MAPPING)
+    projection = ", ".join(f'"{name}"' for name in (requested or list(SCHEMA_MAPPING)))
+    connection = database.connect()
+    reader: Any = None
+    try:
+        result = connection.execute(
+            f"SELECT DISTINCT {projection} FROM mapping ORDER BY "
+            + ", ".join(f'"{name}"' for name in COLS_MAPPING)
+        )
+        reader = _interpro_arrow_reader(result, request.effective_batch_size)
+        for record_batch in reader:
+            frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+            yield frame.cast(  # type: ignore[reportArgumentType]
+                {name: SCHEMA_MAPPING[name] for name in frame.columns},
+                strict=False,
+            )
+    finally:
+        if reader is not None:
+            close = getattr(reader, "close", None)
+            if close is not None:
+                close()
+        connection.close()
+
+
+def _iter_source_mapping_batches(
+    database: InterProDatabase,
+    *,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    mapping_path = database._require_mapping_source(  # pyright: ignore[reportPrivateUsage]  # paired source boundary
+        action="read mappings"
+    )
+    xml_frames = read_interpro_xml_frames(database.snapshot.file_interpro_xml)
+    requested = _requested_columns(request.columns, SCHEMA_MAPPING)
+    for frame in iter_mapping_frames(
+        mapping_path,
+        df_interpro_entry=xml_frames["entry"],
+        df_interpro_member=xml_frames["member"],
+        _batch_size=request.effective_batch_size,
+    ):
+        if requested:
+            frame = frame.select(requested)
+        yield frame.cast(
+            {name: SCHEMA_MAPPING[name] for name in frame.columns},
+            strict=False,
+        )
+
+
+def _iter_selection_mapping_batches(
+    selection: InterProSelection,
+    *,
+    schema: SchemaDict,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    input_ids = selection._df_input_ids.get_column("input_id").to_list()  # pyright: ignore[reportPrivateUsage]
+    if not input_ids:
+        return
+    database = selection.dataset
+    requested = _requested_columns(request.columns, schema)
+    if database._publication_path is None:  # pyright: ignore[reportPrivateUsage]  # paired source boundary
+        mapping_path = database._require_mapping_source(  # pyright: ignore[reportPrivateUsage]  # paired source boundary
+            action="select mappings"
+        )
+        xml_frames = read_interpro_xml_frames(database.snapshot.file_interpro_xml)
+        input_id_set = {str(value) for value in input_ids}
+        for mapping in iter_mapping_frames(
+            mapping_path,
+            df_interpro_entry=xml_frames["entry"],
+            df_interpro_member=xml_frames["member"],
+            input_ids=input_id_set,
+            _batch_size=request.effective_batch_size,
+        ):
+            frame = extract_mapping_frame(
+                mapping,
+                selection._df_input_ids,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+                namespace=selection.namespace,
+            )
+            if selection._df_group_membership is not None:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+                frame = (
+                    selection._df_group_membership.join(  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+                        frame,
+                        on="input_id",
+                        how="inner",
+                    )
+                    .select(list(schema))
+                    .unique()
+                    .sort(list(schema))
+                )
+            if requested:
+                frame = frame.select(requested)
+            yield frame.cast(
+                {name: schema[name] for name in frame.columns},
+                strict=False,
+            )
+        return
+    connection = database.connect()
+    reader: Any = None
+    try:
+        connection.execute(
+            "CREATE TEMP TABLE _interpro_input_id(input_id VARCHAR PRIMARY KEY)"
+        )
+        connection.executemany(
+            "INSERT INTO _interpro_input_id VALUES (?)",
+            [(str(value),) for value in input_ids],
+        )
+        result = connection.execute(
+            """
+            SELECT
+                input.input_id AS input_id,
+                'uniprot' AS input_namespace,
+                mapping.*
+            FROM mapping
+            JOIN _interpro_input_id AS input
+              ON input.input_id = mapping.uniprot_id
+            ORDER BY input_id, mapping.uniprot_id, mapping.interpro_id,
+                     mapping.member_db_id, mapping.start, mapping.end
+            """
+        )
+        reader = _interpro_arrow_reader(result, request.effective_batch_size)
+        for record_batch in reader:
+            frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+            frame = frame.cast(  # type: ignore[reportArgumentType]
+                {name: schema[name] for name in frame.columns if name in schema},
+                strict=False,
+            )
+            if selection._df_group_membership is not None:  # pyright: ignore[reportPrivateUsage]
+                frame = (
+                    selection._df_group_membership.join(  # pyright: ignore[reportPrivateUsage]
+                        frame,
+                        on="input_id",
+                        how="inner",
+                    )
+                    .select(list(schema))
+                    .unique()
+                    .sort(list(schema))
+                )
+            if requested is not None:
+                frame = frame.select(requested)
+            yield frame
+    finally:
+        if reader is not None:
+            close = getattr(reader, "close", None)
+            if close is not None:
+                close()
+        connection.close()
+
+
+def _iter_selection_unmatched_batches(
+    selection: InterProSelection,
+    *,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    """Yield the compact anti-join for a selected InterPro input set."""
+    input_frame = selection._df_input_ids  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    input_ids = input_frame.get_column("input_id").to_list()
+    if not input_ids:
+        return
+
+    database = selection.dataset
+    mapped_ids: set[str] = set()
+    if database._publication_path is None:  # pyright: ignore[reportPrivateUsage]  # paired source boundary
+        mapping_path = database._require_mapping_source(  # pyright: ignore[reportPrivateUsage]  # paired source boundary
+            action="select unmatched IDs"
+        )
+        xml_frames = read_interpro_xml_frames(database.snapshot.file_interpro_xml)
+        input_id_set = {str(value) for value in input_ids}
+        for mapping in iter_mapping_frames(
+            mapping_path,
+            df_interpro_entry=xml_frames["entry"],
+            df_interpro_member=xml_frames["member"],
+            input_ids=input_id_set,
+            _batch_size=request.effective_batch_size,
+        ):
+            if mapping.height:
+                mapped_ids.update(mapping.get_column("uniprot_id").unique().to_list())
+    else:
+        connection = database.connect()
+        try:
+            connection.execute(
+                "CREATE TEMP TABLE _interpro_input_id(input_id VARCHAR PRIMARY KEY)"
+            )
+            connection.executemany(
+                "INSERT INTO _interpro_input_id VALUES (?)",
+                [(str(value),) for value in input_ids],
+            )
+            rows = connection.execute(
+                "SELECT DISTINCT mapping.uniprot_id FROM mapping "
+                "JOIN _interpro_input_id AS input "
+                "ON input.input_id = mapping.uniprot_id"
+            ).fetchall()
+            mapped_ids.update(str(row[0]) for row in rows)
+        finally:
+            connection.close()
+
+    unmatched = input_frame.filter(~pl.col("input_id").is_in(mapped_ids)).select(
+        "input_id"
+    )
+    if selection._df_group_membership is not None:  # pyright: ignore[reportPrivateUsage]
+        unmatched = (
+            selection._df_group_membership.join(  # pyright: ignore[reportPrivateUsage]
+                unmatched,
+                on="input_id",
+                how="inner",
+            )
+            .select("group_id", "input_id")
+            .sort("group_id", "input_id")
+        )
+    schema: SchemaDict = (
+        {"group_id": pl.String, **SCHEMA_UNMAPPED}
+        if selection._df_group_membership is not None  # pyright: ignore[reportPrivateUsage]
+        else SCHEMA_UNMAPPED
+    )
+    requested = _requested_columns(request.columns, schema)
+    if requested:
+        unmatched = unmatched.select(requested)
+    for offset in range(0, unmatched.height, request.effective_batch_size):
+        yield unmatched.slice(offset, request.effective_batch_size)
+
+
 def _iter_selection_pfam_batches(
     selection: InterProSelection,
     *,
-    batch_size: int,
+    request: _RelationScanRequest,
 ) -> Iterator[pl.DataFrame]:
+    batch_size = request.effective_batch_size
     database = selection.dataset
     input_ids = set(selection._df_input_ids.get_column("input_id").to_list())  # pyright: ignore[reportPrivateUsage]
     if database._publication_path is None:  # pyright: ignore[reportPrivateUsage]
@@ -934,6 +1090,7 @@ def _iter_selection_pfam_batches(
                         frame,
                         selection,
                         batch_size=batch_size,
+                        requested_columns=request.columns,
                     )
             finally:
                 close = getattr(reader, "close", None)
@@ -943,7 +1100,12 @@ def _iter_selection_pfam_batches(
             connection.close()
         return
 
-    yield from _add_selection_lineage(pfam, selection, batch_size=batch_size)
+    yield from _add_selection_lineage(
+        pfam,
+        selection,
+        batch_size=batch_size,
+        requested_columns=request.columns,
+    )
 
 
 def _add_selection_lineage(
@@ -951,6 +1113,7 @@ def _add_selection_lineage(
     selection: InterProSelection,
     *,
     batch_size: int,
+    requested_columns: tuple[str, ...] | None,
 ) -> Iterator[pl.DataFrame]:
     # Keep both caller lineage and the canonical UniProt ID. Polars normally
     # coalesces join keys, so use a duplicate right-hand key to avoid dropping
@@ -976,8 +1139,37 @@ def _add_selection_lineage(
             .unique()
             .sort(list(SCHEMA_GROUP_PFAM_ANNOTATION))
         )
+    schema = (
+        SCHEMA_GROUP_PFAM_ANNOTATION
+        if selection._df_group_membership is not None  # pyright: ignore[reportPrivateUsage]
+        else {
+            "input_id": pl.String,
+            "input_namespace": pl.String,
+            **SCHEMA_PFAM_ANNOTATION,
+        }
+    )
+    requested = _requested_columns(requested_columns, schema)
+    if requested is not None:
+        frame = frame.select(requested)
     for offset in range(0, frame.height, batch_size):
         yield frame.slice(offset, batch_size)
+
+
+def _requested_columns(
+    columns: tuple[str, ...] | None,
+    schema: SchemaDict,
+) -> list[str] | None:
+    if columns is None:
+        return None
+    selected = [name for name in columns if name in schema]
+    return selected or None
+
+
+def _project_query(query: str, columns: list[str] | None) -> str:
+    if not columns:
+        return query
+    projection = ", ".join(f'"{name}"' for name in columns)
+    return f"SELECT {projection} FROM ({query}) AS _bioextract_relation"
 
 
 def _interpro_arrow_reader(result: Any, batch_size: int) -> Any:

@@ -3,14 +3,18 @@ from __future__ import annotations
 import copy
 import re
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from threading import Lock
 from typing import Any
 
 import duckdb
 import polars as pl
 from polars._typing import SchemaDict
 
-from bioextract._lazy import register_replayable_source
+from bioextract._lazy import (
+    _RelationScanRequest,  # pyright: ignore[reportPrivateUsage]  # typed source boundary
+    register_replayable_source,
+)
 from bioextract._shared import create_group_input_frames
 from bioextract.errors import CapabilityError, IntegrityError
 
@@ -31,21 +35,28 @@ from .source import MappingSnapshot, resolve_organism_work, source_capabilities
 _UNIPROT_PIPE = re.compile(r"^[^|]+\|([^|]+)\|")
 
 
+@dataclass(slots=True)
+class _KeggMatchState:
+    lock: Lock = field(default_factory=Lock)
+    frame: pl.DataFrame | None = None
+
+
 def relation(snapshot: MappingSnapshot, name: str) -> pl.LazyFrame:
     schema = _relation_schema(name)
     frozen = copy.copy(snapshot)
     if frozen.mode == "publication":
         return register_replayable_source(
             schema=schema,
-            batches=lambda batch_size: _iter_publication(
-                frozen, name=name, schema=schema, batch_size=batch_size
+            batches=lambda request: _iter_publication(
+                frozen,
+                name=name,
+                schema=schema,
+                request=request,
             ),
         )
     return register_replayable_source(
         schema=schema,
-        batches=lambda batch_size: _iter_source(
-            frozen, name=name, batch_size=batch_size
-        ),
+        batches=lambda request: _iter_source(frozen, name=name, request=request),
     )
 
 
@@ -108,6 +119,12 @@ class KeggSelection:
     input_ids: pl.DataFrame
     namespace: KEGGNamespace
     group_membership: pl.DataFrame | None = None
+    _match_state: _KeggMatchState = field(
+        default_factory=_KeggMatchState,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     @classmethod
     def _from_ids(
@@ -174,6 +191,28 @@ class KeggSelection:
         }.get(self.namespace)
         if capability is not None:
             _require_capabilities(self.snapshot, "match selected IDs", capability)
+        if self.snapshot.mode == "publication":
+            snapshot = copy.copy(self)
+            columns = ["input_id", "input_namespace", "organism_code", "kegg_gene_id"]
+            if self.grouped:
+                columns.insert(0, "group_id")
+            schema: SchemaDict = {
+                column: (
+                    SCHEMA_GROUP_INPUT_IDS["group_id"]
+                    if column == "group_id"
+                    else SCHEMA_MATCH[column]
+                )
+                for column in columns
+            }
+            return register_replayable_source(
+                schema=schema,
+                batches=lambda request: _iter_publication_matches(
+                    snapshot,
+                    schema=schema,
+                    request=request,
+                ),
+                is_pure=True,
+            )
         genes = relation(self.snapshot, "gene_annotation")
         if self.namespace == "kegg_gene":
             lookup = genes.select("organism_code", "kegg_gene_id").unique()
@@ -277,9 +316,103 @@ class KeggSelection:
         ).select(*columns[:2], "inputs", *columns[2:])
 
 
-def _iter_source(
-    snapshot: MappingSnapshot, *, name: str, batch_size: int
+def _iter_publication_matches(
+    selection: KeggSelection,
+    *,
+    schema: SchemaDict,
+    request: _RelationScanRequest,
 ) -> Iterator[pl.DataFrame]:
+    with selection._match_state.lock:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        if selection._match_state.frame is None:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+            selection._match_state.frame = _query_publication_matches(selection)  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        frame = selection._match_state.frame.clone()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    requested = _select_requested(frame, request.columns)
+    yield from _slices(requested, request.effective_batch_size)
+
+
+def _query_publication_matches(selection: KeggSelection) -> pl.DataFrame:
+    path = selection.snapshot.publication_path
+    if path is None:
+        raise IntegrityError("KEGG mapping publication path is missing")
+    input_ids = selection.input_ids.get_column("input_id").to_list()
+    schema = SCHEMA_MATCH
+    if not input_ids:
+        frame = pl.DataFrame(schema=schema)
+    else:
+        connection = duckdb.connect(str(path), read_only=True)
+        try:
+            connection.execute(
+                "CREATE TEMP TABLE _selected_input(input_id VARCHAR PRIMARY KEY)"
+            )
+            connection.executemany(
+                "INSERT INTO _selected_input VALUES (?)",
+                [(str(value),) for value in input_ids],
+            )
+            parameters: list[str] = []
+            scope = ""
+            if selection.snapshot.organism_scope is not None:
+                scope = (
+                    " WHERE gene.organism_code IN ("
+                    + ",".join("?" for _ in selection.snapshot.organism_scope)
+                    + ")"
+                )
+                parameters.extend(selection.snapshot.organism_scope)
+            if selection.namespace == "kegg_gene":
+                query = (
+                    """
+                    SELECT DISTINCT
+                        selected.input_id AS input_id,
+                        'kegg_gene' AS input_namespace,
+                        gene.organism_code,
+                        gene.kegg_gene_id
+                    FROM _selected_input AS selected
+                    JOIN gene_annotation AS gene
+                      ON gene.kegg_gene_id = selected.input_id
+                """
+                    + scope
+                )
+            else:
+                list_column, value_column = {
+                    "uniprot": ("uniprot_mappings", "uniprot_id"),
+                    "ncbi_gene": ("ncbi_gene_mappings", "ncbi_gene_id"),
+                }[selection.namespace]
+                query = (
+                    f"""
+                    SELECT DISTINCT
+                        selected.input_id AS input_id,
+                        '{selection.namespace}' AS input_namespace,
+                        gene.organism_code,
+                        gene.kegg_gene_id
+                    FROM gene_annotation AS gene
+                    CROSS JOIN UNNEST(gene."{list_column}") AS mapping(item)
+                    JOIN _selected_input AS selected
+                      ON mapping.item."{value_column}" = selected.input_id
+                """
+                    + scope
+                )
+            rows = connection.execute(query, parameters).fetchall()
+            frame = pl.DataFrame(rows, schema=schema, orient="row")
+        finally:
+            connection.close()
+    if selection.group_membership is None:
+        return frame.sort(list(schema))
+    return (
+        selection.group_membership.lazy()
+        .join(frame.lazy(), on="input_id", how="inner")
+        .select("group_id", *schema)
+        .unique()
+        .collect()
+        .sort(["group_id", *schema])
+    )
+
+
+def _iter_source(
+    snapshot: MappingSnapshot,
+    *,
+    name: str,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    batch_size = request.effective_batch_size
     metadata, _, _ = parse_organism_list(snapshot.organism_list)
     work = resolve_organism_work(snapshot, validate_role_files=name == "organism")
     if name == "organism":
@@ -296,7 +429,8 @@ def _iter_source(
             }
             for code, _ in work
         ]
-        yield from _slices(pl.DataFrame(rows, schema=SCHEMA_ORGANISM), batch_size)
+        frame = pl.DataFrame(rows, schema=SCHEMA_ORGANISM)
+        yield from _slices(_select_requested(frame, request.columns), batch_size)
         return
     if name == "gene_annotation":
         for code, roles in work:
@@ -306,7 +440,9 @@ def _iter_source(
                 organism_metadata=metadata.get(code),
                 organism_list_available=snapshot.organism_list is not None,
             )
-            yield from _slices(aggregate.genes, batch_size)
+            yield from _slices(
+                _select_requested(aggregate.genes, request.columns), batch_size
+            )
         return
     if name == "ko_annotation":
         ko_ids: set[str] = set()
@@ -319,7 +455,7 @@ def _iter_source(
             )
             ko_ids.update(aggregate.ko_ids)
         frame, _, _ = aggregate_kos(ko_ids, snapshot.ko_pathway)
-        yield from _slices(frame, batch_size)
+        yield from _slices(_select_requested(frame, request.columns), batch_size)
         return
     raise AssertionError(name)
 
@@ -329,8 +465,9 @@ def _iter_publication(
     *,
     name: str,
     schema: SchemaDict,
-    batch_size: int,
+    request: _RelationScanRequest,
 ) -> Iterator[pl.DataFrame]:
+    batch_size = request.effective_batch_size
     path = snapshot.publication_path
     if path is None:
         raise IntegrityError("KEGG mapping publication path is missing")
@@ -350,13 +487,25 @@ def _iter_publication(
             placeholders = ", ".join("?" for _ in snapshot.organism_scope)
             where = f" WHERE organism_code IN ({placeholders})"
             parameters.extend(snapshot.organism_scope)
-        result = connection.execute(f'SELECT * FROM "{name}"{where}', parameters)
+        columns = [
+            column for column in (request.columns or tuple(schema)) if column in schema
+        ]
+        if not columns:
+            columns = list(schema)
+        projection = ", ".join(f'"{column}"' for column in columns)
+        result = connection.execute(
+            f'SELECT {projection} FROM "{name}"{where}',
+            parameters,
+        )
         reader = _arrow_reader(result, batch_size)
         for batch in reader:
             frame = pl.from_arrow(batch)  # pyright: ignore[reportUnknownMemberType]
             if not isinstance(frame, pl.DataFrame):
                 raise IntegrityError("KEGG mapping query returned a non-tabular batch")
-            yield frame.cast(pl.Schema(schema))
+            yield frame.cast(  # type: ignore[reportArgumentType]
+                {column: schema[column] for column in frame.columns},
+                strict=False,
+            )
     finally:
         connection.close()
 
@@ -378,6 +527,16 @@ def _arrow_reader(result: Any, batch_size: int) -> Any:
 def _slices(frame: pl.DataFrame, batch_size: int) -> Iterator[pl.DataFrame]:
     for offset in range(0, frame.height, batch_size):
         yield frame.slice(offset, batch_size)
+
+
+def _select_requested(
+    frame: pl.DataFrame,
+    columns: tuple[str, ...] | None,
+) -> pl.DataFrame:
+    if columns is None:
+        return frame
+    selected = [column for column in columns if column in frame.columns]
+    return frame.select(selected) if selected else frame
 
 
 def _require_capabilities(

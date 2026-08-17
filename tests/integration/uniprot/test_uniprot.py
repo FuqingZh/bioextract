@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+from collections.abc import Iterable
 from pathlib import Path
 
 import duckdb
@@ -9,6 +10,39 @@ import pytest
 
 import bioextract.uniprot._query as uniprot_query
 from bioextract.uniprot import UniProtDatabase
+
+
+def _knowledgebase_selection(
+    database: UniProtDatabase,
+    ids: Iterable[str],
+    *,
+    namespace: str,
+    taxon_ids: Iterable[str | int] | None = None,
+) -> uniprot_query.UniProtSelection:
+    selection = database.select_ids(
+        ids,
+        namespace=namespace,
+        taxon_ids=taxon_ids,
+    )
+    if not isinstance(selection, uniprot_query.UniProtSelection):
+        raise AssertionError("expected a UniProtKB selection")
+    return selection
+
+
+def _mapping_selection(
+    database: UniProtDatabase,
+    ids: Iterable[str],
+    *,
+    taxon_ids: Iterable[str | int] | None = None,
+) -> uniprot_query.UniProtMappingSelection:
+    selection = database.select_ids(
+        ids,
+        namespace="uniprot",
+        taxon_ids=taxon_ids,
+    )
+    if not isinstance(selection, uniprot_query.UniProtMappingSelection):
+        raise AssertionError("expected a UniProt idmapping selection")
+    return selection
 
 
 def _write_dat(path: Path) -> Path:
@@ -141,6 +175,61 @@ def test_idmapping_publication_scan_is_replayable_and_taxon_scoped(
     assert database.scan_mapping(taxon_ids=["10090"]).collect().is_empty()
 
 
+def test_idmapping_selected_access_pushes_ids_and_reports_unmatched(
+    tmp_path: Path,
+) -> None:
+    source = _write_idmapping(tmp_path / "selected.tab.gz")
+    database = UniProtDatabase.from_idmapping(source)
+    selected = _mapping_selection(
+        database,
+        ["P12345", "MISSING"],
+        taxon_ids=["9606"],
+    )
+    assert selected.mappings().select(
+        "input_id", "uniprot_id"
+    ).collect().to_dicts() == [{"input_id": "P12345", "uniprot_id": "P12345"}]
+    assert selected.unmatched_ids().collect().to_dicts() == [
+        {
+            "input_id": "MISSING",
+            "input_namespace": "uniprot",
+            "reason": "not_found",
+        }
+    ]
+
+    publication = tmp_path / "selected.duckdb"
+    database.write_duckdb(publication, taxon_ids=["9606"])
+    reopened = UniProtDatabase.from_duckdb(publication)
+    selected_reopened = _mapping_selection(
+        reopened,
+        ["P12345", "MISSING"],
+        taxon_ids=["9606"],
+    )
+    assert selected_reopened.mappings().select(
+        "input_id", "tax_id"
+    ).collect().to_dicts() == [{"input_id": "P12345", "tax_id": "9606"}]
+
+
+def test_idmapping_selected_access_uses_relation_for_large_input_sets(
+    tmp_path: Path,
+) -> None:
+    source = _write_idmapping(tmp_path / "large-selected.tab.gz")
+    publication = tmp_path / "large-selected.duckdb"
+    database = UniProtDatabase.from_idmapping(source)
+    database.write_duckdb(publication, taxon_ids=["9606"])
+
+    selected_ids = ["P12345", *(f"MISSING-{index}" for index in range(1_000))]
+    selected = _mapping_selection(
+        UniProtDatabase.from_duckdb(publication),
+        selected_ids,
+        taxon_ids=["9606"],
+    )
+
+    assert selected.mappings().select("input_id").collect().to_dicts() == [
+        {"input_id": "P12345"}
+    ]
+    assert selected.unmatched_ids().collect().height == 1_000
+
+
 @pytest.mark.parametrize("compressed", [False, True])
 def test_idmapping_reads_plain_and_gzip(tmp_path: Path, compressed: bool) -> None:
     path = tmp_path / ("mapping.tab.gz" if compressed else "mapping.tab")
@@ -224,7 +313,11 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
     assert result.resource_schema_version == "uniprot-knowledgebase-duckdb-v1"
     database = UniProtDatabase.from_duckdb(path)
     assert database.release_version == "2026_01"
-    matches = database.select_ids(["Q11111", "TEST", "missing"], namespace="uniprot")
+    matches = _knowledgebase_selection(
+        database,
+        ["Q11111", "TEST", "missing"],
+        namespace="uniprot",
+    )
     assert matches.proteins().collect()["primary_accession"].to_list() == ["P12345"]
     assert matches.proteins().collect()["protein_existence"].to_list() == [
         "1: Evidence at protein level"
@@ -234,21 +327,30 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
         "TEST",
         "missing",
     ]
-    assert database.select_ids(["TEST"], namespace="gene_name").gene_names().collect()[
-        "name"
-    ].to_list() == ["TEST", "ALT", "LOC1", "ORF1", "TEST2", "ALT2"]
-    assert database.select_ids(
-        ["P12345"], namespace="uniprot"
+    assert _knowledgebase_selection(
+        database, ["TEST"], namespace="gene_name"
+    ).gene_names().collect()["name"].to_list() == [
+        "TEST",
+        "ALT",
+        "LOC1",
+        "ORF1",
+        "TEST2",
+        "ALT2",
+    ]
+    assert _knowledgebase_selection(
+        database, ["P12345"], namespace="uniprot"
     ).protein_names().collect()["name"].to_list() == [
         "Test protein",
         "First alternative",
         "Second alternative",
     ]
-    assert database.select_ids(["1234"], namespace="gene_id").cross_references(
-        databases=["GeneID"]
-    ).collect()["external_id"].to_list() == ["1234"]
+    assert _knowledgebase_selection(
+        database, ["1234"], namespace="gene_id"
+    ).cross_references(databases=["GeneID"]).collect()["external_id"].to_list() == [
+        "1234"
+    ]
     refseq = (
-        database.select_ids(["NP_000001.1"], namespace="refseq")
+        _knowledgebase_selection(database, ["NP_000001.1"], namespace="refseq")
         .cross_references(databases=["RefSeq"])
         .collect()
     )
@@ -256,7 +358,7 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
         {"external_id": "NP_000001.1", "isoform_id": "P12345-2"}
     ]
     con_server = (
-        database.select_ids(["P12345"], namespace="uniprot")
+        _knowledgebase_selection(database, ["P12345"], namespace="uniprot")
         .cross_references(databases=["ConoServer"])
         .collect()
     )
@@ -268,7 +370,7 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
         }
     ]
     sequences = (
-        database.select_ids(["P12345"], namespace="uniprot")
+        _knowledgebase_selection(database, ["P12345"], namespace="uniprot")
         .sequences(sequence_type="all")
         .collect()
     )
@@ -277,7 +379,7 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
         {"sequence_type": "canonical", "crc64": "81FC3551E879CB1A"},
         {"sequence_type": "isoform", "crc64": None},
     ]
-    selection = database.select_ids(["P12345"], namespace="uniprot")
+    selection = _knowledgebase_selection(database, ["P12345"], namespace="uniprot")
     assert selection.ec_numbers().collect()["ec_number"].to_list() == ["1.2.3.4"]
     assert selection.go_annotations().collect()["go_id"].to_list() == ["GO:0003677"]
     assert selection.comments(comment_types=["FUNCTION"]).collect()[
@@ -304,7 +406,9 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
         "group_id", "input_id"
     ).to_dicts() == [{"group_id": "control", "input_id": "missing"}]
     isoforms_frame = (
-        database.select_ids(["P12345"], namespace="uniprot").isoforms().collect()
+        _knowledgebase_selection(database, ["P12345"], namespace="uniprot")
+        .isoforms()
+        .collect()
     )
     assert isoforms_frame.select(
         "isoform_id", "isoform_order", "sequence_status", "sequence_id"
@@ -338,8 +442,8 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
             "is_main": True,
         },
     ]
-    assert database.select_ids(
-        ["P12345"], namespace="uniprot"
+    assert _knowledgebase_selection(
+        database, ["P12345"], namespace="uniprot"
     ).isoform_variations().collect().select(
         "isoform_id", "variation_id", "variation_order"
     ).to_dicts() == [
@@ -350,15 +454,15 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
         }
     ]
     variation = (
-        database.select_ids(["P12345"], namespace="uniprot")
+        _knowledgebase_selection(database, ["P12345"], namespace="uniprot")
         .sequence_variations()
         .collect()
     )
     assert variation.select("variation_id", "note").to_dicts() == [
         {"variation_id": "VSP_000001", "note": "AA -> GG (in isoform 2)"}
     ]
-    assert database.select_ids(
-        ["P12345"], namespace="uniprot", taxon_ids=["10090"]
+    assert _knowledgebase_selection(
+        database, ["P12345"], namespace="uniprot", taxon_ids=["10090"]
     ).proteins().collect().columns == [
         "input_id",
         "input_namespace",
@@ -372,8 +476,8 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
         "sequence_version",
         "entry_version",
     ]
-    assert database.select_ids(
-        [], namespace="uniprot"
+    assert _knowledgebase_selection(
+        database, [], namespace="uniprot"
     ).accessions().collect().columns == [
         "input_id",
         "input_namespace",
@@ -483,16 +587,16 @@ SQ   SEQUENCE   3 AA;  365 MW;  69CB1DB000000000 CRC64;
     UniProtDatabase.from_knowledgebase(entries=entries).write_duckdb(publication)
     database = UniProtDatabase.from_duckdb(publication)
 
-    assert database.select_ids(
-        ["Q99999"], namespace="uniprot"
+    assert _knowledgebase_selection(
+        database, ["Q99999"], namespace="uniprot"
     ).proteins().collect().select(
         "input_id", "primary_accession", "taxon_id"
     ).to_dicts() == [
         {"input_id": "Q99999", "primary_accession": "P11111", "taxon_id": "9606"},
         {"input_id": "Q99999", "primary_accession": "P22222", "taxon_id": "10090"},
     ]
-    assert database.select_ids(
-        ["Q99999"], namespace="uniprot", taxon_ids=["10090"]
+    assert _knowledgebase_selection(
+        database, ["Q99999"], namespace="uniprot", taxon_ids=["10090"]
     ).proteins().collect()["primary_accession"].to_list() == ["P22222"]
     assert database.select_groups(
         {"demerged": ["Q99999"]}, namespace="uniprot"
@@ -551,7 +655,7 @@ def test_group_selection_resolves_each_identifier_once(
     ]
     expected_ids = ("P12345", "missing")
     assert query_calls
-    assert all(queried == expected_ids for queried in query_calls)
+    assert query_calls == [expected_ids]
 
 
 def test_selection_and_fasta_inputs_reject_empty_values(tmp_path: Path) -> None:
@@ -899,14 +1003,14 @@ SQ   SEQUENCE   3 AA;  365 MW;  69CB1DB000000000 CRC64;
         ]
 
     database = UniProtDatabase.from_duckdb(path)
-    assert database.select_ids(
-        ["P22966-1"], namespace="isoform_id"
+    assert _knowledgebase_selection(
+        database, ["P22966-1"], namespace="isoform_id"
     ).proteins().collect()["primary_accession"].to_list() == ["P16375", "P16376"]
-    assert database.select_ids(
-        ["P16375"], namespace="uniprot"
+    assert _knowledgebase_selection(
+        database, ["P16375"], namespace="uniprot"
     ).isoform_variations().collect()["variation_id"].to_list() == ["VSP_013348"]
     assert (
-        database.select_ids(["P16376"], namespace="uniprot")
+        _knowledgebase_selection(database, ["P16376"], namespace="uniprot")
         .isoform_variations()
         .collect()
         .is_empty()

@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 import warnings
 from collections.abc import Iterable, Iterator
+from contextlib import closing
 from pathlib import Path
 
 import polars as pl
@@ -16,7 +17,7 @@ from bioextract.eggnog import util as eggnog_util
 
 def write_eggnog_fixture(tmp_path: Path) -> dict[str, Path]:
     file_db = tmp_path / "eggnog.db"
-    with sqlite3.connect(file_db) as conn:
+    with closing(sqlite3.connect(file_db)) as conn, conn:
         conn.execute("create table prots (name text primary key, ogs text)")
         conn.execute(
             "create table og ("

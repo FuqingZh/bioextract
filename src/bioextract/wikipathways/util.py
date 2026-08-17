@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import glob as glob_module
 import os
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypedDict
@@ -101,61 +101,20 @@ def resolve_gmt_sources(
 def read_gmt_frames(files_gmt: tuple[Path, ...]) -> _ParsedGmtDataset:
     pathways: list[_PathwayRecord] = []
     term2gene_rows: list[_Term2GeneRecord] = []
+    versions: set[str] = set()
+    collections: set[str] = set()
+    for pathway_record, gene_ids in iter_gmt_records(files_gmt):
+        pathways.append(pathway_record)
+        versions.add(pathway_record["version"])
+        collections.add(pathway_record["collection"])
+        term2gene_rows.extend(
+            {
+                "wiki_pathways_id": pathway_record["wiki_pathways_id"],
+                "gene_id": gene_id,
+            }
+            for gene_id in gene_ids
+        )
 
-    pathway_locations: dict[str, tuple[Path, int]] = {}
-    for file_gmt in files_gmt:
-        pathway_count = 0
-        with file_gmt.open("r", encoding="utf-8") as handle:
-            for line_number, line in enumerate(handle, start=1):
-                line = line.rstrip("\n")
-                if not line.strip():
-                    continue
-                fields = line.split("\t")
-                if len(fields) < 2:
-                    raise ValueError(
-                        f"WikiPathways GMT line must contain at least two columns: "
-                        f"path={file_gmt}, line={line_number}"
-                    )
-                pathway = parse_pathway_header(
-                    fields[0], file_gmt=file_gmt, line_number=line_number
-                )
-                pathway_id = pathway["wiki_pathways_id"]
-                if pathway_id in pathway_locations:
-                    first_path, first_line = pathway_locations[pathway_id]
-                    raise ValueError(
-                        "wiki_pathways_id must be unique across all GMT files: "
-                        f"id={pathway_id}, first_path={first_path}, "
-                        f"first_line={first_line}, duplicate_path={file_gmt}, "
-                        f"duplicate_line={line_number}"
-                    )
-                pathway_locations[pathway_id] = (file_gmt, line_number)
-                pathway_count += 1
-                url = fields[1].strip()
-                gene_ids = [
-                    gene_id.strip() for gene_id in fields[2:] if gene_id.strip()
-                ]
-                gene_ids_unique = sorted(set(gene_ids))
-                pathway_record: _PathwayRecord = {
-                    **pathway,
-                    "url": url,
-                    "gene_count": len(gene_ids_unique),
-                }
-                pathways.append(pathway_record)
-                for gene_id in gene_ids_unique:
-                    term2gene_rows.append(
-                        {
-                            "wiki_pathways_id": pathway_id,
-                            "gene_id": gene_id,
-                        }
-                    )
-        if pathway_count == 0:
-            raise ValueError(
-                "WikiPathways GMT file must contain at least one non-empty "
-                f"pathway record: path={file_gmt}"
-            )
-
-    collections = {pathway["collection"] for pathway in pathways}
-    versions = {pathway["version"] for pathway in pathways}
     if len(collections) != 1:
         raise ValueError(
             "WikiPathways GMT files must contain one common Collection; "
@@ -184,6 +143,72 @@ def read_gmt_frames(files_gmt: tuple[Path, ...]) -> _ParsedGmtDataset:
         },
         release_version=next(iter(versions)),
     )
+
+
+def iter_gmt_records(
+    files_gmt: tuple[Path, ...],
+) -> Iterator[tuple[_PathwayRecord, tuple[str, ...]]]:
+    """Yield validated GMT records without building complete relation lists."""
+    pathway_locations: dict[str, tuple[Path, int]] = {}
+    collections: set[str] = set()
+    versions: set[str] = set()
+    for file_gmt in files_gmt:
+        pathway_count = 0
+        with file_gmt.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                line = line.rstrip("\n")
+                if not line.strip():
+                    continue
+                fields = line.split("\t")
+                if len(fields) < 2:
+                    raise ValueError(
+                        f"WikiPathways GMT line must contain at least two columns: "
+                        f"path={file_gmt}, line={line_number}"
+                    )
+                pathway = parse_pathway_header(
+                    fields[0], file_gmt=file_gmt, line_number=line_number
+                )
+                pathway_id = pathway["wiki_pathways_id"]
+                if pathway_id in pathway_locations:
+                    first_path, first_line = pathway_locations[pathway_id]
+                    raise ValueError(
+                        "wiki_pathways_id must be unique across all GMT files: "
+                        f"id={pathway_id}, first_path={first_path}, "
+                        f"first_line={first_line}, duplicate_path={file_gmt}, "
+                        f"duplicate_line={line_number}"
+                    )
+                pathway_locations[pathway_id] = (file_gmt, line_number)
+                collections.add(pathway["collection"])
+                versions.add(pathway["version"])
+                pathway_count += 1
+                gene_ids = tuple(
+                    sorted(
+                        {gene_id.strip() for gene_id in fields[2:] if gene_id.strip()}
+                    )
+                )
+                yield (
+                    {
+                        **pathway,
+                        "url": fields[1].strip(),
+                        "gene_count": len(gene_ids),
+                    },
+                    gene_ids,
+                )
+        if pathway_count == 0:
+            raise ValueError(
+                "WikiPathways GMT file must contain at least one non-empty "
+                f"pathway record: path={file_gmt}"
+            )
+    if len(collections) != 1:
+        raise ValueError(
+            "WikiPathways GMT files must contain one common Collection; "
+            f"found={sorted(collections)}"
+        )
+    if len(versions) != 1:
+        raise ValueError(
+            "WikiPathways GMT files must contain one common Version; "
+            f"found={sorted(versions)}"
+        )
 
 
 def parse_pathway_header(

@@ -10,13 +10,21 @@ from typing import Any
 import duckdb
 import polars as pl
 
-from bioextract._lazy import register_replayable_source
+from bioextract._lazy import (
+    _RelationScanRequest,  # pyright: ignore[reportPrivateUsage]  # typed source boundary
+    register_replayable_source,
+)
 from bioextract._publication import DuckDBWriteResult
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
 from bioextract.errors import CapabilityError, IntegrityError
 
 from ._knowledgebase import write_knowledgebase
-from ._query import UniProtSelection, make_selection, validate_publication
+from ._query import (
+    UniProtMappingSelection,
+    UniProtSelection,
+    make_selection,
+    validate_publication,
+)
 from .constant import (
     COLS_IDMAPPING_SELECTED,
     IDMAPPING_SOURCE_SCHEMA_PROFILE,
@@ -254,15 +262,32 @@ class UniProtDatabase:
         *,
         namespace: str,
         taxon_ids: Iterable[str | int] | None = None,
-    ) -> UniProtSelection:
+    ) -> UniProtSelection | UniProtMappingSelection:
         """Select proteins through one supported identifier namespace.
 
         Examples:
             >>> database.select_ids(["P04637"], namespace="uniprot")  # doctest: +SKIP
             UniProtSelection(...)
         """
-        self._require_mode("knowledgebase_publication")
         normalized_taxa = normalize_taxids(tuple(taxon_ids or ()))
+        if self._mode in {"idmapping", "idmapping_publication"}:
+            if namespace != "uniprot":
+                raise CapabilityError(
+                    "UniProt idmapping selected access requires namespace='uniprot'"
+                )
+            input_ids = tuple(
+                dict.fromkeys(
+                    str(identifier).strip()
+                    for identifier in ids
+                    if str(identifier).strip()
+                )
+            )
+            return UniProtMappingSelection(
+                database=self,
+                input_ids=input_ids,
+                taxon_ids=normalized_taxa,
+            )
+        self._require_mode("knowledgebase_publication")
         return make_selection(self, ids, namespace=namespace, taxon_ids=normalized_taxa)
 
     def select_groups(
@@ -278,6 +303,8 @@ class UniProtDatabase:
             >>> database.select_groups({"case": ["P04637"]}, namespace="uniprot")  # doctest: +SKIP
             UniProtSelection(...)
         """
+        if self._mode in {"idmapping", "idmapping_publication"}:
+            raise CapabilityError("UniProt idmapping selected access is not grouped")
         self._require_mode("knowledgebase_publication")
         normalized_taxa = normalize_taxids(tuple(taxon_ids or ()))
         return make_selection(
@@ -292,10 +319,10 @@ class UniProtDatabase:
         if self._mode == "idmapping_publication":
             return register_replayable_source(
                 schema=SCHEMA_MAPPING,
-                batches=lambda batch_size: _iter_publication_mapping_batches(
+                batches=lambda request: _iter_publication_mapping_batches(
                     self,
                     taxon_ids,
-                    batch_size=batch_size,
+                    request=request,
                 ),
             )
         source = self._required_source_path()
@@ -330,25 +357,38 @@ def _iter_publication_mapping_batches(
     database: UniProtDatabase,
     taxon_ids: tuple[str, ...],
     *,
-    batch_size: int,
+    request: _RelationScanRequest,
 ) -> Iterator[pl.DataFrame]:
     """Stream an idmapping publication with a fresh connection per execution."""
 
     connection = database.connect()
     reader: Any = None
     try:
-        columns = ", ".join(COLS_IDMAPPING_SELECTED)
+        requested = (
+            list(COLS_IDMAPPING_SELECTED)
+            if request.columns is None
+            else [name for name in request.columns if name in SCHEMA_MAPPING]
+        )
+        if taxon_ids and "tax_id" not in requested:
+            requested.append("tax_id")
+        if not requested:
+            requested = list(COLS_IDMAPPING_SELECTED)
+        columns = ", ".join(f'"{name}"' for name in requested)
         query = f"SELECT {columns} FROM mapping"
         params: list[str] = []
         if taxon_ids:
             query += f" WHERE tax_id IN ({','.join('?' for _ in taxon_ids)})"
             params.extend(taxon_ids)
         result = connection.execute(query, params)
-        reader = _uniprot_arrow_reader(result, batch_size)
+        reader = _uniprot_arrow_reader(result, request.effective_batch_size)
         for record_batch in reader:
             frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+            if request.columns is not None:
+                frame = frame.select(
+                    [name for name in request.columns if name in frame.columns]
+                )
             yield frame.cast(  # type: ignore[reportArgumentType]
-                SCHEMA_MAPPING,  # type: ignore[reportArgumentType]
+                {name: SCHEMA_MAPPING[name] for name in frame.columns},  # type: ignore[reportArgumentType]
                 strict=False,
             )
     finally:

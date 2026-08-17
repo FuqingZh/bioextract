@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import copy
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import polars as pl
 
-from .._lazy import register_deferred_frame_source
+from .._lazy import (
+    _RelationScanRequest,  # pyright: ignore[reportPrivateUsage]  # typed source boundary
+    register_replayable_source,
+)
 from .._shared import (
     create_group_input_frames,
     create_input_id_frame,
@@ -28,8 +31,8 @@ from .constant import (
     OmniPathResourceName,
 )
 from .util import (
-    extract_enzsub_frame,
-    extract_interactions_frame,
+    create_enzsub_lazy_frame,
+    create_interactions_lazy_frame,
     scan_enzsub,
     scan_interactions,
 )
@@ -300,9 +303,6 @@ class OmniPathSelection:
     _df_groups: pl.DataFrame | None = field(repr=False)
     resources_selected: frozenset[OmniPathResourceName]
     namespace: OmniPathNamespace = "protein"
-    _df_enzsub: pl.DataFrame | None = field(default=None, repr=False)
-    _df_interactions: pl.DataFrame | None = field(default=None, repr=False)
-    _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
 
     @property
     def is_grouped(self) -> bool:
@@ -328,8 +328,8 @@ class OmniPathSelection:
     ) -> OmniPathSelection:
         """Create a selection constrained to enzsub and/or interactions.
 
-        Existing cached frames are retained only for resources that remain
-        selected. File availability is checked when the lazy relation executes.
+        The returned handle keeps only immutable input and resource scope;
+        each relation is replayable and reopens its source when executed.
 
         Args:
             resources: Non-empty iterable containing ``"enzsub"``,
@@ -373,10 +373,6 @@ class OmniPathSelection:
             _df_groups=self._df_groups,
             resources_selected=resources_selected,
             namespace=self.namespace,
-            _df_enzsub=self._df_enzsub if "enzsub" in resources_selected else None,
-            _df_interactions=(
-                self._df_interactions if "interactions" in resources_selected else None
-            ),
         )
 
     def with_enzsub(self) -> OmniPathSelection:
@@ -444,25 +440,14 @@ class OmniPathSelection:
             [{'enzyme': 'P31749', 'substrate': 'BAD', 'residue_type': 'S', 'residue_offset': '136', 'modification': 'phosphorylation', 'target_site': 'S136'}]
         """
         snapshot = copy.copy(self)
-        return register_deferred_frame_source(
-            schema=SCHEMA_GROUP_ENZSUB if self.is_grouped else SCHEMA_ENZSUB,
-            frame=lambda: snapshot._eager_enzsub(),
+        schema = SCHEMA_GROUP_ENZSUB if self.is_grouped else SCHEMA_ENZSUB
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda request: _iter_enzsub_batches(
+                snapshot,
+                request=request,
+            ),
         )
-
-    def _eager_enzsub(self) -> pl.DataFrame:
-        if "enzsub" not in self.resources_selected:
-            raise ValueError(
-                "OmniPath resource 'enzsub' is not enabled for this selection"
-            )
-        if self.dataset.snapshot.file_enzsub is None:
-            raise ValueError("Cannot extract OmniPath enzsub without enzsub file")
-        if self._df_enzsub is None:
-            self._df_enzsub = extract_enzsub_frame(
-                file_enzsub=self.dataset.snapshot.file_enzsub,
-                df_input_ids=self._df_input_ids,
-                df_group_membership=self._df_group_membership,
-            )
-        return self._df_enzsub
 
     def interactions(self) -> pl.LazyFrame:
         """Return matched OmniPath interaction relations lazily.
@@ -490,29 +475,14 @@ class OmniPathSelection:
             [{'source': 'EGFR', 'target': 'ERBB2', 'is_directed': False, 'is_stimulation': True, 'is_inhibition': False}]
         """
         snapshot = copy.copy(self)
-        return register_deferred_frame_source(
-            schema=(
-                SCHEMA_GROUP_INTERACTIONS if self.is_grouped else SCHEMA_INTERACTIONS
+        schema = SCHEMA_GROUP_INTERACTIONS if self.is_grouped else SCHEMA_INTERACTIONS
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda request: _iter_interaction_batches(
+                snapshot,
+                request=request,
             ),
-            frame=lambda: snapshot._eager_interactions(),
         )
-
-    def _eager_interactions(self) -> pl.DataFrame:
-        if "interactions" not in self.resources_selected:
-            raise ValueError(
-                "OmniPath resource 'interactions' is not enabled for this selection"
-            )
-        if self.dataset.snapshot.file_interactions is None:
-            raise ValueError(
-                "Cannot extract OmniPath interactions without interactions file"
-            )
-        if self._df_interactions is None:
-            self._df_interactions = extract_interactions_frame(
-                file_interactions=self.dataset.snapshot.file_interactions,
-                df_input_ids=self._df_input_ids,
-                df_group_membership=self._df_group_membership,
-            )
-        return self._df_interactions
 
     def unmatched_ids(self) -> pl.LazyFrame:
         """Return normalized input IDs not found in selected resources lazily.
@@ -533,64 +503,177 @@ class OmniPathSelection:
             >>> selection.unmatched_ids().collect().to_dicts()
             [{'input_id': 'MISSING'}]
         """
-        snapshot = copy.copy(self)
-        return register_deferred_frame_source(
-            schema=SCHEMA_GROUP_INPUT_IDS if self.is_grouped else SCHEMA_UNMAPPED,
-            frame=lambda: snapshot._eager_unmatched_ids(),
+        col_group_id = list(self._col_group_id)
+        cols_index = col_group_id + ["input_id"]
+        df_input_rows = (
+            self._df_group_membership.lazy()
+            if self.is_grouped and self._df_group_membership is not None
+            else self._df_input_ids.lazy()
+        )
+        matched_parts: list[pl.LazyFrame] = []
+        if "enzsub" in self.resources_selected:
+            lf_enzsub = _normalized_enzsub_plan(self)
+            matched_parts.extend(
+                [
+                    lf_enzsub.select(
+                        [*col_group_id, pl.col("enzyme").alias("input_id")]
+                    ),
+                    lf_enzsub.select(
+                        [*col_group_id, pl.col("substrate").alias("input_id")]
+                    ),
+                ]
+            )
+        if "interactions" in self.resources_selected:
+            lf_interactions = _normalized_interactions_plan(self)
+            matched_parts.extend(
+                [
+                    lf_interactions.select(
+                        [*col_group_id, pl.col("source").alias("input_id")]
+                    ),
+                    lf_interactions.select(
+                        [*col_group_id, pl.col("target").alias("input_id")]
+                    ),
+                ]
+            )
+        if not matched_parts:
+            return df_input_rows.select(cols_index).sort(cols_index)
+        matched = pl.concat(matched_parts, how="vertical_relaxed").unique(
+            subset=cols_index
+        )
+        return (
+            df_input_rows.join(matched, on=cols_index, how="anti")
+            .select(cols_index)
+            .sort(cols_index)
         )
 
-    def _eager_unmatched_ids(self) -> pl.DataFrame:
-        if self._df_unmapped is None:
-            col_group_id = list(self._col_group_id)
-            cols_index = col_group_id + ["input_id"]
-            df_input_rows = self._df_input_ids
-            if self.is_grouped:
-                if self._df_group_membership is None:
-                    raise RuntimeError(
-                        "Grouped OmniPath selection lacks group membership"
-                    )
-                df_input_rows = self._df_group_membership
 
-            df_matched_parts: list[pl.DataFrame] = []
-            if "enzsub" in self.resources_selected:
-                df_enzsub = self._eager_enzsub()
-                df_matched_parts.extend(
-                    [
-                        df_enzsub.select(
-                            col_group_id + [pl.col("enzyme").alias("input_id")]
-                        ),
-                        df_enzsub.select(
-                            col_group_id + [pl.col("substrate").alias("input_id")]
-                        ),
-                    ]
-                )
+def _normalized_enzsub_plan(selection: OmniPathSelection) -> pl.LazyFrame:
+    if "enzsub" not in selection.resources_selected:
+        raise ValueError("OmniPath resource 'enzsub' is not enabled for this selection")
+    file_enzsub = selection.dataset.snapshot.file_enzsub
+    if file_enzsub is None:
+        raise ValueError("Cannot extract OmniPath enzsub without enzsub file")
+    lf_base = create_enzsub_lazy_frame(file_enzsub)
+    lf_input_ids = selection._df_input_ids.lazy()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    lf_source = lf_base.join(
+        lf_input_ids.rename({"input_id": "_enzyme"}),
+        on="_enzyme",
+        how="inner",
+    ).with_columns(pl.col("_enzyme").alias("input_id"))
+    lf_target = lf_base.join(
+        lf_input_ids.rename({"input_id": "_substrate"}),
+        on="_substrate",
+        how="inner",
+    ).with_columns(pl.col("_substrate").alias("input_id"))
+    relation_columns = list(SCHEMA_ENZSUB)
+    lf_matched = (
+        pl.concat([lf_source, lf_target], how="vertical_relaxed")
+        .unique(subset=["input_id", *relation_columns])
+        .select(["input_id", *relation_columns])
+    )
+    if selection._df_group_membership is None:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        return (
+            lf_matched.select(relation_columns)
+            .unique(subset=relation_columns)
+            .sort(relation_columns)
+        )
+    columns = ["group_id", *relation_columns]
+    return (
+        selection._df_group_membership.lazy()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        .join(lf_matched, on="input_id", how="inner")
+        .select(columns)
+        .unique(subset=columns)
+        .sort(columns)
+    )
 
-            if "interactions" in self.resources_selected:
-                df_interactions = self._eager_interactions()
-                df_matched_parts.extend(
-                    [
-                        df_interactions.select(
-                            col_group_id + [pl.col("source").alias("input_id")]
-                        ),
-                        df_interactions.select(
-                            col_group_id + [pl.col("target").alias("input_id")]
-                        ),
-                    ]
-                )
 
-            df_matched_input_ids = (
-                pl.concat(df_matched_parts, how="vertical_relaxed")
-                .join(df_input_rows, on=cols_index, how="inner")
-                .unique(subset=cols_index)
-                .sort(cols_index)
-            )
-            self._df_unmapped = (
-                df_input_rows.join(
-                    df_matched_input_ids,
-                    on=cols_index,
-                    how="anti",
-                )
-                .select(cols_index)
-                .sort(cols_index)
-            )
-        return self._df_unmapped
+def _normalized_interactions_plan(selection: OmniPathSelection) -> pl.LazyFrame:
+    if "interactions" not in selection.resources_selected:
+        raise ValueError(
+            "OmniPath resource 'interactions' is not enabled for this selection"
+        )
+    file_interactions = selection.dataset.snapshot.file_interactions
+    if file_interactions is None:
+        raise ValueError(
+            "Cannot extract OmniPath interactions without interactions file"
+        )
+    lf_base = create_interactions_lazy_frame(file_interactions)
+    lf_input_ids = selection._df_input_ids.lazy()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    lf_source = lf_base.join(
+        lf_input_ids.rename({"input_id": "_source"}),
+        on="_source",
+        how="inner",
+    ).with_columns(pl.col("_source").alias("input_id"))
+    lf_target = lf_base.join(
+        lf_input_ids.rename({"input_id": "_target"}),
+        on="_target",
+        how="inner",
+    ).with_columns(pl.col("_target").alias("input_id"))
+    relation_columns = list(SCHEMA_INTERACTIONS)
+    lf_matched = (
+        pl.concat([lf_source, lf_target], how="vertical_relaxed")
+        .unique(subset=["input_id", *relation_columns])
+        .select(["input_id", *relation_columns])
+    )
+    if selection._df_group_membership is None:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        return (
+            lf_matched.select(relation_columns)
+            .unique(subset=relation_columns)
+            .sort(relation_columns)
+        )
+    columns = ["group_id", *relation_columns]
+    return (
+        selection._df_group_membership.lazy()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        .join(lf_matched, on="input_id", how="inner")
+        .select(columns)
+        .unique(subset=columns)
+        .sort(columns)
+    )
+
+
+def _iter_enzsub_batches(
+    selection: OmniPathSelection,
+    *,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    schema = SCHEMA_GROUP_ENZSUB if selection.is_grouped else SCHEMA_ENZSUB
+    lf_relation = _normalized_enzsub_plan(selection)
+    requested = (
+        None
+        if request.columns is None
+        else [name for name in request.columns if name in schema]
+    )
+    if requested:
+        lf_relation = lf_relation.select(requested)
+    for frame in lf_relation.collect_batches(
+        chunk_size=request.effective_batch_size,
+        engine="streaming",
+    ):
+        yield frame.cast(
+            {name: schema[name] for name in frame.columns},
+            strict=False,
+        )
+
+
+def _iter_interaction_batches(
+    selection: OmniPathSelection,
+    *,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    schema = SCHEMA_GROUP_INTERACTIONS if selection.is_grouped else SCHEMA_INTERACTIONS
+    lf_relation = _normalized_interactions_plan(selection)
+    requested = (
+        None
+        if request.columns is None
+        else [name for name in request.columns if name in schema]
+    )
+    if requested:
+        lf_relation = lf_relation.select(requested)
+    for frame in lf_relation.collect_batches(
+        chunk_size=request.effective_batch_size,
+        engine="streaming",
+    ):
+        yield frame.cast(
+            {name: schema[name] for name in frame.columns},
+            strict=False,
+        )

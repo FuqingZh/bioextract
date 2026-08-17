@@ -5,13 +5,15 @@ import gzip
 import json
 import os
 from pathlib import Path
+from typing import cast
 
 import duckdb
 import polars as pl
 import pytest
 
-from bioextract.errors import CapabilityError, IntegrityError
+from bioextract.errors import IntegrityError
 from bioextract.uniprot import UniProtDatabase
+from bioextract.uniprot._query import UniProtMappingSelection, UniProtSelection
 
 
 def _write_dat(path: Path) -> Path:
@@ -203,8 +205,14 @@ def test_profile_capabilities_and_selection_honor_pinned_identity(
         _write_idmapping(tmp_path / "mapping.tab.gz")
     ).write_duckdb(mapping_path, allow_all_taxa=True)
     mapping = UniProtDatabase.from_duckdb(mapping_path)
-    with pytest.raises(CapabilityError):
-        mapping.select_ids(["P12345"], namespace="uniprot")
+    selected = cast(
+        UniProtMappingSelection,
+        mapping.select_ids(["P12345"], namespace="uniprot"),
+    )
+    assert selected.mappings().select(
+        "input_id", "uniprot_id"
+    ).collect().to_dicts() == [{"input_id": "P12345", "uniprot_id": "P12345"}]
+    assert selected.unmatched_ids().collect().is_empty()
 
     knowledgebase_path = tmp_path / "knowledgebase.duckdb"
     replacement = tmp_path / "replacement.duckdb"
@@ -216,8 +224,12 @@ def test_profile_capabilities_and_selection_honor_pinned_identity(
     knowledgebase = UniProtDatabase.from_duckdb(knowledgebase_path)
     os.replace(replacement, knowledgebase_path)
 
+    knowledgebase_selection = cast(
+        UniProtSelection,
+        knowledgebase.select_ids(["P12345"], namespace="uniprot"),
+    )
     with pytest.raises((IntegrityError, pl.exceptions.ComputeError), match="replaced"):
-        knowledgebase.select_ids(["P12345"], namespace="uniprot").proteins().collect()
+        knowledgebase_selection.proteins().collect()
 
     vanished = UniProtDatabase.from_duckdb(mapping_path)
     mapping_path.unlink()

@@ -10,8 +10,12 @@ from typing import Any, cast
 
 import duckdb
 import polars as pl
+from polars._typing import SchemaDict
 
-from bioextract._lazy import register_replayable_source
+from bioextract._lazy import (
+    _RelationScanRequest,  # pyright: ignore[reportPrivateUsage]  # typed source boundary
+    register_replayable_source,
+)
 from bioextract._publication import (
     BIOEXTRACT_RELATIONS,
     METADATA_SCHEMA_VERSION,
@@ -39,8 +43,7 @@ from .constant import (
     SCHEMA_VERSION,
 )
 from .util import (
-    extract_mapping_frame,
-    extract_unmatched_ids_frame,
+    iter_gmt_records,
     read_gmt_frames,
     resolve_gmt_sources,
 )
@@ -625,19 +628,19 @@ class WikiPathwaysDatabase:
         if self._publication_path is None:
             return register_replayable_source(
                 schema=schema,
-                batches=lambda batch_size: _iter_source_relation_batches(
+                batches=lambda request: _iter_source_relation_batches(
                     self.snapshot.files_gmt,
                     species=self.snapshot.species,
                     frame_name=frame_name,
-                    batch_size=batch_size,
+                    request=request,
                 ),
             )
         return register_replayable_source(
             schema=schema,
-            batches=lambda batch_size: _iter_publication_relation_batches(
+            batches=lambda request: _iter_publication_relation_batches(
                 self,
                 frame_name=frame_name,
-                batch_size=batch_size,
+                request=request,
             ),
         )
 
@@ -699,8 +702,6 @@ class WikiPathwaysSelection:
     _df_input_ids: pl.DataFrame = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
     _df_group_membership: pl.DataFrame | None = field(repr=False)
-    _df_mapping: pl.DataFrame | None = field(default=None, repr=False)
-    _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
 
     @property
     def is_grouped(self) -> bool:
@@ -735,9 +736,9 @@ class WikiPathwaysSelection:
         schema = SCHEMA_GROUP_MAPPING if self.is_grouped else SCHEMA_MAPPING
         return register_replayable_source(
             schema=schema,
-            batches=lambda batch_size: _iter_selection_mapping_batches(
+            batches=lambda request: _iter_selection_mapping_batches(
                 snapshot,
-                batch_size=batch_size,
+                request=request,
             ),
         )
 
@@ -750,86 +751,69 @@ class WikiPathwaysSelection:
             shape: (..., ...)
         """
 
-        input_ids = self._df_input_ids.lazy()
-        matched = self.mappings().select("input_id").unique()
-        unmatched = input_ids.join(matched, on="input_id", how="anti").select(
-            "input_id"
+        snapshot = copy.copy(self)
+        schema = (
+            SCHEMA_GROUP_INPUT_IDS
+            if self._df_group_membership is not None
+            else SCHEMA_UNMAPPED
         )
-        if self._df_group_membership is None:
-            return unmatched.sort("input_id")
-        return (
-            self._df_group_membership.lazy()
-            .join(unmatched, on="input_id", how="inner")
-            .select("group_id", "input_id")
-            .sort("group_id", "input_id")
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda request: _iter_selection_unmatched_batches(
+                snapshot,
+                request=request,
+            ),
         )
-
-    def _eager_mapping(self) -> pl.DataFrame:
-        """Materialize every pathway mapping matched by selected IDs.
-
-        Examples:
-            Materialize the pathway mapped to Entrez ID 2687:
-
-            >>> db = WikiPathwaysDatabase.from_gmt(
-            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt",
-            ... ).with_species("Homo sapiens")
-            >>> selection = db.select_ids(["2687"])
-            >>> selection.mappings().collect()["wiki_pathways_id"].to_list()
-            ['WP100']
-        """
-        self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-        if self._df_mapping is None:
-            self._df_mapping = extract_mapping_frame(
-                self.dataset._lazy_frame("pathway"),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-                self.dataset._lazy_frame("term2gene"),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-                self._df_input_ids,
-                df_group_membership=self._df_group_membership,
-            ).collect()
-        return self._df_mapping
-
-    def _eager_unmatched(self) -> pl.DataFrame:
-        """Materialize normalized input IDs with no WikiPathways mapping.
-
-        Grouped selections report an ID as unmapped independently within each
-        group and include ``group_id`` in the result.
-
-        Examples:
-            Retain an Entrez ID absent from the snapshot:
-
-            >>> db = WikiPathwaysDatabase.from_gmt(
-            ...     "data/wikipathways/wikipathways-Homo_sapiens.gmt"
-            ... )
-            >>> selection = db.select_ids(["2687", "MISSING"])
-            >>> selection.unmatched_ids().collect().to_dicts()
-            [{'input_id': 'MISSING'}]
-        """
-        self.dataset._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-        if self._df_unmapped is None:
-            self._df_unmapped = extract_unmatched_ids_frame(
-                self._df_input_ids,
-                self._eager_mapping(),
-                df_group_membership=self._df_group_membership,
-            )
-        return self._df_unmapped
 
 
 def _iter_selection_mapping_batches(
     selection: WikiPathwaysSelection,
     *,
-    batch_size: int,
+    request: _RelationScanRequest,
 ) -> Iterator[pl.DataFrame]:
+    batch_size = request.effective_batch_size
     database = selection.dataset
     if database._publication_path is None:  # pyright: ignore[reportPrivateUsage]
-        parsed = read_gmt_frames(database.snapshot.files_gmt)
-        frames = _scope_gmt_frames(parsed.frames, database.species)
-        frame = extract_mapping_frame(
-            frames["pathway"],
-            frames["term2gene"],
-            selection._df_input_ids,  # pyright: ignore[reportPrivateUsage]
-            df_group_membership=selection._df_group_membership,  # pyright: ignore[reportPrivateUsage]
-        ).collect()
-        for offset in range(0, frame.height, batch_size):
-            yield frame.slice(offset, batch_size)
+        requested = _requested_columns(
+            request.columns,
+            SCHEMA_GROUP_MAPPING if selection.is_grouped else SCHEMA_MAPPING,
+        )
+        input_ids = set(
+            selection._df_input_ids.get_column("input_id").to_list()  # pyright: ignore[reportPrivateUsage]
+        )
+        membership = selection._df_group_membership  # pyright: ignore[reportPrivateUsage]
+        rows: list[dict[str, object]] = []
+        for pathway, gene_ids in iter_gmt_records(database.snapshot.files_gmt):
+            if database.species is not None and pathway["species"] != database.species:
+                continue
+            for gene_id in gene_ids:
+                if gene_id not in input_ids:
+                    continue
+                rows.append(
+                    {
+                        "input_id": gene_id,
+                        "gene_id": gene_id,
+                        "wiki_pathways_id": pathway["wiki_pathways_id"],
+                        "pathway_name": pathway["pathway_name"],
+                        "species": pathway["species"],
+                        "url": pathway["url"],
+                    }
+                )
+                if len(rows) >= batch_size:
+                    yield from _finalize_source_mapping_batch(
+                        rows,
+                        membership=membership,
+                        requested=requested,
+                        batch_size=batch_size,
+                    )
+                    rows = []
+        if rows:
+            yield from _finalize_source_mapping_batch(
+                rows,
+                membership=membership,
+                requested=requested,
+                batch_size=batch_size,
+            )
         return
 
     connection = database.connect()
@@ -862,6 +846,10 @@ def _iter_selection_mapping_batches(
             query += " WHERE pathway.species = ?"
             params.append(database.species)
         query += " ORDER BY input_id, wiki_pathways_id"
+        requested = _requested_columns(
+            request.columns,
+            SCHEMA_GROUP_MAPPING if selection.is_grouped else SCHEMA_MAPPING,
+        )
         result = connection.execute(query, params)
         reader = _publication_arrow_reader(result, batch_size)
         try:
@@ -875,6 +863,8 @@ def _iter_selection_mapping_batches(
                         .unique()
                         .sort(list(SCHEMA_GROUP_MAPPING))
                     )
+                if requested is not None:
+                    frame = frame.select(requested)
                 yield frame
         finally:
             close = getattr(reader, "close", None)
@@ -884,27 +874,99 @@ def _iter_selection_mapping_batches(
         connection.close()
 
 
+def _iter_selection_unmatched_batches(
+    selection: WikiPathwaysSelection,
+    *,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    database = selection.dataset
+    input_ids = set(
+        selection._df_input_ids.get_column("input_id").to_list()  # pyright: ignore[reportPrivateUsage]
+    )
+    if not input_ids:
+        return
+    mapped_ids: set[str] = set()
+    if database._publication_path is None:  # pyright: ignore[reportPrivateUsage]
+        for pathway, gene_ids in iter_gmt_records(database.snapshot.files_gmt):
+            if database.species is not None and pathway["species"] != database.species:
+                continue
+            mapped_ids.update(input_ids.intersection(gene_ids))
+    else:
+        connection = database.connect()
+        try:
+            connection.execute(
+                "CREATE TEMP TABLE _input_id(input_id VARCHAR NOT NULL PRIMARY KEY)"
+            )
+            connection.executemany(
+                "INSERT INTO _input_id VALUES (?)",
+                [(value,) for value in sorted(input_ids)],
+            )
+            query = (
+                "SELECT DISTINCT input.input_id FROM _input_id AS input "
+                "JOIN pathway_gene AS gene ON gene.gene_id = input.input_id "
+                "JOIN pathway ON pathway.wiki_pathways_id = gene.wiki_pathways_id"
+            )
+            params: list[str] = []
+            if database.species is not None:
+                query += " WHERE pathway.species = ?"
+                params.append(database.species)
+            rows = connection.execute(query, params).fetchall()
+            mapped_ids.update(str(row[0]) for row in rows)
+        finally:
+            connection.close()
+
+    input_frame = selection._df_input_ids.filter(  # pyright: ignore[reportPrivateUsage]
+        ~pl.col("input_id").is_in(mapped_ids)
+    )
+    if selection._df_group_membership is not None:  # pyright: ignore[reportPrivateUsage]
+        input_frame = (
+            selection._df_group_membership.join(  # pyright: ignore[reportPrivateUsage]
+                input_frame,
+                on="input_id",
+                how="inner",
+            )
+            .select("group_id", "input_id")
+            .sort("group_id", "input_id")
+        )
+    schema = (
+        SCHEMA_GROUP_INPUT_IDS
+        if selection._df_group_membership is not None  # pyright: ignore[reportPrivateUsage]
+        else SCHEMA_UNMAPPED
+    )
+    requested = _requested_columns(request.columns, schema)
+    if requested is not None:
+        input_frame = input_frame.select(requested)
+    for offset in range(0, input_frame.height, request.effective_batch_size):
+        yield input_frame.slice(offset, request.effective_batch_size)
+
+
 def _filter_species_frame(lf: pl.LazyFrame, species: str) -> pl.LazyFrame:
     if "species" not in lf.collect_schema().names():
         return lf
     return lf.filter(pl.col("species") == species)
 
 
-def _scope_gmt_frames(
-    frames: Mapping[str, pl.LazyFrame],
-    species: str | None,
-) -> dict[str, pl.LazyFrame]:
-    if species is None:
-        return dict(frames)
-    pathway = frames["pathway"].filter(pl.col("species") == species)
-    pathway_ids = pathway.select("wiki_pathways_id").unique()
-    return {
-        "pathway": pathway,
-        "term2gene": frames["term2gene"]
-        .join(pathway_ids, on="wiki_pathways_id", how="inner")
-        .sort("wiki_pathways_id", "gene_id"),
-        "term2name": frames["term2name"].filter(pl.col("species") == species),
-    }
+def _finalize_source_mapping_batch(
+    rows: list[dict[str, object]],
+    *,
+    membership: pl.DataFrame | None,
+    requested: list[str] | None,
+    batch_size: int,
+) -> Iterator[pl.DataFrame]:
+    frame = pl.DataFrame(rows, schema=SCHEMA_MAPPING)
+    if membership is not None:
+        frame = (
+            membership.join(frame, on="input_id", how="inner")
+            .select(list(SCHEMA_GROUP_MAPPING))
+            .unique()
+            .sort(list(SCHEMA_GROUP_MAPPING))
+        )
+    else:
+        frame = frame.unique().sort(list(SCHEMA_MAPPING))
+    if requested is not None:
+        frame = frame.select(requested)
+    for offset in range(0, frame.height, batch_size):
+        yield frame.slice(offset, batch_size)
 
 
 def _iter_source_relation_batches(
@@ -912,27 +974,83 @@ def _iter_source_relation_batches(
     *,
     species: str | None,
     frame_name: str,
-    batch_size: int,
+    request: _RelationScanRequest,
 ) -> Iterator[pl.DataFrame]:
-    parsed = read_gmt_frames(files_gmt)
-    frames = _scope_gmt_frames(parsed.frames, species)
-    yield from frames[frame_name].collect_batches(chunk_size=batch_size)
+    requested = _requested_columns(
+        request.columns,
+        {
+            "pathway": SCHEMA_PATHWAY,
+            "term2gene": SCHEMA_TERM2GENE,
+            "term2name": SCHEMA_TERM2NAME,
+        }[frame_name],
+    )
+    schema = {
+        "pathway": SCHEMA_PATHWAY,
+        "term2gene": SCHEMA_TERM2GENE,
+        "term2name": SCHEMA_TERM2NAME,
+    }[frame_name]
+    rows: list[dict[str, object]] = []
+    batch_size = request.effective_batch_size
+    for pathway, gene_ids in iter_gmt_records(files_gmt):
+        if species is not None and pathway["species"] != species:
+            continue
+        if frame_name == "pathway":
+            rows.append(dict(pathway))
+        elif frame_name == "term2gene":
+            for gene_id in gene_ids:
+                rows.append(
+                    {
+                        "wiki_pathways_id": pathway["wiki_pathways_id"],
+                        "gene_id": gene_id,
+                    }
+                )
+                if len(rows) >= batch_size:
+                    frame = pl.DataFrame(rows, schema=schema)
+                    if requested is not None:
+                        frame = frame.select(requested)
+                    yield frame
+                    rows = []
+        else:
+            rows.append(
+                {
+                    "wiki_pathways_id": pathway["wiki_pathways_id"],
+                    "pathway_name": pathway["pathway_name"],
+                    "species": pathway["species"],
+                    "collection": pathway["collection"],
+                    "version": pathway["version"],
+                    "url": pathway["url"],
+                }
+            )
+        if len(rows) >= batch_size:
+            frame = pl.DataFrame(rows, schema=schema)
+            if requested is not None:
+                frame = frame.select(requested)
+            yield frame
+            rows = []
+    if rows:
+        frame = pl.DataFrame(rows, schema=schema)
+        if requested is not None:
+            frame = frame.select(requested)
+        yield frame
 
 
 def _iter_publication_relation_batches(
     database: WikiPathwaysDatabase,
     *,
     frame_name: str,
-    batch_size: int,
+    request: _RelationScanRequest,
 ) -> Iterator[pl.DataFrame]:
+    batch_size = request.effective_batch_size
     species = database.species
     if frame_name == "pathway":
-        query = "SELECT * FROM pathway"
+        columns = _requested_columns(request.columns, SCHEMA_PATHWAY)
+        query = "SELECT " + _select_sql(columns, SCHEMA_PATHWAY) + " FROM pathway"
         params: list[str] = []
         if species is not None:
             query += " WHERE species = ?"
             params.append(species)
     elif frame_name == "term2gene":
+        columns = _requested_columns(request.columns, SCHEMA_TERM2GENE)
         query = """
             SELECT gene.wiki_pathways_id, gene.gene_id
             FROM pathway_gene AS gene
@@ -944,6 +1062,7 @@ def _iter_publication_relation_batches(
             params.append(species)
         query += " ORDER BY gene.wiki_pathways_id, gene.gene_id"
     elif frame_name == "term2name":
+        columns = _requested_columns(request.columns, SCHEMA_TERM2NAME)
         query = """
             SELECT
                 wiki_pathways_id, pathway_name, species,
@@ -960,6 +1079,8 @@ def _iter_publication_relation_batches(
 
     connection = database.connect()
     try:
+        if columns is not None:
+            query = _project_query(query, columns)
         result = connection.execute(query, params)
         reader = _publication_arrow_reader(result, batch_size)
         try:
@@ -972,6 +1093,26 @@ def _iter_publication_relation_batches(
                 close()
     finally:
         connection.close()
+
+
+def _requested_columns(
+    columns: tuple[str, ...] | None,
+    schema: SchemaDict,
+) -> list[str] | None:
+    if columns is None:
+        return None
+    selected = [name for name in columns if name in schema]
+    return selected or None
+
+
+def _select_sql(columns: list[str] | None, schema: SchemaDict) -> str:
+    selected = list(schema) if columns is None else columns
+    return ", ".join(f'"{name}"' for name in selected)
+
+
+def _project_query(query: str, columns: list[str]) -> str:
+    projection = ", ".join(f'"{name}"' for name in columns)
+    return f"SELECT {projection} FROM ({query}) AS _bioextract_relation"
 
 
 def _publication_arrow_reader(result: Any, batch_size: int) -> Any:

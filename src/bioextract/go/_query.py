@@ -233,8 +233,8 @@ class GOAncestorSelection:
         snapshot = copy.copy(self)
         return register_replayable_source(
             schema=GO_ANCESTOR_MATCH_SCHEMA,
-            batches=lambda batch_size: _iter_single_frame(
-                snapshot._eager_ancestors(), batch_size
+            batches=lambda request: _iter_single_frame(
+                snapshot._eager_ancestors(), request.effective_batch_size
             ),
         )
 
@@ -263,8 +263,8 @@ class GOAncestorSelection:
         snapshot = copy.copy(self)
         return register_replayable_source(
             schema=GO_ANCESTOR_UNMATCHED_SCHEMA,
-            batches=lambda batch_size: _iter_single_frame(
-                snapshot._eager_unmatched_ids(), batch_size
+            batches=lambda request: _iter_single_frame(
+                snapshot._eager_unmatched_ids(), request.effective_batch_size
             ),
         )
 

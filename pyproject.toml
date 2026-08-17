@@ -92,7 +92,8 @@ test-unit = {cmd = "python scripts/run_with_thread_budget.py --default 4 -- pyte
 test-contract = {cmd = "python scripts/run_with_thread_budget.py --default 4 -- pytest tests/contract", env = {PYTHONPATH = "src"}}
 test-integration = {cmd = "python scripts/run_with_thread_budget.py --default 4 -- pytest tests/integration", env = {PYTHONPATH = "src"}}
 test-smoke = {cmd = "python scripts/run_with_thread_budget.py --default 2 -- pytest tests/smoke", env = {PYTHONPATH = "src"}}
+execution-integrity = "python scripts/check_execution_integrity.py"
 test = {cmd = "python scripts/run_with_thread_budget.py --default 4 -- pytest tests/unit tests/contract tests/integration", env = {PYTHONPATH = "src"}}
 lock-check = "python scripts/run_with_thread_budget.py --default 4 -- pdm lock --check"
-check = {composite = ["lock-check", "format-check", "lint", "typecheck", "test"]}
+check = {composite = ["lock-check", "format-check", "lint", "execution-integrity", "typecheck", "test"]}
 precommit = {composite = ["format", "lint-fix", "typecheck", "test"]}
