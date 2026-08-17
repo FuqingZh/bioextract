@@ -254,6 +254,33 @@ def iter_protein2ipr_records(
             }
 
 
+def iter_mapping_frames(
+    file_protein2ipr: Path,
+    *,
+    df_interpro_entry: pl.DataFrame,
+    df_interpro_member: pl.DataFrame,
+    input_ids: set[str] | None = None,
+    _batch_size: int = 10_000,
+) -> Iterable[pl.DataFrame]:
+    """Yield bounded mapping frames while parsing a protein2ipr source."""
+    rows: list[dict[str, str | int | None]] = []
+    for record in iter_protein2ipr_records(file_protein2ipr, input_ids=input_ids):
+        rows.append(record)
+        if len(rows) >= _batch_size:
+            yield build_mapping_frame(
+                rows,
+                df_interpro_entry=df_interpro_entry,
+                df_interpro_member=df_interpro_member,
+            )
+            rows = []
+    if rows:
+        yield build_mapping_frame(
+            rows,
+            df_interpro_entry=df_interpro_entry,
+            df_interpro_member=df_interpro_member,
+        )
+
+
 def read_interpro_xml_frames(file_interpro_xml: Path | None) -> dict[str, pl.DataFrame]:
     if file_interpro_xml is None:
         return {

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import os
 import tempfile
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from datetime import UTC, datetime
 from importlib import metadata
+from itertools import islice
 from pathlib import Path
 from typing import Literal
 
@@ -29,6 +30,8 @@ from .util import (
     reaction_direction,
     read_release_properties,
 )
+
+_RHEA_INSERT_BATCH_ROWS = 100_000
 
 
 def write_rhea_duckdb(
@@ -322,17 +325,17 @@ def _load_rdf(connection: duckdb.DuckDBPyConnection, file_rdf: Path) -> None:
         )
         """
     )
-    participant_rows: list[
+
+    def iter_participant_rows() -> Iterator[
         tuple[str, str, int, str, str | None, str, float | None, str | None]
-    ] = []
-    for membership in snapshot.memberships:
-        side = snapshot.sides[membership.side_id]
-        participant = snapshot.participants.get(membership.participant_id)
-        coefficient = snapshot.coefficient_by_predicate.get(
-            membership.coefficient_predicate, "1"
-        )
-        participant_rows.append(
-            (
+    ]:
+        for membership in snapshot.memberships:
+            side = snapshot.sides[membership.side_id]
+            participant = snapshot.participants.get(membership.participant_id)
+            coefficient = snapshot.coefficient_by_predicate.get(
+                membership.coefficient_predicate, "1"
+            )
+            yield (
                 membership.side_id,
                 membership.participant_id,
                 side.master_id,
@@ -342,8 +345,8 @@ def _load_rdf(connection: duckdb.DuckDBPyConnection, file_rdf: Path) -> None:
                 coefficient_numeric(coefficient),
                 None if participant is None else participant.location,
             )
-        )
-    _insert_rows_batched(connection, "reaction_participant", participant_rows)
+
+    _insert_rows_batched(connection, "reaction_participant", iter_participant_rows())
     connection.execute(
         """
         CREATE TABLE reaction_publication (
@@ -914,9 +917,7 @@ def _insert_rows_batched(
     table_name: str,
     rows: Iterable[tuple[object, ...]],
 ) -> None:
-    rows_materialized = list(rows)
-    if not rows_materialized:
-        return
+    rows_iterator = iter(rows)
     columns = [
         str(row[0])
         for row in connection.execute(
@@ -929,26 +930,27 @@ def _insert_rows_batched(
             [table_name],
         ).fetchall()
     ]
-    frame = pl.DataFrame(
-        rows_materialized,
-        schema=columns,
-        orient="row",
-        infer_schema_length=None,
-    )
-    with tempfile.NamedTemporaryFile(
-        prefix="bioextract-rhea-batch-",
-        suffix=".parquet",
-        delete=False,
-    ) as handle:
-        file_batch = Path(handle.name)
-    try:
-        frame.write_parquet(file_batch)
-        connection.execute(
-            f'INSERT INTO "{table_name}" SELECT * FROM read_parquet(?)',
-            [str(file_batch)],
+    while row_batch := tuple(islice(rows_iterator, _RHEA_INSERT_BATCH_ROWS)):
+        frame = pl.DataFrame(
+            row_batch,
+            schema=columns,
+            orient="row",
+            infer_schema_length=None,
         )
-    finally:
-        file_batch.unlink(missing_ok=True)
+        with tempfile.NamedTemporaryFile(
+            prefix="bioextract-rhea-batch-",
+            suffix=".parquet",
+            delete=False,
+        ) as handle:
+            file_batch = Path(handle.name)
+        try:
+            frame.write_parquet(file_batch)
+            connection.execute(
+                f'INSERT INTO "{table_name}" SELECT * FROM read_parquet(?)',
+                [str(file_batch)],
+            )
+        finally:
+            file_batch.unlink(missing_ok=True)
 
 
 def _remove_staging_files(staging: Path) -> None:

@@ -475,6 +475,79 @@ def test_grouped_selection_resolves_unique_ids_once_and_reuses_mapping(
     )
 
 
+def test_selection_relations_share_one_compact_anchor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = _write_release(tmp_path / "release")
+    path = tmp_path / "rhea.duckdb"
+    RheaDatabase.from_files(release).write_duckdb(path)
+    input_table_calls: list[tuple[tuple[str, str], ...]] = []
+    original_create_input_table = rhea_query._create_input_table  # pyright: ignore[reportPrivateUsage]
+
+    def counted_create_input_table(
+        connection: duckdb.DuckDBPyConnection,
+        rows: tuple[rhea_query._InputRow, ...],  # pyright: ignore[reportPrivateUsage]
+    ) -> None:
+        input_table_calls.append(
+            tuple((row.input_id, row.lookup_value) for row in rows)
+        )
+        original_create_input_table(connection, rows)
+
+    monkeypatch.setattr(
+        rhea_query,
+        "_create_input_table",
+        counted_create_input_table,
+    )
+    selection = RheaDatabase.from_duckdb(path).select_reactions(
+        ["CHEBI:1"],
+        namespace="chebi",
+    )
+
+    selection.matches().collect()
+    selection.reactions().collect()
+    selection.participants().collect()
+    selection.unmatched_ids().collect()
+
+    assert input_table_calls == [(("CHEBI:1", "CHEBI:1"),)]
+
+
+def test_empty_anchor_skips_downstream_selection_registration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = _write_release(tmp_path / "release")
+    path = tmp_path / "rhea.duckdb"
+    RheaDatabase.from_files(release).write_duckdb(path)
+    selected_table_calls = 0
+    original_create_selected_table = rhea_query._create_selected_table  # pyright: ignore[reportPrivateUsage]
+
+    def counted_create_selected_table(
+        connection: duckdb.DuckDBPyConnection,
+        matches: pl.DataFrame,
+        *,
+        grouped: bool,
+    ) -> None:
+        nonlocal selected_table_calls
+        selected_table_calls += 1
+        original_create_selected_table(connection, matches, grouped=grouped)
+
+    monkeypatch.setattr(
+        rhea_query,
+        "_create_selected_table",
+        counted_create_selected_table,
+    )
+    selection = RheaDatabase.from_duckdb(path).select_reactions(
+        ["CHEBI:999"],
+        namespace="chebi",
+    )
+
+    selection.reactions().collect()
+    selection.participants().collect()
+
+    assert selected_table_calls == 0
+
+
 @pytest.mark.parametrize(
     ("namespace", "input_id"),
     [

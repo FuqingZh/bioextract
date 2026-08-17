@@ -9,13 +9,17 @@ import zipfile
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from threading import Lock
 from typing import Any, Literal
 
 import duckdb
 import polars as pl
 from polars._typing import SchemaDict
 
-from bioextract._lazy import register_deferred_frame_source
+from bioextract._lazy import (
+    _RelationScanRequest,  # pyright: ignore[reportPrivateUsage]  # typed source boundary
+    register_replayable_source,
+)
 from bioextract._publication import (
     DuckDBWriteResult,
     validate_duckdb_metadata_v2,
@@ -798,6 +802,16 @@ def open_publication(path: Path) -> MetabolicPublication:
 
 
 @dataclass(slots=True)
+class _SelectionState:
+    """Shared compact state for copies of one metabolic selection."""
+
+    lock: Lock = field(default_factory=Lock)
+    matches_unique: pl.DataFrame | None = None
+    matches: pl.DataFrame | None = None
+    unmatched_unique: pl.DataFrame | None = None
+
+
+@dataclass(slots=True)
 class KEGGMetabolicSelection:
     """Deferred reaction-centered selection over a metabolic publication.
 
@@ -818,10 +832,12 @@ class KEGGMetabolicSelection:
     group_ids: tuple[str, ...]
     namespace: KEGGMetabolicNamespace
     include_obsolete: bool = False
-    _matches_unique: pl.DataFrame | None = field(default=None, init=False, repr=False)
-    _matches: pl.DataFrame | None = field(default=None, init=False, repr=False)
-    _lineage: pl.DataFrame | None = field(default=None, init=False, repr=False)
-    _unmatched_unique: pl.DataFrame | None = field(default=None, init=False, repr=False)
+    _state: _SelectionState = field(
+        default_factory=_SelectionState,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     @classmethod
     def from_ids(
@@ -928,30 +944,41 @@ class KEGGMetabolicSelection:
         """
         snapshot = copy.copy(self)
         prefix = ["group_id"] if self.is_grouped else []
-        return register_deferred_frame_source(
-            schema=_selection_schema(
-                prefix
-                + [
-                    "input_id",
-                    "input_namespace",
-                    "match_type",
-                    "entity_type",
-                    "entity_id",
-                ]
+        columns = prefix + [
+            "input_id",
+            "input_namespace",
+            "match_type",
+            "entity_type",
+            "entity_id",
+        ]
+        schema = _selection_schema(columns)
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda request: _iter_frame_batches(
+                snapshot._eager_matches(), schema=schema, request=request
             ),
-            frame=lambda: snapshot._eager_matches(),
+            is_pure=True,
         )
 
     def _eager_matches(self) -> pl.DataFrame:
-        if self._matches is not None:
-            return self._matches
-        matches = self._resolve_unique_matches()
-        self._matches = self._expand_groups(matches)
-        return self._matches
+        with self._state.lock:
+            if self._state.matches is not None:
+                return self._state.matches.clone()
+            if self._state.matches_unique is None:
+                self._state.matches_unique = self._resolve_unique_matches_uncached()
+            matches = self._expand_groups(self._state.matches_unique)
+            self._state.matches = matches
+            return matches.clone()
 
     def _resolve_unique_matches(self) -> pl.DataFrame:
-        if self._matches_unique is not None:
-            return self._matches_unique
+        with self._state.lock:
+            if self._state.matches_unique is not None:
+                return self._state.matches_unique.clone()
+            result = self._resolve_unique_matches_uncached()
+            self._state.matches_unique = result
+            return result.clone()
+
+    def _resolve_unique_matches_uncached(self) -> pl.DataFrame:
         ns = self.namespace
         if ns not in NAMESPACES:
             raise ValueError(
@@ -969,18 +996,17 @@ class KEGGMetabolicSelection:
             }
         )
         if not self.input_ids:
-            self._matches_unique = _empty(columns)
-            return self._matches_unique
+            return _empty(columns)
 
         with duckdb.connect(str(self.publication.path), read_only=True) as connection:
             _create_selection_input_table(connection, self.input_ids)
-            self._matches_unique = (
+            result = (
                 self._query_unique_matches(connection)
                 .cast(columns)
                 .unique()
                 .sort(list(columns))
             )
-        return self._matches_unique
+        return result
 
     def _query_unique_matches(
         self, connection: duckdb.DuckDBPyConnection
@@ -1173,35 +1199,27 @@ class KEGGMetabolicSelection:
             .sort("group_id", *frame.columns)
         )
 
-    def _reaction_lineage(self) -> pl.DataFrame:
-        if self._lineage is not None:
-            return self._lineage
-        matches = self._eager_matches()
+    def _relation_schema(self, table: str) -> SchemaDict:
         prefix = ["group_id"] if self.is_grouped else []
-        schema = pl.Schema(
-            dict.fromkeys(
-                (
-                    *prefix,
-                    "input_id",
-                    "input_namespace",
-                    "anchor_type",
-                    "anchor_id",
-                    "reaction_id",
-                ),
-                pl.String,
-            )
+        columns = (
+            prefix
+            + [
+                "input_id",
+                "input_namespace",
+                "anchor_type",
+                "anchor_id",
+            ]
+            + _table_columns(self.publication, table)
         )
-        if matches.is_empty():
-            self._lineage = _empty(schema)
-            return self._lineage
+        return _selection_schema(columns)
 
-        entity_types = set(matches["entity_type"].to_list())
+    def _reaction_lineage_query(self, entity_types: set[str]) -> str:
         clauses = [
             """
             SELECT
-                selected.group_id,
-                selected.input_id,
-                selected.input_namespace,
+                selected.group_id AS group_id,
+                selected.input_id AS input_id,
+                selected.input_namespace AS input_namespace,
                 selected.entity_type AS anchor_type,
                 selected.entity_id AS anchor_id,
                 selected.entity_id AS reaction_id
@@ -1278,41 +1296,166 @@ class KEGGMetabolicSelection:
                 WHERE selected.entity_type = 'module'
                 """
             )
+        return f"""
+            SELECT DISTINCT
+                group_id,
+                input_id,
+                input_namespace,
+                anchor_type,
+                anchor_id,
+                reaction_id
+            FROM ({" UNION ALL ".join(clauses)}) AS _reaction_lineage
+        """
 
-        with duckdb.connect(str(self.publication.path), read_only=True) as connection:
-            _create_selected_anchor_table(connection, matches)
-            lineage = _query_frame(
-                connection,
-                f"""
-                SELECT DISTINCT
-                    group_id AS "group_id",
-                    input_id AS "input_id",
-                    input_namespace AS "input_namespace",
-                    anchor_type AS anchor_type,
-                    anchor_id AS anchor_id,
-                    reaction_id AS reaction_id
-                FROM ({" UNION ALL ".join(clauses)})
-                ORDER BY group_id, input_id, anchor_type, anchor_id, reaction_id
-                """,
-            )
-        self._lineage = (
-            lineage.select(*schema).cast(schema)
-            if self.is_grouped
-            else lineage.drop("group_id").select(*schema).cast(schema)
-        )
-        return self._lineage
-
-    def _extract(self, table: str, join_column: str) -> pl.DataFrame:
+    def _iter_relation_batches(
+        self,
+        table: str,
+        join_column: str,
+        *,
+        request: _RelationScanRequest,
+    ) -> Iterator[pl.DataFrame]:
         self._require(table)
-        lineage = self._reaction_lineage()
-        if lineage.is_empty():
-            return lineage
-        with duckdb.connect(str(self.publication.path), read_only=True) as con:
-            frame = _query_frame(con, f"SELECT * FROM {table}")
-        result = lineage.join(
-            frame, left_on="reaction_id", right_on=join_column, how="inner"
+        matches = self._eager_matches()
+        if matches.is_empty():
+            return
+        schema = self._relation_schema(table)
+        requested = _requested_columns(request.columns, schema)
+        connection = duckdb.connect(str(self.publication.path), read_only=True)
+        reader: Any = None
+        try:
+            _create_selected_anchor_table(connection, matches)
+            lineage = self._reaction_lineage_query(
+                set(matches["entity_type"].to_list())
+            )
+            relation_columns = _table_columns(self.publication, table)
+            projection = (
+                [
+                    "lineage.group_id AS group_id",
+                    "lineage.input_id AS input_id",
+                    "lineage.input_namespace AS input_namespace",
+                    "lineage.anchor_type AS anchor_type",
+                    "lineage.anchor_id AS anchor_id",
+                ]
+                if self.is_grouped
+                else [
+                    "lineage.input_id AS input_id",
+                    "lineage.input_namespace AS input_namespace",
+                    "lineage.anchor_type AS anchor_type",
+                    "lineage.anchor_id AS anchor_id",
+                ]
+            )
+            projection.extend(
+                f'relation."{name}" AS "{name}"' for name in relation_columns
+            )
+            query = f"""
+                SELECT {", ".join(projection)}
+                FROM ({lineage}) AS lineage
+                JOIN "{table}" AS relation
+                  ON relation."{join_column}" = lineage.reaction_id
+            """
+            result = connection.execute(_project_query(query, requested))
+            reader = _arrow_reader(result, request.effective_batch_size)
+            for record_batch in reader:
+                frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+                yield frame.cast(  # type: ignore[reportArgumentType]
+                    {name: schema[name] for name in frame.columns}, strict=False
+                )
+        finally:
+            if reader is not None:
+                close = getattr(reader, "close", None)
+                if close is not None:
+                    close()
+            connection.close()
+
+    def _relation_lazy(self, table: str, join_column: str) -> pl.LazyFrame:
+        self._require(table)
+        snapshot = copy.copy(self)
+        return register_replayable_source(
+            schema=self._relation_schema(table),
+            batches=lambda request: snapshot._iter_relation_batches(
+                table,
+                join_column,
+                request=request,
+            ),
+            is_pure=True,
         )
-        return result
+
+    def _iter_compound_batches(
+        self, *, request: _RelationScanRequest
+    ) -> Iterator[pl.DataFrame]:
+        self._require("reaction_participant", "compound")
+        matches = self._eager_matches()
+        prefix = ["group_id"] if self.is_grouped else []
+        participant_columns = (
+            prefix
+            + ["input_id", "input_namespace", "anchor_type", "anchor_id"]
+            + _table_columns(self.publication, "reaction_participant")
+        )
+        output_columns = participant_columns + [
+            column
+            for column in _table_columns(self.publication, "compound")
+            if column != "compound_id"
+        ]
+        schema = _selection_schema(output_columns)
+        if matches.is_empty():
+            return
+        requested = _requested_columns(request.columns, schema)
+        connection = duckdb.connect(str(self.publication.path), read_only=True)
+        reader: Any = None
+        try:
+            _create_selected_anchor_table(connection, matches)
+            lineage = self._reaction_lineage_query(
+                set(matches["entity_type"].to_list())
+            )
+            projection = (
+                [
+                    "lineage.group_id AS group_id",
+                    "lineage.input_id AS input_id",
+                    "lineage.input_namespace AS input_namespace",
+                    "lineage.anchor_type AS anchor_type",
+                    "lineage.anchor_id AS anchor_id",
+                ]
+                if self.is_grouped
+                else [
+                    "lineage.input_id AS input_id",
+                    "lineage.input_namespace AS input_namespace",
+                    "lineage.anchor_type AS anchor_type",
+                    "lineage.anchor_id AS anchor_id",
+                ]
+            )
+            projection.extend(
+                f'participant."{name}" AS "{name}"'
+                for name in _table_columns(self.publication, "reaction_participant")
+            )
+            projection.extend(
+                f'compound."{name}" AS "{name}"'
+                for name in _table_columns(self.publication, "compound")
+                if name != "compound_id"
+            )
+            query = f"""
+                SELECT {", ".join(projection)}
+                FROM ({lineage}) AS lineage
+                JOIN reaction_participant AS participant
+                  ON participant.reaction_id = lineage.reaction_id
+                 AND participant.participant_namespace = 'kegg_compound'
+                LEFT JOIN compound AS compound
+                  ON compound.compound_id = participant.participant_id
+            """
+            reader = _arrow_reader(
+                connection.execute(_project_query(query, requested)),
+                request.effective_batch_size,
+            )
+            for record_batch in reader:
+                frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+                yield frame.cast(  # type: ignore[reportArgumentType]
+                    {name: schema[name] for name in frame.columns}, strict=False
+                )
+        finally:
+            if reader is not None:
+                close = getattr(reader, "close", None)
+                if close is not None:
+                    close()
+            connection.close()
 
     def reactions(self) -> pl.LazyFrame:
         """Return selected reactions with input and anchor lineage lazily.
@@ -1323,18 +1466,7 @@ class KEGGMetabolicSelection:
             ... ).collect_schema().names()
             ['reaction_id', 'equation']
         """
-        snapshot = copy.copy(self)
-        return register_deferred_frame_source(
-            schema=_selection_schema(
-                (["group_id"] if self.is_grouped else [])
-                + ["input_id", "input_namespace", "anchor_type", "anchor_id"]
-                + _table_columns(self.publication, "reaction")
-            ),
-            frame=lambda: snapshot._eager_reactions(),
-        )
-
-    def _eager_reactions(self) -> pl.DataFrame:
-        return self._extract("reaction", "reaction_id")
+        return self._relation_lazy("reaction", "reaction_id")
 
     def participants(self) -> pl.LazyFrame:
         """Return ordered left/right participants lazily.
@@ -1345,18 +1477,7 @@ class KEGGMetabolicSelection:
             ... ).collect_schema().names()
             ['reaction_id', 'side', 'participant_id']
         """
-        snapshot = copy.copy(self)
-        return register_deferred_frame_source(
-            schema=_selection_schema(
-                (["group_id"] if self.is_grouped else [])
-                + ["input_id", "input_namespace", "anchor_type", "anchor_id"]
-                + _table_columns(self.publication, "reaction_participant")
-            ),
-            frame=lambda: snapshot._eager_participants(),
-        )
-
-    def _eager_participants(self) -> pl.DataFrame:
-        return self._extract("reaction_participant", "reaction_id")
+        return self._relation_lazy("reaction_participant", "reaction_id")
 
     def enzymes(self) -> pl.LazyFrame:
         """Return EC links owned by the selected reactions lazily.
@@ -1367,18 +1488,7 @@ class KEGGMetabolicSelection:
             ... ).collect_schema().names()
             ['reaction_id', 'ec_number']
         """
-        snapshot = copy.copy(self)
-        return register_deferred_frame_source(
-            schema=_selection_schema(
-                (["group_id"] if self.is_grouped else [])
-                + ["input_id", "input_namespace", "anchor_type", "anchor_id"]
-                + _table_columns(self.publication, "reaction_enzyme")
-            ),
-            frame=lambda: snapshot._eager_enzymes(),
-        )
-
-    def _eager_enzymes(self) -> pl.DataFrame:
-        return self._extract("reaction_enzyme", "reaction_id")
+        return self._relation_lazy("reaction_enzyme", "reaction_id")
 
     def kos(self) -> pl.LazyFrame:
         """Return KO links owned by the selected reactions lazily.
@@ -1389,18 +1499,7 @@ class KEGGMetabolicSelection:
             ... ).collect_schema().names()
             ['reaction_id', 'ko_id']
         """
-        snapshot = copy.copy(self)
-        return register_deferred_frame_source(
-            schema=_selection_schema(
-                (["group_id"] if self.is_grouped else [])
-                + ["input_id", "input_namespace", "anchor_type", "anchor_id"]
-                + _table_columns(self.publication, "reaction_ko")
-            ),
-            frame=lambda: snapshot._eager_kos(),
-        )
-
-    def _eager_kos(self) -> pl.DataFrame:
-        return self._extract("reaction_ko", "reaction_id")
+        return self._relation_lazy("reaction_ko", "reaction_id")
 
     def modules(self) -> pl.LazyFrame:
         """Return module memberships of the selected reactions lazily.
@@ -1411,18 +1510,7 @@ class KEGGMetabolicSelection:
             ... ).collect_schema().names()
             ['reaction_id', 'module_id']
         """
-        snapshot = copy.copy(self)
-        return register_deferred_frame_source(
-            schema=_selection_schema(
-                (["group_id"] if self.is_grouped else [])
-                + ["input_id", "input_namespace", "anchor_type", "anchor_id"]
-                + _table_columns(self.publication, "reaction_module")
-            ),
-            frame=lambda: snapshot._eager_modules(),
-        )
-
-    def _eager_modules(self) -> pl.DataFrame:
-        return self._extract("reaction_module", "reaction_id")
+        return self._relation_lazy("reaction_module", "reaction_id")
 
     def compounds(self) -> pl.LazyFrame:
         """Return compound participants and facts lazily.
@@ -1433,7 +1521,6 @@ class KEGGMetabolicSelection:
             ... ).collect_schema().names()
             ['participant_id', 'name']
         """
-        snapshot = copy.copy(self)
         prefix = ["group_id"] if self.is_grouped else []
         participant_columns = (
             prefix
@@ -1445,23 +1532,12 @@ class KEGGMetabolicSelection:
             for column in _table_columns(self.publication, "compound")
             if column not in {"compound_id"}
         ]
-        return register_deferred_frame_source(
-            schema=_selection_schema(columns),
-            frame=lambda: snapshot._eager_compounds(),
-        )
-
-    def _eager_compounds(self) -> pl.DataFrame:
-        participants = self._eager_participants().filter(
-            pl.col("participant_namespace") == "kegg_compound"
-        )
-        self._require("compound")
-        with duckdb.connect(str(self.publication.path), read_only=True) as con:
-            compounds = _query_frame(con, "SELECT * FROM compound")
-        return participants.join(
-            compounds,
-            left_on="participant_id",
-            right_on="compound_id",
-            how="left",
+        snapshot = copy.copy(self)
+        schema = _selection_schema(columns)
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda request: snapshot._iter_compound_batches(request=request),
+            is_pure=True,
         )
 
     def pathway_memberships(self) -> pl.LazyFrame:
@@ -1473,18 +1549,7 @@ class KEGGMetabolicSelection:
             ... ).collect_schema().names()
             ['reaction_id', 'pathway_id']
         """
-        snapshot = copy.copy(self)
-        return register_deferred_frame_source(
-            schema=_selection_schema(
-                (["group_id"] if self.is_grouped else [])
-                + ["input_id", "input_namespace", "anchor_type", "anchor_id"]
-                + _table_columns(self.publication, "reaction_pathway")
-            ),
-            frame=lambda: snapshot._eager_pathway_memberships(),
-        )
-
-    def _eager_pathway_memberships(self) -> pl.DataFrame:
-        return self._extract("reaction_pathway", "reaction_id")
+        return self._relation_lazy("reaction_pathway", "reaction_id")
 
     def cross_references(self) -> pl.LazyFrame:
         """Return compound and reaction cross-references lazily.
@@ -1495,7 +1560,6 @@ class KEGGMetabolicSelection:
             ... ).collect_schema().names()
             ['namespace', 'external_id']
         """
-        snapshot = copy.copy(self)
         columns = ["group_id"] if self.is_grouped else []
         columns += ["input_id", "input_namespace", "anchor_type", "anchor_id"]
         columns += _table_columns(self.publication, "reaction_participant")
@@ -1512,35 +1576,122 @@ class KEGGMetabolicSelection:
                     for column in _table_columns(self.publication, table)
                     if column not in columns
                 ]
-        return register_deferred_frame_source(
-            schema=_selection_schema(dict.fromkeys(columns)),
-            frame=lambda: snapshot._eager_cross_references(),
+        snapshot = copy.copy(self)
+        schema = _selection_schema(dict.fromkeys(columns))
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda request: snapshot._iter_cross_reference_batches(
+                schema=schema, request=request
+            ),
+            is_pure=True,
         )
 
-    def _eager_cross_references(self) -> pl.DataFrame:
-        frames: list[pl.DataFrame] = []
-        compounds = self._eager_compounds()
-        reactions = self._eager_reactions()
-        with duckdb.connect(str(self.publication.path), read_only=True) as con:
-            if "compound_cross_reference" in self.publication.tables:
-                frames.append(
-                    compounds.join(
-                        _query_frame(con, "SELECT * FROM compound_cross_reference"),
-                        left_on="participant_id",
-                        right_on="compound_id",
-                        how="inner",
-                    )
+    def _iter_cross_reference_batches(
+        self,
+        *,
+        schema: SchemaDict,
+        request: _RelationScanRequest,
+    ) -> Iterator[pl.DataFrame]:
+        matches = self._eager_matches()
+        if matches.is_empty():
+            return
+        requested = _requested_columns(request.columns, schema)
+        branches: list[str] = []
+        base_columns = ["group_id"] if self.is_grouped else []
+        base_columns += [
+            "input_id",
+            "input_namespace",
+            "anchor_type",
+            "anchor_id",
+        ]
+        participant_columns = _table_columns(self.publication, "reaction_participant")
+        compound_columns = (
+            [
+                name
+                for name in _table_columns(self.publication, "compound")
+                if name != "compound_id"
+            ]
+            if "compound" in self.publication.tables
+            else []
+        )
+        xref_columns = {
+            name
+            for table in ("compound_cross_reference", "reaction_cross_reference")
+            if table in self.publication.tables
+            for name in _table_columns(self.publication, table)
+        }
+        if "compound_cross_reference" in self.publication.tables:
+            self._require(
+                "reaction_participant", "compound", "compound_cross_reference"
+            )
+            source_columns = (
+                set(base_columns)
+                | set(participant_columns)
+                | set(compound_columns)
+                | xref_columns
+            )
+            select = [
+                f'{"lineage" if name in base_columns else "participant" if name in participant_columns else "compound" if name in compound_columns else "xref"}."{name}" AS "{name}"'
+                if name in source_columns
+                else f'NULL AS "{name}"'
+                for name in schema
+            ]
+            branches.append(
+                f"""
+                SELECT {", ".join(select)}
+                FROM ({self._reaction_lineage_query(set(matches["entity_type"].to_list()))}) AS lineage
+                JOIN reaction_participant AS participant
+                  ON participant.reaction_id = lineage.reaction_id
+                 AND participant.participant_namespace = 'kegg_compound'
+                LEFT JOIN compound AS compound
+                  ON compound.compound_id = participant.participant_id
+                JOIN compound_cross_reference AS xref
+                  ON xref.compound_id = participant.participant_id
+                """
+            )
+        if "reaction_cross_reference" in self.publication.tables:
+            self._require("reaction", "reaction_cross_reference")
+            source_columns = set(base_columns) | set(
+                _table_columns(self.publication, "reaction_cross_reference")
+            )
+            select = [
+                f'{"lineage" if name in base_columns else "xref"}."{name}" AS "{name}"'
+                if name in source_columns
+                else f'NULL AS "{name}"'
+                for name in schema
+            ]
+            branches.append(
+                f"""
+                SELECT {", ".join(select)}
+                FROM ({self._reaction_lineage_query(set(matches["entity_type"].to_list()))}) AS lineage
+                JOIN reaction_cross_reference AS xref
+                  ON xref.reaction_id = lineage.reaction_id
+                """
+            )
+        if not branches:
+            return
+        connection = duckdb.connect(str(self.publication.path), read_only=True)
+        reader: Any = None
+        try:
+            _create_selected_anchor_table(connection, matches)
+            query = " UNION ALL ".join(branches)
+            # The lineage CTEs above reference the temporary anchor table.  Keep
+            # the final projection at the declared cross-reference schema.
+            reader = _arrow_reader(
+                connection.execute(_project_query(query, requested)),
+                request.effective_batch_size,
+            )
+            for record_batch in reader:
+                frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+                yield frame.cast(  # type: ignore[reportArgumentType]
+                    {name: schema[name] for name in frame.columns}, strict=False
                 )
-            if "reaction_cross_reference" in self.publication.tables:
-                frames.append(
-                    reactions.join(
-                        _query_frame(con, "SELECT * FROM reaction_cross_reference"),
-                        left_on="reaction_id",
-                        right_on="reaction_id",
-                        how="inner",
-                    )
-                )
-        return pl.concat(frames, how="diagonal_relaxed") if frames else pl.DataFrame()
+        finally:
+            if reader is not None:
+                close = getattr(reader, "close", None)
+                if close is not None:
+                    close()
+            connection.close()
 
     def unmatched_ids(self) -> pl.LazyFrame:
         """Return normalized inputs that resolved to no canonical anchor lazily.
@@ -1551,27 +1702,34 @@ class KEGGMetabolicSelection:
             ... ).collect_schema().names()
             ['input_id', 'reason']
         """
-        snapshot = copy.copy(self)
         prefix = ["group_id"] if self.is_grouped else []
-        return register_deferred_frame_source(
-            schema=_selection_schema(prefix + ["input_id", "reason"]),
-            frame=lambda: snapshot._eager_unmatched_ids(),
+        schema = _selection_schema(prefix + ["input_id", "reason"])
+        snapshot = copy.copy(self)
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda request: _iter_frame_batches(
+                snapshot._eager_unmatched_ids(), schema=schema, request=request
+            ),
+            is_pure=True,
         )
 
     def _eager_unmatched_ids(self) -> pl.DataFrame:
         return self._expand_groups(self._resolve_unique_unmatched())
 
     def _resolve_unique_unmatched(self) -> pl.DataFrame:
-        if self._unmatched_unique is not None:
-            return self._unmatched_unique
+        with self._state.lock:
+            if self._state.unmatched_unique is not None:
+                return self._state.unmatched_unique.clone()
         matched = set(self._resolve_unique_matches()["input_id"].to_list())
         missing = tuple(
             input_id for input_id in self.input_ids if input_id not in matched
         )
         schema = {"input_id": pl.String, "reason": pl.String}
         if not missing:
-            self._unmatched_unique = _empty(schema)
-            return self._unmatched_unique
+            result = _empty(schema)
+            with self._state.lock:
+                self._state.unmatched_unique = result
+            return result.clone()
 
         reasons = dict.fromkeys(missing, "not_found")
         if self.namespace == "ec" and "enzyme" in self.publication.tables:
@@ -1592,14 +1750,17 @@ class KEGGMetabolicSelection:
                 elif status == "transferred":
                     reasons[str(input_id)] = "invalid_canonical_target"
 
-        self._unmatched_unique = pl.DataFrame(
+        result = pl.DataFrame(
             {
                 "input_id": missing,
                 "reason": tuple(reasons[input_id] for input_id in missing),
             },
             schema=schema,
         )
-        return self._unmatched_unique
+        with self._state.lock:
+            if self._state.unmatched_unique is None:
+                self._state.unmatched_unique = result
+            return self._state.unmatched_unique.clone()
 
 
 def _create_selection_input_table(
@@ -1639,6 +1800,47 @@ def _create_selected_anchor_table(
             for row in matches.iter_rows(named=True)
         ],
     )
+
+
+def _iter_frame_batches(
+    frame: pl.DataFrame,
+    *,
+    schema: SchemaDict,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    requested = _requested_columns(request.columns, schema)
+    if requested is not None:
+        frame = frame.select(requested)
+    if request.predicate is not None:
+        frame = frame.filter(request.predicate)
+    if request.n_rows is not None:
+        frame = frame.head(request.n_rows)
+    batch_size = request.effective_batch_size
+    for offset in range(0, frame.height, batch_size):
+        yield frame.slice(offset, batch_size)
+
+
+def _requested_columns(
+    columns: tuple[str, ...] | None, schema: SchemaDict
+) -> list[str] | None:
+    if columns is None:
+        return None
+    selected = [name for name in columns if name in schema]
+    return selected or None
+
+
+def _project_query(query: str, columns: list[str] | None) -> str:
+    if not columns:
+        return query
+    projection = ", ".join(f'"{name}"' for name in columns)
+    return f"SELECT {projection} FROM ({query}) AS _bioextract_relation"
+
+
+def _arrow_reader(result: Any, batch_size: int) -> Any:
+    to_arrow_reader = getattr(result, "to_arrow_reader", None)
+    if to_arrow_reader is not None:
+        return to_arrow_reader(batch_size)
+    return result.fetch_record_batch(rows_per_batch=batch_size)
 
 
 def _normalize_input(value: str, namespace: str) -> str:

@@ -249,9 +249,22 @@ def test_grouped_selection_resolves_unique_ids_once_then_expands(
     assert empty_selection.group_ids == ("empty",)
     assert empty_selection.matches().collect().columns[0] == "group_id"
     assert empty_selection.unmatched_ids().collect().columns[0] == "group_id"
+
+    def fail_reaction_lineage(
+        _selection: KEGGMetabolicSelection,
+        _entity_types: set[str],
+    ) -> str:
+        raise AssertionError("empty selection opened a downstream reaction query")
+
+    monkeypatch.setattr(
+        KEGGMetabolicSelection,
+        "_reaction_lineage_query",
+        fail_reaction_lineage,
+    )
+    assert empty_selection.reactions().collect().is_empty()
     expected_ids = ("C00001", "C99999")
     assert calls
-    assert all(queried == expected_ids for queried in calls)
+    assert calls == [expected_ids]
 
 
 def test_grouped_selection_rejects_colliding_normalized_group_ids(

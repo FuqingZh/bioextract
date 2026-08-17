@@ -1,6 +1,6 @@
 # bioextract Documentation
 
-Version: v1.4
+Version: v1.5
 Date: 2026-08-14
 Status: current
 
@@ -39,7 +39,7 @@ when a domain does not yet have a dedicated architecture document.
 | Area | Architecture or contract | Test standard | Benchmark |
 | --- | --- | --- | --- |
 | Repository purpose and boundaries | [Domain Access Architecture](architecture/20260729-v1.0-domain-access-architecture.md) | [Repository test standard](testing/README.md) | — |
-| Cross-resource lazy relations | [Lazy Domain Query Convergence Plan](implementation-plans/20260812-v1.0-lazy-domain-query-convergence-implementation-plan.md) | [Repository test standard](testing/README.md) | [joint_omics 23362 baseline](benchmarks/20260813-v1.0-joint-omics-23362-lazy-relation-baseline.md) |
+| Cross-resource lazy relations and execution performance | [Lazy Domain Query Convergence Plan](implementation-plans/20260812-v1.0-lazy-domain-query-convergence-implementation-plan.md); [Execution and Publication Performance Convergence Plan](implementation-plans/20260814-v1.0-cross-resource-execution-performance-convergence-implementation-plan.md) | [Repository test standard](testing/README.md) | [joint_omics 23362 baseline](benchmarks/20260813-v1.0-joint-omics-23362-lazy-relation-baseline.md); [P2](benchmarks/20260814-v1.0-cross-resource-p2-candidates.md), [P3](benchmarks/20260814-v1.0-cross-resource-p3-selected-lookup.md), [P4](benchmarks/20260814-v1.0-cross-resource-p4-publication-loader.md), [v2-compatible joint_omics experiment](benchmarks/20260814-v1.0-cross-resource-p5-v2-compatible-joint-omics.md) |
 | Shared publication output | [Materialized Dataset Contract](architecture/tidy-dataset-contract.md); [metadata v2 declarative-provenance amendment](implementation-plans/20260813-v1.0-publication-metadata-v2-migration-plan.md) | [Repository test standard](testing/README.md) | — |
 | ChEBI and ChemOnt | [ChEBIDatabase](architecture/chebi-db.md) | [ChEBIDatabase](testing/chebi-db.md) | — |
 | GO ontology and KEGG BRITE | [GO and KEGG Tidy](architecture/go-kegg-tidy.md) | [GO and KEGG Tidy](testing/go-kegg-tidy.md) | — |
@@ -84,7 +84,22 @@ benchmark gate that precedes any UniProt idmapping selected-ID API. Its final
 repository gate passed with 781 tests. The production-scale
 [joint_omics 23362 baseline](benchmarks/20260813-v1.0-joint-omics-23362-lazy-relation-baseline.md)
 now supplies that workload evidence, confirms shared-execution and physical
-pushdown needs, and keeps the selected-ID public API shape undecided.
+pushdown needs, and closes the predecessor's evidence gap without rewriting its
+historical decision.
+
+The accepted
+[Execution and Publication Performance Convergence Plan](implementation-plans/20260814-v1.0-cross-resource-execution-performance-convergence-implementation-plan.md)
+is the follow-up implementation authority. It defines one private
+request-aware scan contract with native Polars, DuckDB-to-Arrow,
+parser-to-Arrow, and explicit-materialization strategies; compact shared
+selection anchors; UniProt idmapping selected access; publication loader
+convergence; and executable diagnostic, behavior, benchmark, and gate
+self-protection checks. Its P0-P4 implementation slices and bounded P5
+repository gate are complete. The P5a Rhea-anchor follow-up on a temporary
+v2-compatible joint_omics tree records lower wall time, CPU, and RSS with
+stable biological outputs; formal publication and downstream contract work
+remain separately authorized. No package or formal publication release is
+implied.
 
 The implemented
 [GO Ancestor Projection And Publication Query Pushdown Plan](implementation-plans/20260810-v1.0-go-ancestor-query-implementation-plan.md)

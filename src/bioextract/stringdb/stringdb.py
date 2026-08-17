@@ -3,14 +3,17 @@ from __future__ import annotations
 import copy
 import logging
 import os
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import polars as pl
 from polars._typing import SchemaDict
 
-from bioextract._lazy import register_deferred_frame_source
+from bioextract._lazy import (
+    _RelationScanRequest,  # pyright: ignore[reportPrivateUsage]  # typed source boundary
+    register_replayable_source,
+)
 from bioextract._shared import (
     create_group_input_frames,
     create_input_id_frame,
@@ -458,10 +461,6 @@ class StringSelection:
     _df_groups: pl.DataFrame | None = field(repr=False)
     namespace: StringNamespace = "alias"
     min_combined_score: int = 0
-    _df_protein_map: pl.DataFrame | None = field(default=None, repr=False)
-    _df_unmapped: pl.DataFrame | None = field(default=None, repr=False)
-    _df_string_ids: pl.DataFrame | None = field(default=None, repr=False)
-    _df_edges: pl.DataFrame | None = field(default=None, repr=False)
 
     @property
     def is_grouped(self) -> bool:
@@ -515,16 +514,15 @@ class StringSelection:
     def with_min_combined_score(self, min_combined_score: int) -> StringSelection:
         """Create a new selection with a different minimum STRING score.
 
-        Cached mapping-related frames are reused. Edge-related caches are not
-        reused because the score threshold changes the edge result.
+        The returned selection captures the immutable input and threshold;
+        each relation remains a replayable lazy plan.
 
         Args:
             min_combined_score: Minimum `combined_score` required for retained
                 STRING edges.
 
         Returns:
-            A new selection sharing cached mapping state with the current
-            selection.
+            A new selection with the same inputs and a new edge threshold.
 
         Examples:
             Remove an edge whose combined score is below 700:
@@ -550,9 +548,6 @@ class StringSelection:
             _df_groups=self._df_groups,
             namespace=self.namespace,
             min_combined_score=int(min_combined_score),
-            _df_protein_map=self._df_protein_map,
-            _df_unmapped=self._df_unmapped,
-            _df_string_ids=self._df_string_ids,
         )
 
     def mappings(self) -> pl.LazyFrame:
@@ -563,113 +558,13 @@ class StringSelection:
             shape: (1, ...)
         """
         snapshot = copy.copy(self)
-        return register_deferred_frame_source(
+        return register_replayable_source(
             schema=self._schema_string_map_result,
-            frame=snapshot._eager_mappings,
+            batches=lambda request: _iter_mapping_batches(
+                snapshot,
+                request=request,
+            ),
         )
-
-    def _eager_mappings(self) -> pl.DataFrame:
-        """Extract the input-to-STRING mapping table for this selection.
-
-        Returns:
-            A materialized table with one of these schemas:
-
-            - single selection: `input_id`, the official STRING protein ID
-              header, `alias`, `source`
-            - grouped selection: `group_id`, followed by the single-selection
-              columns
-
-        Raises:
-            CapabilityError: If this is a direct STRING-ID selection or the
-                aliases resource is unavailable.
-
-        Examples:
-            Resolve a gene name and report the chosen alias source:
-
-            >>> db = STRINGDatabase.from_files(
-            ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
-            ... )
-            >>> db.select_ids(["TP53"]).mappings().collect().to_dicts()
-            [{'input_id': 'TP53', 'string_protein_id': '9606.ENSP0001', 'alias': 'TP53', 'source': 'UniProt_GN_Name'}]
-        """
-        if self.namespace != "alias":
-            raise CapabilityError(
-                "STRING alias mapping requires namespace='alias'; "
-                "direct namespace='string' selections have no aliases relation"
-            )
-        if self.dataset._alias_schema is None:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-            raise CapabilityError("Cannot extract STRING mapping without aliases file")
-        self.dataset._validate_taxon_compatibility()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-
-        if self._df_protein_map is not None:
-            return self._df_protein_map
-
-        if self._df_input_ids.height == 0:
-            self._df_protein_map = pl.DataFrame(schema=self._schema_string_map_result)
-            return self._df_protein_map
-
-        lf_aliases = scan_aliases(
-            self.dataset._alias_schema.file_alias,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-            version=self.dataset.snapshot.parser_version,
-        )
-        lf_input_ids = self._df_input_ids.lazy()
-        df_protein_map = (
-            create_string_mapping_lazy_frame(
-                lf_aliases=lf_aliases,
-                lf_input_ids=lf_input_ids,
-                source_rank_map=self.dataset.source_rank_map,
-                col_string_id_aliases=self.dataset._alias_schema.col_string_id,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-                has_source_aliases=self.dataset._alias_schema.has_source,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-                cols_partition=["input_id", self.dataset._alias_schema.col_string_id],  # pyright: ignore[reportPrivateUsage]
-                cols_sort_prefix=["input_id", self.dataset._alias_schema.col_string_id],  # pyright: ignore[reportPrivateUsage]
-                cols_select_out=[
-                    "input_id",
-                    self.dataset._alias_schema.col_string_id,  # pyright: ignore[reportPrivateUsage]
-                    "alias",
-                    "source",
-                ],
-            )
-            .sort(
-                [
-                    "input_id",
-                    self.dataset._alias_schema.col_string_id,  # pyright: ignore[reportPrivateUsage]
-                    "alias",
-                    "source",
-                ]
-            )
-            .collect()
-        )
-        if self.is_grouped:
-            if self._df_group_membership is None:
-                raise RuntimeError("Grouped STRING selection lacks group membership")
-            df_protein_map = (
-                self._df_group_membership.join(
-                    df_protein_map,
-                    on="input_id",
-                    how="inner",
-                )
-                .select(
-                    [
-                        "group_id",
-                        "input_id",
-                        self.dataset._alias_schema.col_string_id,  # pyright: ignore[reportPrivateUsage]
-                        "alias",
-                        "source",
-                    ]
-                )
-                .sort(
-                    [
-                        "group_id",
-                        "input_id",
-                        self.dataset._alias_schema.col_string_id,  # pyright: ignore[reportPrivateUsage]
-                        "alias",
-                        "source",
-                    ]
-                )
-            )
-        self._df_protein_map = df_protein_map
-
-        return self._df_protein_map
 
     def unmatched_ids(self) -> pl.LazyFrame:
         """Return normalized input IDs that did not map to STRING lazily.
@@ -678,71 +573,32 @@ class StringSelection:
             >>> selection.unmatched_ids().collect()  # doctest: +SKIP
             shape: (..., 1)
         """
-        snapshot = copy.copy(self)
-        return register_deferred_frame_source(
-            schema=dict.fromkeys([*self._col_group_id, "input_id"], pl.String),
-            frame=snapshot._eager_unmatched_ids,
+        if self.namespace == "alias":
+            mapped = _mapping_plan(self)[0].select("input_id").unique()
+        else:
+            if self.dataset.snapshot.file_links is None:
+                raise CapabilityError(
+                    "STRING namespace='string' requires the links resource"
+                )
+            mapped = pl.concat(
+                [
+                    self.dataset.scan_links().select(
+                        pl.col("protein1").alias("input_id")
+                    ),
+                    self.dataset.scan_links().select(
+                        pl.col("protein2").alias("input_id")
+                    ),
+                ]
+            ).unique()
+        input_rows = (
+            self._df_group_membership.lazy()
+            if self.is_grouped and self._df_group_membership is not None
+            else self._df_input_ids.lazy()
         )
-
-    def _eager_unmatched_ids(self) -> pl.DataFrame:
-        """Extract normalized input IDs that were not mapped to STRING IDs.
-
-        Returns:
-            A materialized table with one of these schemas:
-
-            - single selection: `input_id`
-            - grouped selection: `group_id`, `input_id`
-
-            Each row represents a normalized input ID that did not resolve
-            through the aliases table.
-
-        Examples:
-            Report an identifier absent from the aliases fixture:
-
-            >>> db = STRINGDatabase.from_files(
-            ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz"
-            ... )
-            >>> db.select_ids(["MISSING"]).unmatched_ids().collect().to_dicts()
-            [{'input_id': 'MISSING'}]
-        """
-        if self._df_unmapped is None:
-            cols_index = list(self._col_group_id) + ["input_id"]
-            if self.namespace == "alias":
-                df_mapped_input_ids = self._eager_mappings().select("input_id").unique()
-            else:
-                if self.dataset.snapshot.file_links is None:
-                    raise CapabilityError(
-                        "STRING namespace='string' requires the links resource"
-                    )
-                lf_links = self.dataset.scan_links()
-                df_mapped_input_ids = (
-                    pl.concat(
-                        [
-                            lf_links.select(pl.col("protein1").alias("input_id")),
-                            lf_links.select(pl.col("protein2").alias("input_id")),
-                        ]
-                    )
-                    .collect()
-                    .unique()
-                )
-            df_input_rows = self._df_input_ids
-            if self.is_grouped:
-                if self._df_group_membership is None:
-                    raise RuntimeError(
-                        "Grouped STRING selection lacks group membership"
-                    )
-                df_input_rows = self._df_group_membership
-            self._df_unmapped = (
-                df_input_rows.join(
-                    df_mapped_input_ids,
-                    on="input_id",
-                    how="anti",
-                )
-                .select(cols_index)
-                .sort(cols_index)
-            )
-
-        return self._df_unmapped
+        unmatched = input_rows.join(mapped, on="input_id", how="anti")
+        return unmatched.select([*self._col_group_id, "input_id"]).sort(
+            [*self._col_group_id, "input_id"]
+        )
 
     def edges(self) -> pl.LazyFrame:
         """Return the STRING subnetwork induced by selected IDs lazily.
@@ -752,124 +608,184 @@ class StringSelection:
             shape: (1, ...)
         """
         snapshot = copy.copy(self)
-        return register_deferred_frame_source(
+        return register_replayable_source(
             schema=self._schema_edges_result,
-            frame=snapshot._eager_edges,
+            batches=lambda request: _iter_edge_batches(
+                snapshot,
+                request=request,
+            ),
         )
 
-    def _eager_edges(self) -> pl.DataFrame:
-        """Extract the STRING subnetwork induced by the mapped STRING IDs.
 
-        Returns:
-            A materialized table with one of these schemas:
-
-            - single selection: `string_id_a`, `string_id_b`, `combined_score`
-            - grouped selection: `group_id`, followed by the single-selection
-              columns
-
-        Raises:
-            CapabilityError: If the links resource is unavailable.
-            IntegrityError: If reverse or duplicate canonical edges disagree on
-                combined score.
-
-        Examples:
-            Extract the induced edge and its combined score:
-
-            >>> db = STRINGDatabase.from_files(
-            ...     aliases="fixtures/string/9606.protein.aliases.v12.0.txt.gz",
-            ...     links="fixtures/string/9606.protein.links.v12.0.txt.gz",
-            ... )
-            >>> db.select_ids(["TP53", "EGFR"]).edges().collect().to_dicts()
-            [{'string_id_a': '9606.ENSP0001', 'string_id_b': '9606.ENSP0002', 'combined_score': 700}]
-        """
-        if self.dataset.snapshot.file_links is None:
-            raise CapabilityError("Cannot extract STRING edges without links file")
-        self.dataset._validate_taxon_compatibility()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
-        if self._df_edges is not None:
-            return self._df_edges
-
-        col_group_id = list(self._col_group_id)
-        df_string_ids = self._extract_string_ids()
-        if df_string_ids.height == 0:
-            self._df_edges = pl.DataFrame(schema=self._schema_edges_result)
-            return self._df_edges
-        lf_string_ids = df_string_ids.lazy()
-
-        version_link = self.dataset.snapshot.parser_version
-        lf_links = scan_links(self.dataset.snapshot.file_links, version=version_link)
-        validate_required_cols(
-            cols_available=lf_links.collect_schema().names(),
-            cols_required=SCHEMA_LINKS[version_link].keys(),
-            context=f"STRING links file for version {version_link}",
+def _iter_mapping_batches(
+    selection: StringSelection,
+    *,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    lf_mapping, schema, _columns = _mapping_plan(selection)
+    requested = (
+        None
+        if request.columns is None
+        else [name for name in request.columns if name in schema]
+    )
+    if requested:
+        lf_mapping = lf_mapping.select(requested)
+    for frame in lf_mapping.collect_batches(
+        chunk_size=request.effective_batch_size,
+        engine="streaming",
+    ):
+        yield frame.cast(
+            {name: schema[name] for name in frame.columns if name in schema},
+            strict=False,
         )
-        self._df_edges = create_edges_lazy_frame(
-            lf_links=lf_links,
-            lf_string_ids_a=lf_string_ids.rename({"string_id": "_string_id_a"}),
-            lf_string_ids_b=lf_string_ids.rename({"string_id": "_string_id_b"}),
-            min_combined_score=self.min_combined_score,
-            cols_join_left_a="_link_a",
-            cols_join_right_a="_string_id_a",
-            cols_join_left_b=["_link_b", *col_group_id] if col_group_id else "_link_b",
-            cols_join_right_b=["_string_id_b", *col_group_id]
-            if col_group_id
-            else "_string_id_b",
-            cols_partition=col_group_id,
-            cols_select_out=col_group_id
-            + ["string_id_a", "string_id_b", "combined_score"],
-        ).collect()
 
-        conflict_keys = [*col_group_id, "_lo", "_hi"]
-        conflicts = (
-            self._df_edges.group_by(conflict_keys)
-            .agg(pl.col("combined_score").n_unique().alias("score_count"))
-            .filter(pl.col("score_count") > 1)
+
+def _mapping_plan(
+    selection: StringSelection,
+) -> tuple[pl.LazyFrame, SchemaDict, list[str]]:
+    if selection.namespace != "alias":
+        raise CapabilityError(
+            "STRING alias mapping requires namespace='alias'; "
+            "direct namespace='string' selections have no aliases relation"
         )
-        if conflicts.height:
-            raise IntegrityError(
-                "STRING links contain conflicting combined_score values for "
-                f"canonical edges: {conflicts.select(conflict_keys).to_dicts()}"
+    alias_info = selection.dataset._alias_schema  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    if alias_info is None:
+        raise CapabilityError("Cannot extract STRING mapping without aliases file")
+    selection.dataset._validate_taxon_compatibility()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    schema = selection._schema_string_map_result  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    if selection._df_input_ids.height == 0:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        return pl.LazyFrame(schema=schema), schema, list(schema)
+
+    lf_aliases = scan_aliases(
+        alias_info.file_alias,
+        version=selection.dataset.snapshot.parser_version,
+    )
+    lf_mapping = create_string_mapping_lazy_frame(
+        lf_aliases=lf_aliases,
+        lf_input_ids=selection._df_input_ids.lazy(),  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        source_rank_map=selection.dataset.source_rank_map,
+        col_string_id_aliases=alias_info.col_string_id,
+        has_source_aliases=alias_info.has_source,
+        cols_partition=["input_id", alias_info.col_string_id],
+        cols_sort_prefix=["input_id", alias_info.col_string_id],
+        cols_select_out=["input_id", alias_info.col_string_id, "alias", "source"],
+    )
+    if selection.is_grouped and selection._df_group_membership is not None:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        columns = [
+            "group_id",
+            "input_id",
+            alias_info.col_string_id,
+            "alias",
+            "source",
+        ]
+        lf_mapping = (
+            selection._df_group_membership.lazy()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+            .join(lf_mapping, on="input_id", how="inner")
+            .select(columns)
+        )
+    else:
+        columns = ["input_id", alias_info.col_string_id, "alias", "source"]
+        lf_mapping = lf_mapping.select(columns)
+    sort_columns = columns
+    lf_mapping = lf_mapping.sort(sort_columns)
+    return lf_mapping, schema, columns
+
+
+def _iter_edge_batches(
+    selection: StringSelection,
+    *,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    if selection.dataset.snapshot.file_links is None:
+        raise CapabilityError("Cannot extract STRING edges without links file")
+    selection.dataset._validate_taxon_compatibility()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    col_group_id = list(selection._col_group_id)  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    if selection.namespace == "string":
+        if selection.is_grouped and selection._df_group_membership is not None:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+            lf_string_ids = selection._df_group_membership.lazy().rename(  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+                {"input_id": "string_id"}
             )
-
-        self._df_edges = (
-            self._df_edges.filter(
-                pl.col("combined_score").ge(int(self.min_combined_score))
+        else:
+            lf_string_ids = selection._df_input_ids.lazy().rename(  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+                {"input_id": "string_id"}
             )
-            .group_by(conflict_keys)
-            .agg(pl.col("combined_score").first().cast(pl.Int64))
-            .rename({"_lo": "string_id_a", "_hi": "string_id_b"})
-            .select(self._schema_edges_result.keys())
-            .sort(col_group_id + ["string_id_a", "string_id_b"])
+    else:
+        lf_mapping, _mapping_schema, _mapping_columns = _mapping_plan(selection)
+        alias_info = selection.dataset._alias_schema  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        if alias_info is None:
+            raise CapabilityError(
+                "STRING alias namespace requires the aliases resource"
+            )
+        lf_string_ids = (
+            lf_mapping.select(  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+                [
+                    *selection._col_group_id,  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+                    alias_info.col_string_id,
+                ]
+            )
+            .rename({alias_info.col_string_id: "string_id"})
+            .unique()
         )
-
-        return self._df_edges
-
-    def _extract_string_ids(self) -> pl.DataFrame:
-        if self._df_string_ids is None:
-            if self.namespace == "string":
-                if self.is_grouped:
-                    if self._df_group_membership is None:
-                        raise RuntimeError(
-                            "Grouped STRING selection lacks group membership"
-                        )
-                    self._df_string_ids = self._df_group_membership.rename(
-                        {"input_id": "string_id"}
-                    )
-                else:
-                    self._df_string_ids = self._df_input_ids.rename(
-                        {"input_id": "string_id"}
-                    )
-            else:
-                if self.dataset._alias_schema is None:  # pyright: ignore[reportPrivateUsage]
-                    raise CapabilityError(
-                        "STRING alias namespace requires the aliases resource"
-                    )
-                id_column = self.dataset._alias_schema.col_string_id  # pyright: ignore[reportPrivateUsage]
-                cols_select = [*self._col_group_id, id_column]
-                self._df_string_ids = (
-                    self._eager_mappings()
-                    .select(cols_select)
-                    .rename({id_column: "string_id"})
-                    .unique()
-                    .sort([*self._col_group_id, "string_id"])
-                )
-        return self._df_string_ids
+    version_link = selection.dataset.snapshot.parser_version
+    lf_links = scan_links(selection.dataset.snapshot.file_links, version=version_link)
+    validate_required_cols(
+        cols_available=lf_links.collect_schema().names(),
+        cols_required=SCHEMA_LINKS[version_link].keys(),
+        context=f"STRING links file for version {version_link}",
+    )
+    lf_edges = create_edges_lazy_frame(
+        lf_links=lf_links,
+        lf_string_ids_a=lf_string_ids.rename({"string_id": "_string_id_a"}),
+        lf_string_ids_b=lf_string_ids.rename({"string_id": "_string_id_b"}),
+        min_combined_score=selection.min_combined_score,
+        cols_join_left_a="_link_a",
+        cols_join_right_a="_string_id_a",
+        cols_join_left_b=["_link_b", *col_group_id] if col_group_id else "_link_b",
+        cols_join_right_b=["_string_id_b", *col_group_id]
+        if col_group_id
+        else "_string_id_b",
+        cols_partition=col_group_id,
+        cols_select_out=col_group_id + ["string_id_a", "string_id_b", "combined_score"],
+    )
+    conflict_keys = [*col_group_id, "_lo", "_hi"]
+    conflicts = (
+        lf_edges.group_by(conflict_keys)
+        .agg(pl.col("combined_score").n_unique().alias("score_count"))
+        .filter(pl.col("score_count") > 1)
+        .collect(engine="streaming")
+    )
+    if conflicts.height:
+        raise IntegrityError(
+            "STRING links contain conflicting combined_score values for "
+            f"canonical edges: {conflicts.select(conflict_keys).to_dicts()}"
+        )
+    lf_output = (
+        lf_edges.filter(pl.col("combined_score").ge(int(selection.min_combined_score)))
+        .group_by(conflict_keys)
+        .agg(pl.col("combined_score").first().cast(pl.Int64))
+        .rename({"_lo": "string_id_a", "_hi": "string_id_b"})
+        .select(selection._schema_edges_result.keys())  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        .sort(col_group_id + ["string_id_a", "string_id_b"])
+    )
+    requested = (
+        None
+        if request.columns is None
+        else [
+            name
+            for name in request.columns
+            if name in selection._schema_edges_result  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        ]  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    )
+    if requested:
+        lf_output = lf_output.select(requested)
+    for frame in lf_output.collect_batches(
+        chunk_size=request.effective_batch_size,
+        engine="streaming",
+    ):
+        yield frame.cast(
+            {
+                name: selection._schema_edges_result[name]  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+                for name in frame.columns
+            },
+            strict=False,
+        )

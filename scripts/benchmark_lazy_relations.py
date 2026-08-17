@@ -16,6 +16,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import cast
 
 import duckdb
 import polars as pl
@@ -27,6 +28,7 @@ from bioextract import (
     UniProtDatabase,
     inspect_publication,
 )
+from bioextract.uniprot._query import UniProtSelection
 
 _CASE_NAMES = (
     "idmapping_narrow",
@@ -155,10 +157,13 @@ def _rhea_bundle(inputs: BenchmarkInputs) -> Mapping[str, pl.DataFrame]:
 
 
 def _uniprot_selection(inputs: BenchmarkInputs):
-    return UniProtDatabase.from_duckdb(inputs.uniprot_kb).select_ids(
-        inputs.protein_ids,
-        namespace="uniprot",
-        taxon_ids=[inputs.taxon_id],
+    return cast(
+        UniProtSelection,
+        UniProtDatabase.from_duckdb(inputs.uniprot_kb).select_ids(
+            inputs.protein_ids,
+            namespace="uniprot",
+            taxon_ids=[inputs.taxon_id],
+        ),
     )
 
 

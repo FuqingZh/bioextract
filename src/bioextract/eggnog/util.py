@@ -5,7 +5,7 @@ import shutil
 import sqlite3
 import tempfile
 from collections.abc import Generator, Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 import polars as pl
@@ -53,7 +53,7 @@ def read_cog_fun_frame(file_cog_fun: Path | None) -> pl.DataFrame:
     )
 
 
-def select_mapping_frame(
+def iter_selected_mapping_frames(
     *,
     file_eggnog_db: Path,
     dir_tmp: Path | None,
@@ -61,27 +61,34 @@ def select_mapping_frame(
     df_group_membership: pl.DataFrame | None,
     namespace: EggnogNamespace,
     df_cog_fun: pl.DataFrame,
-) -> pl.DataFrame:
+    chunk_size: int = 500,
+) -> Iterator[pl.DataFrame]:
+    """Yield selected eggNOG mapping chunks without a complete result frame."""
     validate_namespace(namespace)
+    cols_group = ["group_id"] if df_group_membership is not None else []
+    cols_out = cols_group + ["input_id", "input_namespace"] + COLS_MAPPING
     if df_input_ids.height == 0:
-        cols_group = ["group_id"] if df_group_membership is not None else []
-        cols_out = cols_group + ["input_id", "input_namespace"] + COLS_MAPPING
-        return pl.DataFrame(schema=dict.fromkeys(cols_out, pl.String))
+        yield pl.DataFrame(schema=dict.fromkeys(cols_out, pl.String))
+        return
 
     input_ids = df_input_ids.get_column("input_id").unique().sort().to_list()
     with open_sqlite_path(file_eggnog_db, dir_tmp=dir_tmp) as file_sqlite:
-        df_mapping = read_mapping_frame_from_sqlite(
-            file_sqlite,
-            df_cog_fun=df_cog_fun,
-            eggnog_protein_ids=input_ids,
-        )
-
-    df_selected = extract_mapping_frame(
-        df_mapping,
-        df_input_ids,
-        namespace=namespace,
-    )
-    return _expand_group_membership(df_selected, df_group_membership)
+        for offset in range(0, len(input_ids), chunk_size):
+            chunk_ids = input_ids[offset : offset + chunk_size]
+            chunk_inputs = df_input_ids.filter(pl.col("input_id").is_in(chunk_ids))
+            df_mapping = read_mapping_frame_from_sqlite(
+                file_sqlite,
+                df_cog_fun=df_cog_fun,
+                eggnog_protein_ids=chunk_ids,
+            )
+            if df_mapping.height == 0:
+                continue
+            selected = extract_mapping_frame(
+                df_mapping,
+                chunk_inputs,
+                namespace=namespace,
+            )
+            yield _expand_group_membership(selected, df_group_membership)
 
 
 def read_mapping_frame_from_sqlite(
@@ -91,7 +98,7 @@ def read_mapping_frame_from_sqlite(
     eggnog_protein_ids: Iterable[str] | None = None,
 ) -> pl.DataFrame:
     rows: list[dict[str, str | None]] = []
-    with sqlite3.connect(file_sqlite) as conn:
+    with closing(sqlite3.connect(file_sqlite)) as conn:
         for protein_id, ogs_text in iter_protein_ogs(conn, eggnog_protein_ids):
             for og_id, og_level in parse_ogs(ogs_text):
                 rows.append(
@@ -287,27 +294,6 @@ def extract_mapping_frame(
         .select(cols_out)
         .unique()
         .sort(cols_out)
-    )
-
-
-def extract_unmatched_ids_frame(
-    df_input_ids: pl.DataFrame,
-    df_mapping: pl.DataFrame,
-    *,
-    df_group_membership: pl.DataFrame | None,
-) -> pl.DataFrame:
-    df_mapped_input_ids = df_mapping.select("input_id").unique().sort("input_id")
-    df_unmatched = (
-        df_input_ids.join(df_mapped_input_ids, on="input_id", how="anti")
-        .select("input_id")
-        .sort("input_id")
-    )
-    if df_group_membership is None:
-        return df_unmatched
-    return (
-        df_group_membership.join(df_unmatched, on="input_id", how="inner")
-        .select("group_id", "input_id")
-        .sort("group_id", "input_id")
     )
 
 

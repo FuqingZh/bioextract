@@ -4,13 +4,17 @@ import re
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Any
 
 import duckdb
 import polars as pl
 from polars._typing import SchemaDict
 
-from bioextract._lazy import register_replayable_source
+from bioextract._lazy import (
+    _RelationScanRequest,  # pyright: ignore[reportPrivateUsage]  # typed source boundary
+    register_replayable_source,
+)
 from bioextract._publication import validate_duckdb_metadata_v2
 from bioextract._shared import validate_group_ids
 from bioextract.errors import CapabilityError, IntegrityError
@@ -168,6 +172,14 @@ class _InputRow:
     lookup_value: str
 
 
+@dataclass(slots=True)
+class _RheaAnchorState:
+    """Thread-safe compact input-to-reaction anchor for one selection."""
+
+    lock: Lock = field(default_factory=Lock)
+    frame: pl.DataFrame | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class _RheaLazyPlan:
     """Immutable values required to replay one Rhea relation execution."""
@@ -181,6 +193,7 @@ class _RheaLazyPlan:
     input_rows: tuple[_InputRow, ...]
     group_membership: tuple[tuple[str, str], ...]
     grouped: bool
+    anchor_state: _RheaAnchorState
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,9 +220,8 @@ class RheaReactionSelection:
         repr=False,
     )
     _is_grouped: bool = field(repr=False)
-    _matches_cache: pl.DataFrame | None = field(
-        default=None,
-        init=False,
+    _anchor_state: _RheaAnchorState = field(
+        default_factory=_RheaAnchorState,
         repr=False,
         compare=False,
     )
@@ -223,11 +235,7 @@ class RheaReactionSelection:
             >>> selection.matches().select("rhea_id").head(1).collect().to_dicts()  # doctest: +SKIP
             [10000]
         """
-        frame = self._matches_cache
-        if frame is None:
-            frame = self._query_matches()
-            object.__setattr__(self, "_matches_cache", frame)
-        return frame.clone()
+        return _match_anchor(self._lazy_plan())
 
     def matches(self) -> pl.LazyFrame:
         """Return the normalized input-to-reaction relation lazily.
@@ -242,12 +250,13 @@ class RheaReactionSelection:
         """
 
         plan = self._lazy_plan()
-        return _relation_frame(
-            plan,
-            query=_matches_query(plan),
-            raw_schema=_SCHEMA_MATCH,
-            output_schema=_public_schema(_SCHEMA_MATCH, grouped=plan.grouped),
-            prepare_selected=False,
+        return register_replayable_source(
+            schema=_public_schema(_SCHEMA_MATCH, grouped=plan.grouped),
+            batches=lambda request: _iter_match_anchor_batches(
+                plan,
+                request=request,
+            ),
+            is_pure=True,
         )
 
     def reactions(self) -> pl.LazyFrame:
@@ -454,9 +463,9 @@ class RheaReactionSelection:
         schema = _nested_neighborhood_schema(grouped=plan.grouped)
         return register_replayable_source(
             schema=schema,
-            batches=lambda batch_size: _iter_neighborhood_batches(
+            batches=lambda request: _iter_neighborhood_batches(
                 plan,
-                batch_size=batch_size,
+                request=request,
             ),
         )
 
@@ -576,6 +585,7 @@ class RheaReactionSelection:
             input_rows=self._input_rows,
             group_membership=self._group_membership,
             grouped=self._is_grouped,
+            anchor_state=self._anchor_state,
         )
 
     def _eager_reactions(self) -> pl.DataFrame:
@@ -1241,14 +1251,70 @@ def _relation_frame(
 ) -> pl.LazyFrame:
     return register_replayable_source(
         schema=output_schema,
-        batches=lambda batch_size: _iter_query_batches(
+        batches=lambda request: _iter_query_batches(
             plan,
             query=query,
             raw_schema=raw_schema,
-            batch_size=batch_size,
+            request=request,
             prepare_selected=prepare_selected,
         ),
     )
+
+
+def _match_anchor(plan: _RheaLazyPlan) -> pl.DataFrame:
+    """Return the selection's cached normalized input-to-reaction anchor."""
+    if _file_identity(plan.path) != plan.identity:
+        raise IntegrityError(
+            "Rhea publication was replaced; reopen it with from_duckdb()"
+        )
+    with plan.anchor_state.lock:
+        if plan.anchor_state.frame is None:
+            plan.anchor_state.frame = _query_match_anchor(plan)
+        return plan.anchor_state.frame.clone()
+
+
+def _query_match_anchor(plan: _RheaLazyPlan) -> pl.DataFrame:
+    """Materialize only the normalized selection anchor, in Arrow batches."""
+    connection = _connect_checked(plan)
+    reader: Any = None
+    frames: list[pl.DataFrame] = []
+    try:
+        _create_input_table(connection, plan.input_rows)
+        _create_group_membership_table(connection, plan)
+        reader = _arrow_reader(
+            connection.execute(_matches_query(plan)),
+            100_000,
+        )
+        for record_batch in reader:
+            frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+            frame = frame.cast(  # type: ignore[reportArgumentType]
+                {name: _SCHEMA_MATCH[name] for name in frame.columns},
+                strict=False,
+            )
+            frames.append(frame)
+    finally:
+        if reader is not None:
+            close = getattr(reader, "close", None)
+            if close is not None:
+                close()
+        connection.close()
+    if not frames:
+        return pl.DataFrame(schema=_SCHEMA_MATCH)
+    return pl.concat(frames, how="vertical")
+
+
+def _iter_match_anchor_batches(
+    plan: _RheaLazyPlan,
+    *,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    frame = _match_anchor(plan)
+    if not plan.grouped:
+        frame = frame.drop("group_id")
+    if request.columns is not None:
+        frame = frame.select(list(request.columns))
+    for offset in range(0, frame.height, request.effective_batch_size):
+        yield frame.slice(offset, request.effective_batch_size)
 
 
 def _matches_query(plan: _RheaLazyPlan) -> str:
@@ -1307,26 +1373,49 @@ def _matches_query(plan: _RheaLazyPlan) -> str:
     """
 
 
+def _project_query(
+    query: str,
+    columns: tuple[str, ...] | None,
+    schema: SchemaDict,
+) -> str:
+    """Project a relation query before Arrow decoding when safe."""
+    if columns is None:
+        return query
+    selected = [name for name in columns if name in schema]
+    if not selected:
+        return query
+    projection = ", ".join(f'"{name}"' for name in selected)
+    return f"SELECT {projection} FROM ({query}) AS _bioextract_relation"
+
+
 def _iter_query_batches(
     plan: _RheaLazyPlan,
     *,
     query: str,
     raw_schema: SchemaDict,
-    batch_size: int,
+    request: _RelationScanRequest,
     prepare_selected: bool,
 ) -> Iterator[pl.DataFrame]:
     connection = _connect_checked(plan)
     try:
-        _create_input_table(connection, plan.input_rows)
-        _create_group_membership_table(connection, plan)
         if prepare_selected:
-            _prepare_selected_reaction(connection, plan)
+            matches = _match_anchor(plan)
+            if matches.is_empty():
+                return
+            _create_selected_table(connection, matches, grouped=plan.grouped)
+        else:
+            _create_input_table(connection, plan.input_rows)
+            _create_group_membership_table(connection, plan)
+        query = _project_query(query, request.columns, raw_schema)
         result = connection.execute(query)
-        reader = _arrow_reader(result, batch_size)
+        reader = _arrow_reader(result, request.effective_batch_size)
         try:
             for record_batch in reader:
                 frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
-                frame = frame.cast(raw_schema, strict=False)  # type: ignore[reportArgumentType]
+                frame = frame.cast(  # type: ignore[reportArgumentType]
+                    {name: raw_schema[name] for name in frame.columns},
+                    strict=False,
+                )
                 if not plan.grouped and "group_id" in frame.columns:
                     frame = frame.drop("group_id")
                 yield frame
@@ -1341,18 +1430,17 @@ def _iter_query_batches(
 def _iter_neighborhood_batches(
     plan: _RheaLazyPlan,
     *,
-    batch_size: int,
+    request: _RelationScanRequest,
 ) -> Iterator[pl.DataFrame]:
+    matches = _match_anchor(plan)
+    if matches.is_empty():
+        return
     connection = _connect_checked(plan)
     mapping_connection = _connect_checked(plan)
     output_schema = _nested_neighborhood_schema(grouped=plan.grouped)
     try:
-        _create_input_table(connection, plan.input_rows)
-        _create_group_membership_table(connection, plan)
-        _prepare_selected_reaction(connection, plan)
-        _create_input_table(mapping_connection, plan.input_rows)
-        _create_group_membership_table(mapping_connection, plan)
-        _prepare_selected_reaction(mapping_connection, plan)
+        _create_selected_table(connection, matches, grouped=plan.grouped)
+        _create_selected_table(mapping_connection, matches, grouped=plan.grouped)
         matches_reader = _arrow_reader(
             connection.execute(
                 """
@@ -1363,7 +1451,7 @@ def _iter_neighborhood_batches(
                 ORDER BY rhea_id, group_id NULLS FIRST, input_id
                 """
             ),
-            batch_size,
+            request.effective_batch_size,
         )
         uniprot_reader = _arrow_reader(
             mapping_connection.execute(
@@ -1377,7 +1465,7 @@ def _iter_neighborhood_batches(
                 ORDER BY rhea_id, uniprot_id, uniprot_section
                 """
             ),
-            batch_size,
+            request.effective_batch_size,
         )
         try:
             match_rows = _iter_arrow_rows(matches_reader)
@@ -1388,7 +1476,10 @@ def _iter_neighborhood_batches(
             # The generic adapter may request a large Arrow batch. Nested
             # neighborhoods have deliberately high per-row cardinality, so
             # keep only a small number of completed reaction rows in memory.
-            output_batch_size = min(batch_size, _NESTED_OUTPUT_BATCH_SIZE)
+            output_batch_size = min(
+                request.effective_batch_size,
+                _NESTED_OUTPUT_BATCH_SIZE,
+            )
             while next_match is not None:
                 rhea_id = int(str(next_match["rhea_id"]))
                 master_id = next_match["master_id"]
@@ -1505,67 +1596,6 @@ def _create_group_membership_table(
         )
 
 
-def _prepare_selected_reaction(
-    connection: duckdb.DuckDBPyConnection,
-    plan: _RheaLazyPlan,
-) -> None:
-    connection.execute(
-        """
-        CREATE TEMP TABLE _selected_reaction (
-            group_id VARCHAR,
-            input_id VARCHAR NOT NULL,
-            input_namespace VARCHAR NOT NULL,
-            rhea_id BIGINT NOT NULL,
-            master_id BIGINT,
-            direction VARCHAR
-        )
-        """
-    )
-    reader = _arrow_reader(connection.execute(_matches_query(plan)), 100_000)
-    group_by_input: dict[str, tuple[str, ...]] = {}
-    if plan.grouped:
-        groups: dict[str, list[str]] = {}
-        for group_id, input_id in plan.group_membership:
-            groups.setdefault(input_id, []).append(group_id)
-        group_by_input = {
-            input_id: tuple(group_ids) for input_id, group_ids in groups.items()
-        }
-    rows: list[tuple[object, ...]] = []
-    try:
-        for row in _iter_arrow_rows(reader):
-            group_ids = (
-                group_by_input.get(str(row["input_id"]), ())
-                if plan.grouped
-                else (None,)
-            )
-            for group_id in group_ids:
-                rows.append(
-                    (
-                        group_id,
-                        row["input_id"],
-                        row["input_namespace"],
-                        row["rhea_id"],
-                        row["master_id"],
-                        row["direction"],
-                    )
-                )
-                if len(rows) >= 10_000:
-                    connection.executemany(
-                        "INSERT INTO _selected_reaction VALUES (?, ?, ?, ?, ?, ?)",
-                        rows,
-                    )
-                    rows = []
-        if rows:
-            connection.executemany(
-                "INSERT INTO _selected_reaction VALUES (?, ?, ?, ?, ?, ?)",
-                rows,
-            )
-    finally:
-        close = getattr(reader, "close", None)
-        if close is not None:
-            close()
-
-
 def _connect(
     publication: _RheaPublication,
 ) -> duckdb.DuckDBPyConnection:
@@ -1597,34 +1627,12 @@ def _create_selected_table(
     *,
     grouped: bool,
 ) -> None:
-    connection.execute(
-        """
-        CREATE TEMP TABLE _selected_reaction (
-            group_id VARCHAR,
-            input_id VARCHAR NOT NULL,
-            input_namespace VARCHAR NOT NULL,
-            rhea_id BIGINT NOT NULL,
-            master_id BIGINT,
-            direction VARCHAR
-        )
-        """
+    del grouped
+    arrow_table = matches.to_arrow()  # type: ignore[reportUnknownVariableType]  # Polars Arrow boundary
+    connection.register(  # type: ignore[reportUnknownArgumentType]  # DuckDB Arrow boundary
+        "_selected_reaction",
+        arrow_table,  # type: ignore[reportUnknownArgumentType]  # DuckDB Arrow boundary
     )
-    rows = [
-        (
-            row["group_id"] if grouped else None,
-            row["input_id"],
-            row["input_namespace"],
-            row["rhea_id"],
-            row["master_id"],
-            row["direction"],
-        )
-        for row in matches.to_dicts()
-    ]
-    if rows:
-        connection.executemany(
-            "INSERT INTO _selected_reaction VALUES (?, ?, ?, ?, ?, ?)",
-            rows,
-        )
 
 
 def _fetch_frame(

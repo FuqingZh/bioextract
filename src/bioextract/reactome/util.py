@@ -26,6 +26,16 @@ def read_mapping_frame(file_uniprot2reactome: Path) -> pl.DataFrame:
     )
 
 
+def scan_mapping_frame(file_uniprot2reactome: Path) -> pl.LazyFrame:
+    return pl.scan_csv(
+        file_uniprot2reactome,
+        separator="\t",
+        has_header=False,
+        new_columns=COLS_MAPPING_RAW,
+        schema_overrides=SCHEMA_MAPPING_RAW,
+    ).select(COLS_MAPPING_RAW)
+
+
 def read_pathway_frame(file_pathways: Path) -> pl.DataFrame:
     return _read_reactome_tsv(
         file_pathways,
@@ -35,6 +45,16 @@ def read_pathway_frame(file_pathways: Path) -> pl.DataFrame:
     )
 
 
+def scan_pathway_frame(file_pathways: Path) -> pl.LazyFrame:
+    return pl.scan_csv(
+        file_pathways,
+        separator="\t",
+        has_header=False,
+        new_columns=COLS_PATHWAY_RAW,
+        schema_overrides=SCHEMA_PATHWAY_RAW,
+    ).select(COLS_PATHWAY_RAW)
+
+
 def read_relation_frame(file_relations: Path) -> pl.DataFrame:
     return _read_reactome_tsv(
         file_relations,
@@ -42,6 +62,16 @@ def read_relation_frame(file_relations: Path) -> pl.DataFrame:
         schema=SCHEMA_RELATION_RAW,
         context="Reactome pathway relations file",
     )
+
+
+def scan_relation_frame(file_relations: Path) -> pl.LazyFrame:
+    return pl.scan_csv(
+        file_relations,
+        separator="\t",
+        has_header=False,
+        new_columns=COLS_RELATION_RAW,
+        schema_overrides=SCHEMA_RELATION_RAW,
+    ).select(COLS_RELATION_RAW)
 
 
 def filter_species_frame(df: pl.DataFrame, species: str | None) -> pl.DataFrame:

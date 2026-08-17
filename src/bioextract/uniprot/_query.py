@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Any, cast
 
 import duckdb
 import polars as pl
 from polars._typing import SchemaDict
 
-from bioextract._lazy import register_deferred_frame_source
+from bioextract._lazy import (
+    _RelationScanRequest,  # pyright: ignore[reportPrivateUsage]  # typed source boundary
+    register_replayable_source,
+)
 from bioextract._publication import (
     METADATA_SCHEMA_VERSION,
     validate_duckdb_metadata_v2,
@@ -22,7 +26,12 @@ from ._knowledgebase import (
     SOURCE_SCHEMA_PROFILE,
     TABLE_SCHEMAS,
 )
-from .constant import IDMAPPING_SOURCE_SCHEMA_PROFILE, SCHEMA_MAPPING, SCHEMA_VERSION
+from .constant import (
+    COLS_IDMAPPING_SELECTED,
+    IDMAPPING_SOURCE_SCHEMA_PROFILE,
+    SCHEMA_MAPPING,
+    SCHEMA_VERSION,
+)
 from .util import normalize_taxids
 
 if TYPE_CHECKING:
@@ -37,6 +46,94 @@ _NAMESPACES = {
     "ensembl",
     "isoform_id",
 }
+
+# DuckDB can evaluate a bounded parameterized predicate more efficiently than
+# building and hashing a temporary relation for the small selected-ID cases
+# that motivated this API. Larger selections keep the temporary relation path
+# so the physical strategy does not depend on an unbounded parameter list.
+_SELECTED_MAPPING_IN_THRESHOLD = 1_000
+
+
+@dataclass(frozen=True, slots=True)
+class _ExtractSpec:
+    relation_columns: str
+    join: str
+    order_by: str
+    condition: str = ""
+    parameters: tuple[object, ...] = ()
+
+
+@dataclass(slots=True)
+class _AnchorState:
+    lock: Lock = field(default_factory=Lock)
+    frame: pl.DataFrame | None = None
+
+
+@dataclass(slots=True)
+class _MappingAnchorState:
+    lock: Lock = field(default_factory=Lock)
+    matched_ids: frozenset[str] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UniProtMappingSelection:
+    """Selected-ID access over an idmapping source or publication."""
+
+    database: UniProtDatabase = field(repr=False)
+    input_ids: tuple[str, ...]
+    taxon_ids: tuple[str, ...] = ()
+    _anchor_state: _MappingAnchorState = field(
+        default_factory=_MappingAnchorState,
+        repr=False,
+        compare=False,
+    )
+
+    def mappings(self) -> pl.LazyFrame:
+        """Return only mapping rows whose UniProt ID was selected."""
+        columns = ["input_id", "input_namespace", *COLS_IDMAPPING_SELECTED]
+        schema: SchemaDict = {
+            "input_id": pl.String,
+            "input_namespace": pl.String,
+            **SCHEMA_MAPPING,
+        }
+        if self.database._mode != "idmapping_publication":  # pyright: ignore[reportPrivateUsage]  # paired database boundary
+            frame = self.database.scan_mapping(taxon_ids=self.taxon_ids)
+            return (
+                frame.filter(pl.col("uniprot_id").is_in(self.input_ids))
+                .with_columns(
+                    pl.col("uniprot_id").alias("input_id"),
+                    pl.lit("uniprot").alias("input_namespace"),
+                )
+                .select(columns)
+            )
+        snapshot = copy.copy(self)
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda request: _iter_selected_mapping_batches(
+                snapshot,
+                schema=schema,
+                request=request,
+            ),
+            is_pure=True,
+        )
+
+    def unmatched_ids(self) -> pl.LazyFrame:
+        """Return selected UniProt IDs absent from the mapping scope."""
+        schema: SchemaDict = {
+            "input_id": pl.String,
+            "input_namespace": pl.String,
+            "reason": pl.String,
+        }
+        snapshot = copy.copy(self)
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda request: _iter_selected_mapping_unmatched_batches(
+                snapshot,
+                schema=schema,
+                request=request,
+            ),
+            is_pure=True,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,8 +159,10 @@ class UniProtSelection:
     group_ids: tuple[str, ...] = ()
     taxon_ids: tuple[str, ...] = ()
     _is_grouped: bool = field(default=False, repr=False)
-    _matches_cache: pl.DataFrame | None = field(
-        default=None, init=False, repr=False, compare=False
+    _anchor_state: _AnchorState = field(
+        default_factory=_AnchorState,
+        repr=False,
+        compare=False,
     )
 
     def proteins(self) -> pl.LazyFrame:
@@ -86,20 +185,15 @@ class UniProtSelection:
                 "sequence_version",
                 "entry_version",
             ],
-            lambda snapshot: snapshot._eager_proteins(),
-        )
-
-    def _eager_proteins(self) -> pl.DataFrame:
-        return self._eager_extract(
-            "protein",
-            "p.entry_name AS entry_name, p.is_reviewed AS is_reviewed, "
-            "p.taxon_id AS taxon_id, p.protein_existence AS protein_existence, "
-            "p.sequence_length AS sequence_length, "
-            "p.molecular_weight AS molecular_weight, "
-            "p.sequence_version AS sequence_version, "
-            "p.entry_version AS entry_version",
-            "JOIN protein p USING (primary_accession)",
-            order_by="p.primary_accession",
+            _ExtractSpec(
+                "p.entry_name AS entry_name, p.is_reviewed AS is_reviewed, "
+                "p.taxon_id AS taxon_id, p.protein_existence AS protein_existence, "
+                "p.sequence_length AS sequence_length, "
+                "p.molecular_weight AS molecular_weight, "
+                "p.sequence_version AS sequence_version, p.entry_version AS entry_version",
+                "JOIN protein p USING (primary_accession)",
+                "p.primary_accession",
+            ),
         )
 
     def accessions(self) -> pl.LazyFrame:
@@ -113,16 +207,12 @@ class UniProtSelection:
         """
         return self._lazy_relation(
             ["accession", "accession_order", "is_primary"],
-            lambda snapshot: snapshot._eager_accessions(),
-        )
-
-    def _eager_accessions(self) -> pl.DataFrame:
-        return self._eager_extract(
-            "protein_accession",
-            "r.accession AS accession, r.accession_order AS accession_order, "
-            "r.is_primary AS is_primary",
-            "JOIN protein_accession r USING (primary_accession)",
-            order_by="r.accession_order, r.accession",
+            _ExtractSpec(
+                "r.accession AS accession, r.accession_order AS accession_order, "
+                "r.is_primary AS is_primary",
+                "JOIN protein_accession r USING (primary_accession)",
+                "r.accession_order, r.accession",
+            ),
         )
 
     def protein_names(self) -> pl.LazyFrame:
@@ -136,15 +226,11 @@ class UniProtSelection:
         """
         return self._lazy_relation(
             ["name_type", "name", "name_order"],
-            lambda snapshot: snapshot._eager_protein_names(),
-        )
-
-    def _eager_protein_names(self) -> pl.DataFrame:
-        return self._eager_extract(
-            "protein_name",
-            "r.name_type AS name_type, r.name AS name, r.name_order AS name_order",
-            "JOIN protein_name r USING (primary_accession)",
-            order_by="r.name_order, r.name",
+            _ExtractSpec(
+                "r.name_type AS name_type, r.name AS name, r.name_order AS name_order",
+                "JOIN protein_name r USING (primary_accession)",
+                "r.name_order, r.name",
+            ),
         )
 
     def gene_names(self) -> pl.LazyFrame:
@@ -158,15 +244,11 @@ class UniProtSelection:
         """
         return self._lazy_relation(
             ["name_type", "name", "name_order"],
-            lambda snapshot: snapshot._eager_gene_names(),
-        )
-
-    def _eager_gene_names(self) -> pl.DataFrame:
-        return self._eager_extract(
-            "gene_name",
-            "r.name_type AS name_type, r.name AS name, r.name_order AS name_order",
-            "JOIN gene_name r USING (primary_accession)",
-            order_by="r.name_order, r.name",
+            _ExtractSpec(
+                "r.name_type AS name_type, r.name AS name, r.name_order AS name_order",
+                "JOIN gene_name r USING (primary_accession)",
+                "r.name_order, r.name",
+            ),
         )
 
     def ec_numbers(self) -> pl.LazyFrame:
@@ -178,15 +260,11 @@ class UniProtSelection:
         """
         return self._lazy_relation(
             ["ec_number"],
-            lambda snapshot: snapshot._eager_ec_numbers(),
-        )
-
-    def _eager_ec_numbers(self) -> pl.DataFrame:
-        return self._eager_extract(
-            "protein_ec_number",
-            "r.ec_number AS ec_number",
-            "JOIN protein_ec_number r USING (primary_accession)",
-            order_by="r.ec_number",
+            _ExtractSpec(
+                "r.ec_number AS ec_number",
+                "JOIN protein_ec_number r USING (primary_accession)",
+                "r.ec_number",
+            ),
         )
 
     def go_annotations(self) -> pl.LazyFrame:
@@ -200,16 +278,12 @@ class UniProtSelection:
         """
         return self._lazy_relation(
             ["go_id", "aspect", "term_name", "evidence_code", "evidence_source"],
-            lambda snapshot: snapshot._eager_go_annotations(),
-        )
-
-    def _eager_go_annotations(self) -> pl.DataFrame:
-        return self._eager_extract(
-            "protein_go_annotation",
-            "r.go_id AS go_id, r.aspect AS aspect, r.term_name AS term_name, "
-            "r.evidence_code AS evidence_code, r.evidence_source AS evidence_source",
-            "JOIN protein_go_annotation r USING (primary_accession)",
-            order_by="r.go_id, r.aspect",
+            _ExtractSpec(
+                "r.go_id AS go_id, r.aspect AS aspect, r.term_name AS term_name, "
+                "r.evidence_code AS evidence_code, r.evidence_source AS evidence_source",
+                "JOIN protein_go_annotation r USING (primary_accession)",
+                "r.go_id, r.aspect",
+            ),
         )
 
     def cross_references(self, databases: Iterable[str] | None = None) -> pl.LazyFrame:
@@ -222,25 +296,21 @@ class UniProtSelection:
             ['database', 'external_id']
         """
         values = tuple(dict.fromkeys(databases or ()))
-        return self._lazy_relation(
-            ["database", "external_id", "properties", "isoform_id"],
-            lambda snapshot: snapshot._eager_cross_references(values),
-        )
-
-    def _eager_cross_references(self, values: tuple[str, ...] = ()) -> pl.DataFrame:
         condition = ""
-        parameters: list[object] = []
+        parameters: tuple[object, ...] = ()
         if values:
             condition = f" WHERE r.database IN ({','.join('?' for _ in values)})"
-            parameters.extend(values)
-        return self._eager_extract(
-            "protein_cross_reference",
-            "r.database AS database, r.external_id AS external_id, "
-            "r.properties AS properties, r.isoform_id AS isoform_id",
-            "JOIN protein_cross_reference r USING (primary_accession)",
-            condition=condition,
-            parameters=parameters,
-            order_by="r.database, r.external_id, r.isoform_id",
+            parameters = values
+        return self._lazy_relation(
+            ["database", "external_id", "properties", "isoform_id"],
+            _ExtractSpec(
+                "r.database AS database, r.external_id AS external_id, "
+                "r.properties AS properties, r.isoform_id AS isoform_id",
+                "JOIN protein_cross_reference r USING (primary_accession)",
+                "r.database, r.external_id, r.isoform_id",
+                condition,
+                parameters,
+            ),
         )
 
     def comments(self, comment_types: Iterable[str] | None = None) -> pl.LazyFrame:
@@ -253,25 +323,21 @@ class UniProtSelection:
             ['comment_type', 'comment_text']
         """
         values = tuple(dict.fromkeys(comment_types or ()))
-        return self._lazy_relation(
-            ["comment_id", "comment_type", "comment_text"],
-            lambda snapshot: snapshot._eager_comments(values),
-        )
-
-    def _eager_comments(self, values: tuple[str, ...] = ()) -> pl.DataFrame:
         condition = ""
-        parameters: list[object] = []
+        parameters: tuple[object, ...] = ()
         if values:
             condition = f" WHERE r.comment_type IN ({','.join('?' for _ in values)})"
-            parameters.extend(values)
-        return self._eager_extract(
-            "protein_comment",
-            "r.comment_id AS comment_id, r.comment_type AS comment_type, "
-            "r.comment_text AS comment_text",
-            "JOIN protein_comment r USING (primary_accession)",
-            condition=condition,
-            parameters=parameters,
-            order_by="r.comment_id",
+            parameters = values
+        return self._lazy_relation(
+            ["comment_id", "comment_type", "comment_text"],
+            _ExtractSpec(
+                "r.comment_id AS comment_id, r.comment_type AS comment_type, "
+                "r.comment_text AS comment_text",
+                "JOIN protein_comment r USING (primary_accession)",
+                "r.comment_id",
+                condition,
+                parameters,
+            ),
         )
 
     def subcellular_locations(self) -> pl.LazyFrame:
@@ -285,15 +351,11 @@ class UniProtSelection:
         """
         return self._lazy_relation(
             ["location", "note"],
-            lambda snapshot: snapshot._eager_subcellular_locations(),
-        )
-
-    def _eager_subcellular_locations(self) -> pl.DataFrame:
-        return self._eager_extract(
-            "protein_subcellular_location",
-            "r.location AS location, r.note AS note",
-            "JOIN protein_subcellular_location r USING (primary_accession)",
-            order_by="r.comment_id, r.location",
+            _ExtractSpec(
+                "r.location AS location, r.note AS note",
+                "JOIN protein_subcellular_location r USING (primary_accession)",
+                "r.comment_id, r.location",
+            ),
         )
 
     def keywords(self) -> pl.LazyFrame:
@@ -307,15 +369,11 @@ class UniProtSelection:
         """
         return self._lazy_relation(
             ["keyword", "keyword_order"],
-            lambda snapshot: snapshot._eager_keywords(),
-        )
-
-    def _eager_keywords(self) -> pl.DataFrame:
-        return self._eager_extract(
-            "protein_keyword",
-            "r.keyword AS keyword, r.keyword_order AS keyword_order",
-            "JOIN protein_keyword r USING (primary_accession)",
-            order_by="r.keyword_order, r.keyword",
+            _ExtractSpec(
+                "r.keyword AS keyword, r.keyword_order AS keyword_order",
+                "JOIN protein_keyword r USING (primary_accession)",
+                "r.keyword_order, r.keyword",
+            ),
         )
 
     def sequences(self, sequence_type: str = "canonical") -> pl.LazyFrame:
@@ -329,24 +387,20 @@ class UniProtSelection:
         """
         if sequence_type not in {"canonical", "isoform", "all"}:
             raise ValueError("sequence_type must be canonical, isoform, or all")
+        condition = "" if sequence_type == "all" else " WHERE r.sequence_type = ?"
+        parameters: tuple[object, ...] = (
+            () if sequence_type == "all" else (sequence_type,)
+        )
         return self._lazy_relation(
             ["sequence_id", "sequence_type", "sequence", "length", "crc64", "sha256"],
-            lambda snapshot: snapshot._eager_sequences(sequence_type),
-        )
-
-    def _eager_sequences(self, sequence_type: str = "canonical") -> pl.DataFrame:
-        condition = "" if sequence_type == "all" else " WHERE r.sequence_type = ?"
-        parameters: list[object] = [] if sequence_type == "all" else [sequence_type]
-        return self._eager_extract(
-            "protein_sequence",
-            "r.sequence_id AS sequence_id, r.sequence_type AS sequence_type, "
-            "r.sequence AS sequence, r.length AS length, r.crc64 AS crc64, "
-            "r.sha256 AS sha256",
-            "JOIN protein_sequence r USING (primary_accession)",
-            condition=condition,
-            parameters=parameters,
-            order_by=(
-                "CASE r.sequence_type WHEN 'canonical' THEN 0 ELSE 1 END, r.sequence_id"
+            _ExtractSpec(
+                "r.sequence_id AS sequence_id, r.sequence_type AS sequence_type, "
+                "r.sequence AS sequence, r.length AS length, r.crc64 AS crc64, "
+                "r.sha256 AS sha256",
+                "JOIN protein_sequence r USING (primary_accession)",
+                "CASE r.sequence_type WHEN 'canonical' THEN 0 ELSE 1 END, r.sequence_id",
+                condition,
+                parameters,
             ),
         )
 
@@ -361,17 +415,13 @@ class UniProtSelection:
         """
         return self._lazy_relation(
             ["isoform_id", "name", "isoform_order", "sequence_status", "sequence_id"],
-            lambda snapshot: snapshot._eager_isoforms(),
-        )
-
-    def _eager_isoforms(self) -> pl.DataFrame:
-        return self._eager_extract(
-            "protein_isoform",
-            "r.isoform_id AS isoform_id, r.name AS name, "
-            "r.isoform_order AS isoform_order, "
-            "r.sequence_status AS sequence_status, r.sequence_id AS sequence_id",
-            "JOIN protein_isoform r USING (primary_accession)",
-            order_by="r.isoform_order, r.isoform_id",
+            _ExtractSpec(
+                "r.isoform_id AS isoform_id, r.name AS name, "
+                "r.isoform_order AS isoform_order, "
+                "r.sequence_status AS sequence_status, r.sequence_id AS sequence_id",
+                "JOIN protein_isoform r USING (primary_accession)",
+                "r.isoform_order, r.isoform_id",
+            ),
         )
 
     def isoform_identifiers(self) -> pl.LazyFrame:
@@ -385,16 +435,12 @@ class UniProtSelection:
         """
         return self._lazy_relation(
             ["isoform_id", "identifier", "identifier_order", "is_main"],
-            lambda snapshot: snapshot._eager_isoform_identifiers(),
-        )
-
-    def _eager_isoform_identifiers(self) -> pl.DataFrame:
-        return self._eager_extract(
-            "protein_isoform_identifier",
-            "r.isoform_id AS isoform_id, r.identifier AS identifier, "
-            "r.identifier_order AS identifier_order, r.is_main AS is_main",
-            "JOIN protein_isoform_identifier r USING (primary_accession)",
-            order_by="r.isoform_id, r.identifier_order",
+            _ExtractSpec(
+                "r.isoform_id AS isoform_id, r.identifier AS identifier, "
+                "r.identifier_order AS identifier_order, r.is_main AS is_main",
+                "JOIN protein_isoform_identifier r USING (primary_accession)",
+                "r.isoform_id, r.identifier_order",
+            ),
         )
 
     def sequence_variations(self) -> pl.LazyFrame:
@@ -408,16 +454,12 @@ class UniProtSelection:
         """
         return self._lazy_relation(
             ["variation_id", "start_position", "end_position", "note"],
-            lambda snapshot: snapshot._eager_sequence_variations(),
-        )
-
-    def _eager_sequence_variations(self) -> pl.DataFrame:
-        return self._eager_extract(
-            "protein_sequence_variation",
-            "r.variation_id AS variation_id, r.start_position AS start_position, "
-            "r.end_position AS end_position, r.note AS note",
-            "JOIN protein_sequence_variation r USING (primary_accession)",
-            order_by="r.start_position, r.end_position, r.variation_id",
+            _ExtractSpec(
+                "r.variation_id AS variation_id, r.start_position AS start_position, "
+                "r.end_position AS end_position, r.note AS note",
+                "JOIN protein_sequence_variation r USING (primary_accession)",
+                "r.start_position, r.end_position, r.variation_id",
+            ),
         )
 
     def isoform_variations(self) -> pl.LazyFrame:
@@ -431,16 +473,12 @@ class UniProtSelection:
         """
         return self._lazy_relation(
             ["isoform_id", "variation_id", "variation_order"],
-            lambda snapshot: snapshot._eager_isoform_variations(),
-        )
-
-    def _eager_isoform_variations(self) -> pl.DataFrame:
-        return self._eager_extract(
-            "protein_isoform_variation",
-            "r.isoform_id AS isoform_id, r.variation_id AS variation_id, "
-            "r.variation_order AS variation_order",
-            "JOIN protein_isoform_variation r USING (primary_accession)",
-            order_by="r.isoform_id, r.variation_order, r.variation_id",
+            _ExtractSpec(
+                "r.isoform_id AS isoform_id, r.variation_id AS variation_id, "
+                "r.variation_order AS variation_order",
+                "JOIN protein_isoform_variation r USING (primary_accession)",
+                "r.isoform_id, r.variation_order, r.variation_id",
+            ),
         )
 
     def unmatched_ids(self) -> pl.LazyFrame:
@@ -452,53 +490,38 @@ class UniProtSelection:
             ... ).collect_schema().names()
             ['input_id', 'input_namespace', 'reason']
         """
-        snapshot = copy.copy(self)
         columns = ["input_id", "input_namespace", "reason"]
         if self._is_grouped:
             columns.insert(0, "group_id")
-        return register_deferred_frame_source(
+        snapshot = copy.copy(self)
+        return register_replayable_source(
             schema=dict.fromkeys(columns, pl.String),
-            frame=lambda: snapshot._eager_unmatched_ids(),
+            batches=lambda request: _iter_unmatched_batches(
+                snapshot,
+                request=request,
+            ),
+            is_pure=True,
         )
-
-    def _eager_unmatched_ids(self) -> pl.DataFrame:
-        frame = self._identifier_matches()
-        matched: set[str] = (
-            set(frame["input_id"].cast(pl.String).to_list()) if frame.height else set()
-        )
-        rows = [
-            {
-                "group_id": group,
-                "input_id": input_id,
-                "input_namespace": self.namespace,
-                "reason": "not_found",
-            }
-            for group, input_id in self.group_membership
-            if input_id not in matched
-        ]
-        frame = pl.DataFrame(
-            rows,
-            schema={
-                "group_id": pl.String,
-                "input_id": pl.String,
-                "input_namespace": pl.String,
-                "reason": pl.String,
-            },
-        )
-        return frame if self._is_grouped else frame.drop("group_id")
 
     def _lazy_relation(
         self,
         relation_columns: Iterable[str],
-        reader: Callable[[UniProtSelection], pl.DataFrame],
+        spec: _ExtractSpec,
     ) -> pl.LazyFrame:
         snapshot = copy.copy(self)
         columns = ["input_id", "input_namespace", "primary_accession"]
         if self._is_grouped:
             columns.insert(0, "group_id")
-        return register_deferred_frame_source(
-            schema=self._schema_for_relation([*columns, *relation_columns]),
-            frame=lambda: reader(snapshot),
+        schema = self._schema_for_relation([*columns, *relation_columns])
+        return register_replayable_source(
+            schema=schema,
+            batches=lambda request: _iter_relation_batches(
+                snapshot,
+                spec=spec,
+                schema=schema,
+                request=request,
+            ),
+            is_pure=True,
         )
 
     @staticmethod
@@ -516,39 +539,6 @@ class UniProtSelection:
                 if name not in relation_types:
                     relation_types[name] = dtype
         return {column: relation_types[column] for column in columns}
-
-    def _eager_extract(
-        self,
-        table: str,
-        columns: str,
-        join: str,
-        *,
-        condition: str = "",
-        parameters: list[object] | None = None,
-        order_by: str,
-    ) -> pl.DataFrame:
-        del table
-        matches = self._matches()
-        with self.database.connect() as connection:
-            connection.execute(
-                "CREATE TEMP TABLE _selection("
-                "group_id VARCHAR, input_id VARCHAR, input_namespace VARCHAR, "
-                "primary_accession VARCHAR)"
-            )
-            if matches.height:
-                connection.executemany(
-                    "INSERT INTO _selection VALUES (?, ?, ?, ?)", matches.rows()
-                )
-            cursor = connection.execute(
-                "SELECT DISTINCT s.group_id, s.input_id, s.input_namespace, "
-                "s.primary_accession AS primary_accession, "
-                f"{columns} FROM _selection s {join}{condition} "
-                "ORDER BY s.group_id, s.input_id, s.primary_accession, "
-                f"{order_by}",
-                parameters or [],
-            )
-            frame = _cursor_frame(cursor)
-        return frame if self._is_grouped else frame.drop("group_id")
 
     def _matches(self) -> pl.DataFrame:
         matches = self._identifier_matches()
@@ -573,12 +563,10 @@ class UniProtSelection:
         )
 
     def _identifier_matches(self) -> pl.DataFrame:
-        cached = self._matches_cache
-        if cached is not None:
-            return cached
-        matches = self._query_identifier_matches()
-        object.__setattr__(self, "_matches_cache", matches)
-        return matches
+        with self._anchor_state.lock:
+            if self._anchor_state.frame is None:
+                self._anchor_state.frame = self._query_identifier_matches()
+            return self._anchor_state.frame.clone()
 
     def _query_identifier_matches(self) -> pl.DataFrame:
         inputs = pl.DataFrame(
@@ -870,6 +858,267 @@ def _cursor_frame(cursor: duckdb.DuckDBPyConnection) -> pl.DataFrame:
     }
     rows = cursor.fetchall()
     return pl.DataFrame(rows, schema=schema, orient="row")
+
+
+def _iter_selected_mapping_batches(
+    selection: UniProtMappingSelection,
+    *,
+    schema: SchemaDict,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    if not selection.input_ids:
+        return
+    connection = selection.database.connect()  # pyright: ignore[reportPrivateUsage]  # selected mapping boundary
+    reader: Any = None
+    try:
+        requested = _requested_columns(request.columns, schema)
+        output_columns = list(schema) if requested is None else requested
+        source_sql, parameters, input_expression = _selected_mapping_source(
+            connection,
+            selection,
+        )
+        projection: list[str] = []
+        for name in output_columns:
+            if name == "input_id":
+                projection.append(f'{input_expression} AS "input_id"')
+            elif name == "input_namespace":
+                projection.append("'uniprot' AS input_namespace")
+            else:
+                projection.append(f'mapping."{name}" AS "{name}"')
+        query = f"""
+            SELECT {", ".join(projection)}
+            {source_sql}
+        """
+        query += f" ORDER BY {input_expression}"
+        result = connection.execute(query, parameters)
+        reader = _uniprot_arrow_reader(result, request.effective_batch_size)
+        for record_batch in reader:
+            frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+            yield frame.cast(  # type: ignore[reportArgumentType]
+                {name: schema[name] for name in frame.columns}, strict=False
+            )
+    finally:
+        if reader is not None:
+            close = getattr(reader, "close", None)
+            if close is not None:
+                close()
+        connection.close()
+
+
+def _iter_selected_mapping_unmatched_batches(
+    selection: UniProtMappingSelection,
+    *,
+    schema: SchemaDict,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    if not selection.input_ids:
+        return
+    if selection.database._mode == "idmapping_publication":  # pyright: ignore[reportPrivateUsage]  # paired database boundary
+        matched = set(_publication_selected_mapping_ids(selection))
+    else:
+        matched = set(
+            selection.database.scan_mapping(taxon_ids=selection.taxon_ids)
+            .filter(pl.col("uniprot_id").is_in(selection.input_ids))
+            .select("uniprot_id")
+            .unique()
+            .collect()
+            .get_column("uniprot_id")
+            .to_list()
+        )
+    frame = pl.DataFrame(
+        {
+            "input_id": [
+                value for value in selection.input_ids if value not in matched
+            ],
+            "input_namespace": [
+                "uniprot" for value in selection.input_ids if value not in matched
+            ],
+            "reason": [
+                "not_found" for value in selection.input_ids if value not in matched
+            ],
+        },
+        schema=schema,
+    )
+    requested = _requested_columns(request.columns, schema)
+    if requested is not None:
+        frame = frame.select(requested)
+    yield from _frame_slices(frame, request.effective_batch_size)
+
+
+def _selected_mapping_source(
+    connection: duckdb.DuckDBPyConnection,
+    selection: UniProtMappingSelection,
+) -> tuple[str, list[str], str]:
+    parameters: list[str]
+    if len(selection.input_ids) <= _SELECTED_MAPPING_IN_THRESHOLD:
+        source_sql = (
+            "FROM mapping AS mapping WHERE mapping.uniprot_id IN ("
+            + ",".join("?" for _ in selection.input_ids)
+            + ")"
+        )
+        parameters = list(selection.input_ids)
+        input_expression = "mapping.uniprot_id"
+    else:
+        connection.execute(
+            "CREATE TEMP TABLE _selected_uniprot(input_id VARCHAR PRIMARY KEY)"
+        )
+        connection.executemany(
+            "INSERT INTO _selected_uniprot VALUES (?)",
+            [(value,) for value in selection.input_ids],
+        )
+        source_sql = (
+            "FROM mapping AS mapping JOIN _selected_uniprot AS selected "
+            "ON mapping.uniprot_id = selected.input_id"
+        )
+        parameters = []
+        input_expression = "selected.input_id"
+    if selection.taxon_ids:
+        source_sql += " AND" if " WHERE " in source_sql else " WHERE"
+        source_sql += (
+            " mapping.tax_id IN (" + ",".join("?" for _ in selection.taxon_ids) + ")"
+        )
+        parameters.extend(selection.taxon_ids)
+    return source_sql, parameters, input_expression
+
+
+def _publication_selected_mapping_ids(
+    selection: UniProtMappingSelection,
+) -> frozenset[str]:
+    state = selection._anchor_state  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    with state.lock:
+        if state.matched_ids is not None:
+            return state.matched_ids
+        connection = selection.database.connect()
+        try:
+            source_sql, parameters, input_expression = _selected_mapping_source(
+                connection,
+                selection,
+            )
+            matched = frozenset(
+                str(row[0])
+                for row in connection.execute(
+                    f"SELECT DISTINCT {input_expression} {source_sql}",
+                    parameters,
+                ).fetchall()
+            )
+        finally:
+            connection.close()
+        state.matched_ids = matched
+        return matched
+
+
+def _iter_relation_batches(
+    selection: UniProtSelection,
+    *,
+    spec: _ExtractSpec,
+    schema: SchemaDict,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    matches = selection._matches()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    if matches.is_empty():
+        return
+
+    connection = selection.database.connect()
+    reader: Any = None
+    try:
+        connection.execute(
+            "CREATE TEMP TABLE _selection("
+            "group_id VARCHAR, input_id VARCHAR, input_namespace VARCHAR, "
+            "primary_accession VARCHAR)"
+        )
+        connection.executemany(
+            "INSERT INTO _selection VALUES (?, ?, ?, ?)",
+            matches.rows(),
+        )
+        inner_query = (
+            "SELECT DISTINCT s.group_id, s.input_id, s.input_namespace, "
+            "s.primary_accession AS primary_accession, "
+            f"{spec.relation_columns} FROM _selection s {spec.join}{spec.condition} "
+            "ORDER BY s.group_id, s.input_id, s.primary_accession, "
+            f"{spec.order_by}"
+        )
+        requested = _requested_columns(request.columns, schema)
+        query = (
+            inner_query if requested is None else _project_query(inner_query, requested)
+        )
+        result = connection.execute(query, list(spec.parameters))
+        reader = _uniprot_arrow_reader(result, request.effective_batch_size)
+        for record_batch in reader:
+            frame: pl.DataFrame = pl.from_arrow(record_batch)  # type: ignore[reportUnknownMemberType]
+            frame = frame.cast(  # type: ignore[reportArgumentType]
+                {name: schema[name] for name in frame.columns if name in schema},
+                strict=False,
+            )
+            if not selection._is_grouped and "group_id" in frame.columns:  # pyright: ignore[reportPrivateUsage]
+                frame = frame.drop("group_id")
+            yield frame
+    finally:
+        if reader is not None:
+            close = getattr(reader, "close", None)
+            if close is not None:
+                close()
+        connection.close()
+
+
+def _iter_unmatched_batches(
+    selection: UniProtSelection,
+    *,
+    request: _RelationScanRequest,
+) -> Iterator[pl.DataFrame]:
+    matched = set(
+        selection._identifier_matches().get_column("input_id").to_list()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+    )
+    rows = [
+        {
+            "group_id": group,
+            "input_id": input_id,
+            "input_namespace": selection.namespace,
+            "reason": "not_found",
+        }
+        for group, input_id in selection.group_membership
+        if input_id not in matched
+    ]
+    schema: SchemaDict = {
+        "group_id": pl.String,
+        "input_id": pl.String,
+        "input_namespace": pl.String,
+        "reason": pl.String,
+    }
+    frame = pl.DataFrame(rows, schema=schema)
+    if not selection._is_grouped:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
+        frame = frame.drop("group_id")
+        schema = {name: dtype for name, dtype in schema.items() if name != "group_id"}
+    requested = _requested_columns(request.columns, schema)
+    if requested is not None:
+        frame = frame.select(requested)
+    yield from _frame_slices(frame, request.effective_batch_size)
+
+
+def _requested_columns(
+    columns: tuple[str, ...] | None,
+    schema: SchemaDict,
+) -> list[str] | None:
+    if columns is None:
+        return None
+    selected = [name for name in columns if name in schema]
+    return selected or None
+
+
+def _project_query(query: str, columns: list[str]) -> str:
+    projection = ", ".join(f'"{column}"' for column in columns)
+    return f"SELECT {projection} FROM ({query}) AS _bioextract_relation"
+
+
+def _frame_slices(frame: pl.DataFrame, batch_size: int) -> Iterator[pl.DataFrame]:
+    for offset in range(0, frame.height, batch_size):
+        yield frame.slice(offset, batch_size)
+
+
+def _uniprot_arrow_reader(result: Any, batch_size: int) -> Any:
+    to_arrow_reader = getattr(result, "to_arrow_reader", None)
+    if to_arrow_reader is not None:
+        return to_arrow_reader(batch_size)
+    return result.fetch_record_batch(rows_per_batch=batch_size)
 
 
 def _polars_type(type_name: str) -> type[pl.DataType]:
