@@ -1,0 +1,40 @@
+{
+  "artifact": "reactome-p1-v96-bounded-smoke",
+  "date": "2026-08-17",
+  "source_root": "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/reactome/mapping/v96/raw",
+  "source_roles": [
+    "uniprot_pathway_lowest_level",
+    "uniprot_pathway_all_level",
+    "pathway",
+    "pathway_relation"
+  ],
+  "observed": {
+    "lowest_level_rows": 322435,
+    "all_level_rows": 934947,
+    "lowest_level_unique_pathway_pairs": 317978,
+    "all_level_unique_pathway_pairs": 917206,
+    "human_lowest_level_rows": 53996,
+    "human_all_level_rows": 159114,
+    "human_lowest_level_unique_uniprot_ids": 12136,
+    "human_all_level_unique_uniprot_ids": 12136,
+    "r_sce_9865878_all_level_rows": 13,
+    "closure_derived_only_keys": 0,
+    "closure_official_only_keys": 0,
+    "publication_validation_issue_count": 2,
+    "publication_sce_warning_rows": 2,
+    "reopened_all_level_rows": 934947
+  },
+  "assertions": {
+    "default_is_lowest_level": true,
+    "all_level_requires_explicit_request": true,
+    "missing_pathway_rows_preserved": true,
+    "publication_reopen_passed": true,
+    "formal_publication_written": false,
+    "temporary_publication_cleaned": true
+  },
+  "notes": [
+    "The two missing_pathway_metadata warnings are one per published UniProt mapping role for R-SCE-9865878.",
+    "This is a bounded read-only smoke against the named raw subtree; no formal CephFS artifact or release catalog was changed.",
+    "No runtime or output hash claim is made by this contract smoke artifact."
+  ]
+}

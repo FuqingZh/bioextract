@@ -1,7 +1,7 @@
 # bioextract Documentation
 
-Version: v1.5
-Date: 2026-08-14
+Version: v1.6
+Date: 2026-08-17
 Status: current
 
 This directory contains durable architecture, data contracts, test standards,
@@ -41,11 +41,12 @@ when a domain does not yet have a dedicated architecture document.
 | Repository purpose and boundaries | [Domain Access Architecture](architecture/20260729-v1.0-domain-access-architecture.md) | [Repository test standard](testing/README.md) | — |
 | Cross-resource lazy relations and execution performance | [Lazy Domain Query Convergence Plan](implementation-plans/20260812-v1.0-lazy-domain-query-convergence-implementation-plan.md); [Execution and Publication Performance Convergence Plan](implementation-plans/20260814-v1.0-cross-resource-execution-performance-convergence-implementation-plan.md) | [Repository test standard](testing/README.md) | [joint_omics 23362 baseline](benchmarks/20260813-v1.0-joint-omics-23362-lazy-relation-baseline.md); [P2](benchmarks/20260814-v1.0-cross-resource-p2-candidates.md), [P3](benchmarks/20260814-v1.0-cross-resource-p3-selected-lookup.md), [P4](benchmarks/20260814-v1.0-cross-resource-p4-publication-loader.md), [v2-compatible joint_omics experiment](benchmarks/20260814-v1.0-cross-resource-p5-v2-compatible-joint-omics.md) |
 | Shared publication output | [Materialized Dataset Contract](architecture/tidy-dataset-contract.md); [metadata v2 declarative-provenance amendment](implementation-plans/20260813-v1.0-publication-metadata-v2-migration-plan.md) | [Repository test standard](testing/README.md) | — |
+| Formal metadata-v2 publications and release catalog | [20260817-r1 Formal Publication Release Plan](implementation-plans/20260817-v1.0-formal-publication-release-implementation-plan.md) | [Repository test standard](testing/README.md); resource-specific standards | [bioextract-owned reference workload](benchmarks/20260817-v1.0-formal-release-reference-workload.toml); [candidate evidence](benchmarks/20260817-v1.0-formal-release-candidate-evidence.toml); [A-only noise](benchmarks/20260817-v1.0-formal-release-reference-a-noise.json); [interleaved A/B](benchmarks/20260817-v1.0-formal-release-reference-ab.json) |
 | ChEBI and ChemOnt | [ChEBIDatabase](architecture/chebi-db.md) | [ChEBIDatabase](testing/chebi-db.md) | — |
 | GO ontology and KEGG BRITE | [GO and KEGG Tidy](architecture/go-kegg-tidy.md) | [GO and KEGG Tidy](testing/go-kegg-tidy.md) | — |
-| KEGG organism mapping | [KEGG Mapping DB](architecture/kegg-mapping-db.md); P3 DuckDB-native publisher accepted on the fixed 1,000-organism scope, with [release held](implementation-plans/20260813-v1.0-kegg-mapping-aggregate-publication-implementation-plan.md) pending its separate release gate | [KEGG Mapping DB](testing/kegg-mapping-db.md) | [2026-06 candidate benchmark](benchmarks/20260813-v1.0-kegg-mapping-2026-06-candidate.md); [P3 native publication benchmark](benchmarks/20260814-v1.0-kegg-mapping-p3-native-publication.md) |
+| KEGG organism mapping | [KEGG Mapping DB](architecture/kegg-mapping-db.md); P3 DuckDB-native publisher accepted on the fixed 1,000-organism scope, with [release held](implementation-plans/20260813-v1.0-kegg-mapping-aggregate-publication-implementation-plan.md) pending its separate release gate | [KEGG Mapping DB](testing/kegg-mapping-db.md) | [2026-06 candidate benchmark](benchmarks/20260813-v1.0-kegg-mapping-2026-06-candidate.md); [full-build evidence](benchmarks/20260817-v1.0-formal-kegg-mapping-build.json); [rno scoped readback](benchmarks/20260817-v1.0-formal-kegg-mapping-rno-validation.json) |
 | KEGG metabolic | [KEGG Metabolic Database](architecture/kegg-metabolic-db.md) | [KEGG Metabolic Database](testing/kegg-metabolic-db.md) | [2026-07 baseline](benchmarks/20260730-kegg-metabolic-2026-07-benchmark.md) |
-| Reactome | [ReactomeDatabase](architecture/reactome-db.md) | [ReactomeDatabase](testing/reactome-db.md) | — |
+| Reactome | [ReactomeDatabase](architecture/reactome-db.md); [mapping capability expansion plan](implementation-plans/20260817-v1.0-reactome-mapping-capability-expansion-implementation-plan.md) (P1: UniProt All Levels) | [ReactomeDatabase](testing/reactome-db.md) | [bounded v96 P1 smoke](benchmarks/20260817-v1.0-reactome-p1-v96-smoke.json) |
 | WikiPathways | [WikiPathwaysDatabase](architecture/wikipathways-db.md) | [WikiPathwaysDatabase](testing/wikipathways-db.md) | — |
 | eggNOG | [EggNOGDatabase](architecture/eggnog-db.md) | [EggNOGDatabase](testing/eggnog-db.md) | [5.0.2 baseline](benchmarks/20260608-v1.0-eggnog-5.0.2-benchmark.md) |
 | InterPro and Pfam | [InterProDatabase](architecture/interpro-db.md) | [InterProDatabase](testing/interpro-db.md) | [108.0 baseline](benchmarks/20260714-v1.0-interpro-108-benchmark.md) |
@@ -55,6 +56,28 @@ when a domain does not yet have a dedicated architecture document.
 | OmniPath | [OmniPath architecture](architecture/omnipath-db.md) | [OmniPath test standard](testing/omnipath-db.md) | — |
 
 ## Plans And History
+
+The accepted
+[Reactome Mapping Capability Expansion Plan](implementation-plans/20260817-v1.0-reactome-mapping-capability-expansion-implementation-plan.md)
+freezes the full namespace/target/level role model while authorizing only P1:
+explicit `UniProt2Reactome_All_Levels.txt` source, query, selection,
+publication-v0.2, and reopen support. Lowest-level behavior remains the
+default; reaction and other namespace capabilities plus the v0.2 package
+release remain separately authorized. The current-API lowest-level v96
+candidate is admitted, if accepted, through the `20260817-r1` release plan.
+
+The accepted
+[Formal Metadata v2 And KEGG Mapping Release Plan](implementation-plans/20260817-v1.0-formal-publication-release-implementation-plan.md)
+owns the separately authorized `20260817-r1` formal resource delivery. It
+rebuilds the five frozen bioextract core publications plus the current-API
+Reactome canonical profile with the released bioextract 0.5.0 metadata-v2
+contract, performs a dependency-matched interleaved A/B, prepares one
+all-available-organism KEGG mapping DuckDB, and creates only the immutable
+`meta/releases/20260817-r1/catalog.toml` catalog after its admission gates
+close. Reactome all-level v0.2 remains owned by the separate capability plan.
+`rno` is a reopened-publication selection gate, not a separate formal artifact;
+downstream activation is outside this bioextract plan. The deprecated global
+`meta/catalog.toml` is not updated.
 
 The completed
 [Publication Metadata v2 Source Inventory Migration Plan](implementation-plans/20260813-v1.0-publication-metadata-v2-migration-plan.md)

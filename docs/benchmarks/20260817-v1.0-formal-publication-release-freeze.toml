@@ -1,0 +1,160 @@
+# R0 pre-freeze record for the 20260817-r1 formal publication release.
+# acceptance=blocked is intentional: this file is evidence of the bounded
+# preflight, not authorization to build or replace formal publications.
+
+schema_version = "bioextract-formal-publication-release-freeze-v1"
+release_id = "20260817-r1"
+recorded_at = "2026-08-17"
+acceptance = "blocked"
+formal_resource_root = "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources"
+formal_release_directory = "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/meta/releases/20260817-r1"
+formal_release_directory_state = "absent_at_preflight"
+staging_root = "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/.release-staging/20260817-r1"
+rollback_root = "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/.release-rollback/20260817-r1"
+staging_root_state = "absent_at_preflight"
+rollback_root_state = "absent_at_preflight"
+
+[bioextract]
+version = "0.5.0"
+wheel_filename = "bioextract-0.5.0-py3-none-any.whl"
+wheel_path = "/home/fqzhang/project/bioextract/dist/bioextract-0.5.0-py3-none-any.whl"
+wheel_sha256 = "f43b8890dbf0fbe980f5474f45d30cf3eee6e10ad2b59a23a215e6070ca76f77"
+source_tag = "0.5.0"
+source_commit = "cf18a96f73f09c249be4285ca7a67c07acc7f3db"
+
+[a_reader]
+version = "0.4.0"
+wheel_filename = "bioextract-0.4.0-py3-none-any.whl"
+wheel_path = "/tmp/bioextract-a-20260817/bioextract-0.4.0-py3-none-any.whl"
+wheel_sha256 = "1c90e51161bb7c4530dc7c0246c3bd776b2b1e5df65d2f5b040bdc4801c71e97"
+metadata_v1_formal_publications_readable = true
+five_publication_reader_probe = "passed"
+harness_status = "missing_from_joint_omics"
+
+[catalog_builder]
+repository = "/home/fqzhang/project/bioinfo-resource-tools"
+commit = "daa9f1d"
+remote_status = "no_remote_configured"
+production_authority = "not_yet_delivered"
+
+[catalog]
+baseline_path = "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/meta/releases/20260813-r1/catalog.toml"
+baseline_sha256 = "4f508c22f7f1fe7111447a8742ca6f8f077db5950246f149771ee3213e445170"
+baseline_publication_count = 9
+target_publication_count = 10
+global_catalog_path = "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/meta/catalog.toml"
+global_catalog_sha256_at_preflight = "874b3ec1571b27436b5c1b7c5877282bb5a2323742b4f866fceaaa4f16d6ccfd"
+global_catalog_action = "leave_unchanged"
+latest_alias_action = "prohibited"
+
+[runtime]
+python = "3.13.11"
+polars = "1.43.2"
+duckdb = "1.5.5"
+pyarrow = "25.0.0"
+host = "node4"
+os = "Linux 4.18.0-348.7.1.el8_5.x86_64 x86_64 GNU/Linux"
+file_descriptor_limit = 10240
+available_memory_bytes_at_preflight = 405036312000
+ceph_filesystem_available_bytes_at_preflight = 214782668800
+home_filesystem_available_bytes_at_preflight = 3670874932
+
+[thresholds]
+status = "operator_proposed_pending_approval"
+poll_interval_seconds = 60
+cancellation_deadline_seconds = 120
+max_rss_bytes = 274877906944
+max_open_file_descriptors = 8192
+minimum_ceph_free_bytes = 107374182400
+minimum_staging_free_bytes = 10737418240
+action_on_crossing = "abort_without_truncating_biological_rows"
+
+[downstream]
+status = "blocked"
+repository = "/home/fqzhang/project/joint_omics"
+observed_commit = "0dae79db0f377683cf1d7f5c345a3b76ee4efb66"
+observed_bioextract_requirement = ">=0.3.0"
+required_a_reader = "released bioextract 0.4.0"
+required_profiles = ["proteome_metabolome-v2", "proteome_metabolome-rno-v1"]
+required_canonical_artifact_count = 11
+required_canonical_artifact_manifest = "absent_from_current_repository"
+required_a_b_workload = "absent_from_current_repository"
+blocker = "joint_omics is still in the foundation-stage implementation; the v2/rno profiles, frozen A harness inputs, and canonical 11-artifact semantic manifest are not available. Its worktree has pre-existing user changes and is not modified by this release task."
+
+[[selectors]]
+selector = "chebi/database/2026-07-07"
+formal_path = "chebi/database/2026-07-07/tidy/data.duckdb"
+raw_root = "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/chebi/database/2026-07-07/raw"
+raw_file_count = 11
+raw_total_bytes = 577046913
+raw_lock_sha256 = "cce52900af80d6e5463693abf522930edc8e63e8974cd955251af247ae11f75f"
+retained_source_role = "ChEBI table bundle plus official ontology input"
+formal_state = "existing_metadata_v1_baseline"
+formal_bytes = 960507904
+formal_inode = 1102156342800
+table_inventory_authority = "baseline catalog entry pinned by catalog.baseline_sha256"
+
+[[selectors]]
+selector = "rhea/database/2026-06-10"
+formal_path = "rhea/database/2026-06-10/tidy/data.duckdb"
+raw_root = "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/rhea/database/2026-06-10/raw"
+raw_file_count = 15
+raw_total_bytes = 175436421
+raw_lock_sha256 = "89fc6d90863a6aa8d4df4c91225edb4678637f617f3b7319bc257aec01948ddd"
+retained_source_role = "Rhea release bundle and mapping files"
+formal_state = "existing_metadata_v1_baseline"
+formal_bytes = 335032320
+formal_inode = 1102156341323
+table_inventory_authority = "baseline catalog entry pinned by catalog.baseline_sha256"
+
+[[selectors]]
+selector = "kegg/metabolic/2026-07"
+formal_path = "kegg/metabolic/2026-07/tidy/data.duckdb"
+raw_root = "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/kegg/metabolic/2026-07/raw"
+raw_file_count = 4112
+raw_total_bytes = 467360027
+raw_lock_sha256 = "84269cb1ed879defd397c5145fa7976d3aaca3e901d1849f4757cfb32d5224ef"
+retained_source_role = "KEGG metabolic compound, reaction, enzyme, module, and cross-reference bundle"
+formal_state = "existing_metadata_v1_baseline"
+formal_bytes = 16789504
+formal_inode = 2199150216974
+table_inventory_authority = "baseline catalog entry pinned by catalog.baseline_sha256"
+
+[[selectors]]
+selector = "uniprot/idmapping/2026_01"
+formal_path = "uniprot/idmapping/2026_01/tidy/data.duckdb"
+raw_root = "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/uniprot/idmapping/2026_01/raw"
+raw_file_count = 1
+raw_total_bytes = 10030518715
+raw_lock_sha256 = "0b348e2de4034062ebe9f3d5e19ef29f3ad8db719e50dbbacb262d164e5bd733"
+retained_source_role = "all-taxa UniProt selected idmapping table"
+formal_state = "existing_metadata_v1_baseline"
+formal_bytes = 15730225152
+formal_inode = 1102172284541
+table_inventory_authority = "baseline catalog entry pinned by catalog.baseline_sha256"
+
+[[selectors]]
+selector = "uniprot/kb/2026_01"
+formal_path = "uniprot/kb/2026_01/tidy/data.duckdb"
+raw_root = "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/uniprot/kb/2026_01/raw"
+raw_file_count = 2
+raw_total_bytes = 102032508
+raw_lock_sha256 = "03f834dabca3e0d843828e1d4e78f028fba26b5da93dd4dfc435959b0988fc76"
+retained_source_role = "complete Swiss-Prot entries, canonical sequences, and isoform sequences"
+formal_state = "existing_metadata_v1_baseline"
+formal_bytes = 1495281664
+formal_inode = 1102156340658
+table_inventory_authority = "baseline catalog entry pinned by catalog.baseline_sha256"
+
+[[selectors]]
+selector = "kegg/mapping/2026-06"
+formal_path = "kegg/mapping/2026-06/tidy/data.duckdb"
+raw_root = "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/kegg/mapping/2026-06/raw"
+raw_file_count = 58912
+raw_total_bytes = 8383815319
+raw_lock_sha256 = "2a3b54656132430536b1d96f6c2d542efea5eed7af7b6de5f71cbc68626e2fb2"
+retained_source_role = "all available KEGG organism directories plus KO and organism catalogs"
+expected_organism_count = 11782
+expected_scope_mode = "all_available_at_build"
+formal_state = "absent_candidate_to_build"
+table_inventory_authority = "R4 candidate validation"

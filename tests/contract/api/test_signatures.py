@@ -193,8 +193,10 @@ def test_resource_factory_parameter_names_follow_domain_roles() -> None:
         kegg.KEGGDatabase.from_duckdb: ("path",),
         reactome.ReactomeDatabase.from_files: (
             "uniprot_mapping",
+            "uniprot_all_levels",
             "pathways",
             "relations",
+            "release_version",
         ),
         wikipathways.WikiPathwaysDatabase.from_gmt: ("source", "glob"),
         wikipathways.WikiPathwaysDatabase.from_duckdb: ("path",),
@@ -281,6 +283,27 @@ def test_phase_1_constructor_parameter_kinds_are_explicit() -> None:
         and metabolic_parameters[name].default is None
         for name in tuple(metabolic_parameters)[1:]
     )
+
+
+def test_reactome_selection_dimensions_are_explicit() -> None:
+    assert tuple(
+        inspect.signature(reactome.ReactomeDatabase.select_ids).parameters
+    ) == (
+        "self",
+        "ids",
+        "namespace",
+        "target",
+        "pathway_level",
+    )
+    assert tuple(
+        inspect.signature(reactome.ReactomeDatabase.select_groups).parameters
+    ) == ("self", "ids_by_group", "namespace", "target", "pathway_level")
+    assert tuple(
+        inspect.signature(reactome.ReactomeDatabase.pathway_mappings).parameters
+    ) == ("self", "namespace", "pathway_level")
+    assert tuple(
+        inspect.signature(reactome.ReactomeDatabase.pathway_genes).parameters
+    ) == ("self", "pathway_level")
 
 
 def test_phase_2_constructor_parameter_kinds_are_explicit() -> None:

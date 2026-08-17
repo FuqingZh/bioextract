@@ -19,7 +19,11 @@ from bioextract._publication import (
     BIOEXTRACT_RELATIONS,
     METADATA_SCHEMA_VERSION,
     DuckDBWriteResult,
+    RelationSpec,
+    SourceFileRecord,
+    ValidationIssue,
     validate_duckdb_metadata_v2,
+    write_duckdb_publication,
 )
 from bioextract._shared import (
     create_group_input_frames,
@@ -30,17 +34,21 @@ from bioextract.errors import CapabilityError, IntegrityError
 
 from .constant import (
     ASSET_SPECS,
+    MAPPING_ALL_LEVEL_ROLE,
+    MAPPING_LOWEST_LEVEL_ROLE,
     MEDIA_TYPE_TSV,
     SCHEMA_GROUP_INPUT_IDS,
     SCHEMA_GROUPS,
     SCHEMA_UNMAPPED,
     SCHEMA_VERSION,
+    SOURCE_SCHEMA_PROFILE,
 )
 from .util import (
     extract_term2gene_frame,
     extract_term2name_frame,
     filter_relation_frame,
     filter_species_frame,
+    read_mapping_family_frame,
     read_mapping_frame,
     read_pathway_frame,
     read_relation_frame,
@@ -57,6 +65,7 @@ __all__ = [
 @dataclass(frozen=True, slots=True)
 class _ReactomeSnapshot:
     file_uniprot2reactome: Path | None = None
+    file_uniprot_all_levels: Path | None = None
     file_pathways: Path | None = None
     file_relations: Path | None = None
 
@@ -80,9 +89,10 @@ class ReactomeDatabase:
 
     `ReactomeDatabase` is the public entrypoint for extracting Reactome annotation
     mappings and standard enrichment inputs from local open-data files. The
-    three raw files are composable: callers may provide only the files needed
+    four raw roles are composable: callers may provide only the files needed
     by the requested capability, and missing-file errors are raised at the
-    feature boundary.
+    feature boundary. UniProt lowest-level and all-level mappings remain
+    separate capabilities throughout construction, query, and publication.
 
     Construct instances with :meth:`from_files`, optionally constrain them with
     :meth:`with_species`, then either extract whole-resource frames or create
@@ -107,10 +117,18 @@ class ReactomeDatabase:
 
     snapshot: _ReactomeSnapshot
     species: str | None = None
+    _release_version: str | None = field(default=None, init=False, repr=False)
+    _release_version_source: str | None = field(default=None, init=False, repr=False)
     _df_mapping_raw: pl.DataFrame | None = field(default=None, init=False, repr=False)
+    _df_mapping_all_levels_raw: pl.DataFrame | None = field(
+        default=None, init=False, repr=False
+    )
     _df_pathways_raw: pl.DataFrame | None = field(default=None, init=False, repr=False)
     _df_relations_raw: pl.DataFrame | None = field(default=None, init=False, repr=False)
     _df_mapping: pl.DataFrame | None = field(default=None, init=False, repr=False)
+    _df_mapping_all_levels: pl.DataFrame | None = field(
+        default=None, init=False, repr=False
+    )
     _df_pathways: pl.DataFrame | None = field(default=None, init=False, repr=False)
     _df_relations: pl.DataFrame | None = field(default=None, init=False, repr=False)
     _df_term2gene: pl.DataFrame | None = field(default=None, init=False, repr=False)
@@ -128,15 +146,22 @@ class ReactomeDatabase:
         cls,
         *,
         uniprot_mapping: os.PathLike[str] | str | None = None,
+        uniprot_all_levels: os.PathLike[str] | str | None = None,
         pathways: os.PathLike[str] | str | None = None,
         relations: os.PathLike[str] | str | None = None,
+        release_version: str | None = None,
     ) -> ReactomeDatabase:
         """Create a dataset handle from local Reactome files.
 
         Args:
-            uniprot_mapping: Path to `UniProt2Reactome.txt`.
+            uniprot_mapping: Path to the lowest-level
+                `UniProt2Reactome.txt` relation.
+            uniprot_all_levels: Path to the explicit hierarchy-expanded
+                `UniProt2Reactome_All_Levels.txt` relation.
             pathways: Path to `ReactomePathways.txt`.
             relations: Path to `ReactomePathwaysRelation.txt`.
+            release_version: Optional caller-declared Reactome snapshot
+                identity. It is never inferred from a path or manifest.
 
         Returns:
             A dataset handle that can build whole-resource frames or selections.
@@ -150,20 +175,35 @@ class ReactomeDatabase:
 
             >>> db = ReactomeDatabase.from_files(
             ...     uniprot_mapping="data/reactome/UniProt2Reactome.txt",
+            ...     uniprot_all_levels="data/reactome/UniProt2Reactome_All_Levels.txt",
             ...     pathways="data/reactome/ReactomePathways.txt",
             ... )
             >>> sorted(db.build_tidy().frames)
-            ['mapping', 'pathway', 'term2gene', 'term2name']
+            ['pathway', 'uniprot_pathway_all_level', 'uniprot_pathway_lowest_level']
         """
-        if uniprot_mapping is None and pathways is None and relations is None:
+        if (
+            uniprot_mapping is None
+            and uniprot_all_levels is None
+            and pathways is None
+            and relations is None
+        ):
             raise ValueError("At least one Reactome input file must be provided")
         file_uniprot2reactome = uniprot_mapping
+        file_uniprot_all_levels = uniprot_all_levels
         file_pathways = pathways
         file_relations = relations
+        normalized_release_version = _normalize_release_version(release_version)
         if file_uniprot2reactome is not None:
             file_uniprot2reactome = _validate_reactome_file(
                 file_uniprot2reactome,
                 label="Reactome UniProt2Reactome file",
+                forbidden_names={"UniProt2Reactome_All_Levels.txt"},
+            )
+        if file_uniprot_all_levels is not None:
+            file_uniprot_all_levels = _validate_reactome_file(
+                file_uniprot_all_levels,
+                label="Reactome UniProt2Reactome all-levels file",
+                forbidden_names={"UniProt2Reactome.txt"},
             )
         if file_pathways is not None:
             file_pathways = _validate_reactome_file(
@@ -175,13 +215,19 @@ class ReactomeDatabase:
                 file_relations,
                 label="Reactome pathway relations file",
             )
-        return cls(
+        result = cls(
             snapshot=_ReactomeSnapshot(
                 file_uniprot2reactome=file_uniprot2reactome,
+                file_uniprot_all_levels=file_uniprot_all_levels,
                 file_pathways=file_pathways,
                 file_relations=file_relations,
             ),
         )
+        result._release_version = normalized_release_version
+        result._release_version_source = (
+            "caller" if normalized_release_version is not None else None
+        )
+        return result
 
     @classmethod
     def from_duckdb(cls, path: os.PathLike[str] | str) -> ReactomeDatabase:
@@ -215,7 +261,9 @@ class ReactomeDatabase:
         publication_path = Path(path).absolute()
         identity_before = _file_identity(publication_path)
         try:
-            tables = _validate_reactome_publication(publication_path)
+            tables, release_version, release_version_source = (
+                _validate_reactome_publication(publication_path)
+            )
             identity_after = _file_identity(publication_path)
         except (KeyError, TypeError, ValueError) as error:
             raise IntegrityError(str(error)) from error
@@ -229,7 +277,23 @@ class ReactomeDatabase:
         result._publication_path = publication_path
         result._publication_identity = identity_after
         result._publication_tables = tables
+        result._release_version = release_version
+        result._release_version_source = release_version_source
         return result
+
+    @property
+    def release_version(self) -> str | None:
+        """Return the caller-declared Reactome snapshot identity.
+
+        Examples:
+            >>> db = ReactomeDatabase.from_files(
+            ...     uniprot_mapping="data/reactome/UniProt2Reactome.txt",
+            ...     release_version="96",
+            ... )
+            >>> db.release_version
+            '96'
+        """
+        return self._release_version
 
     def connect(self) -> duckdb.DuckDBPyConnection:
         """Return a fresh caller-owned read-only DuckDB connection.
@@ -289,7 +353,7 @@ class ReactomeDatabase:
             >>> (
             ...     db.with_species("Homo sapiens")
             ...     .build_tidy()
-            ...     .frames["mapping"]
+            ...     .frames["uniprot_pathway_lowest_level"]
             ...     .collect()["species"]
             ...     .unique()
             ...     .to_list()
@@ -303,17 +367,31 @@ class ReactomeDatabase:
             snapshot=self.snapshot,
             species=species_normalized,
         )
+        result._release_version = self._release_version
+        result._release_version_source = self._release_version_source
         result._publication_path = self._publication_path
         result._publication_identity = self._publication_identity
         result._publication_tables = self._publication_tables
         return result
 
-    def select_ids(self, ids: Iterable[str]) -> ReactomeSelection:
-        """Create a single-query selection from UniProt accessions.
+    def select_ids(
+        self,
+        ids: Iterable[str],
+        *,
+        namespace: str = "uniprot",
+        target: str = "pathway",
+        pathway_level: str = "lowest_level",
+    ) -> ReactomeSelection:
+        """Create a single-query selection for one Reactome capability.
 
         Args:
             ids: Input UniProt accessions. Pipe-style UniProt values are
                 normalized by the shared input normalizer.
+            namespace: Implemented identifier namespace. P1 accepts
+                ``"uniprot"``.
+            target: Implemented target relation. P1 accepts ``"pathway"``.
+            pathway_level: ``"lowest_level"`` or the explicit
+                ``"all_levels"`` mapping capability.
 
         Returns:
             A selection that can extract pathway mappings and unmapped IDs.
@@ -332,6 +410,11 @@ class ReactomeDatabase:
             >>> selection.unmatched_ids().collect().to_dicts()
             [{'input_id': 'MISSING'}]
         """
+        namespace, target, pathway_level = _validate_selection_dimensions(
+            namespace=namespace,
+            target=target,
+            pathway_level=pathway_level,
+        )
         self._assert_publication_current()
         df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
         return ReactomeSelection(
@@ -339,16 +422,28 @@ class ReactomeDatabase:
             _df_input_ids=df_input_ids,
             _df_groups=None,
             _df_group_membership=None,
+            namespace=namespace,
+            target=target,
+            pathway_level=pathway_level,
         )
 
     def select_groups(
         self,
         ids_by_group: Mapping[str, Iterable[str]],
+        *,
+        namespace: str = "uniprot",
+        target: str = "pathway",
+        pathway_level: str = "lowest_level",
     ) -> ReactomeSelection:
-        """Create a grouped selection from multiple UniProt accession sets.
+        """Create a grouped selection for one Reactome capability.
 
         Args:
             ids_by_group: Mapping from group label to input UniProt accessions.
+            namespace: Implemented identifier namespace. P1 accepts
+                ``"uniprot"``.
+            target: Implemented target relation. P1 accepts ``"pathway"``.
+            pathway_level: ``"lowest_level"`` or the explicit
+                ``"all_levels"`` mapping capability.
 
         Returns:
             A grouped selection that carries `group_id` through outputs.
@@ -375,6 +470,11 @@ class ReactomeDatabase:
             >>> selection.unmatched_ids().collect().to_dicts()
             [{'group_id': 'control', 'input_id': 'MISSING'}]
         """
+        namespace, target, pathway_level = _validate_selection_dimensions(
+            namespace=namespace,
+            target=target,
+            pathway_level=pathway_level,
+        )
         self._assert_publication_current()
         grp_in_frames = create_group_input_frames(
             ids_by_group,
@@ -386,39 +486,84 @@ class ReactomeDatabase:
             _df_input_ids=grp_in_frames.df_input_ids,
             _df_groups=grp_in_frames.df_groups,
             _df_group_membership=grp_in_frames.df_group_membership,
+            namespace=namespace,
+            target=target,
+            pathway_level=pathway_level,
         )
 
-    def pathway_genes(self) -> pl.LazyFrame:
-        """Return distinct Reactome pathway-to-UniProt edges lazily.
+    def pathway_mappings(
+        self,
+        *,
+        namespace: str = "uniprot",
+        pathway_level: str = "lowest_level",
+    ) -> pl.LazyFrame:
+        """Return canonical pathway mapping rows for one explicit level.
+
+        The default is the official lowest-level UniProt relation. The
+        hierarchy-expanded relation is never substituted or unioned implicitly.
 
         Examples:
-            >>> db.pathway_genes().collect()  # doctest: +SKIP
-            shape: (..., 2)
+            Request hierarchy-expanded UniProt mappings explicitly:
+
+            >>> db = ReactomeDatabase.from_files(
+            ...     uniprot_all_levels="data/reactome/UniProt2Reactome_All_Levels.txt"
+            ... )
+            >>> db.pathway_mappings(pathway_level="all_levels")  # doctest: +SKIP
+            <LazyFrame ...>
         """
+        _, _, pathway_level = _validate_selection_dimensions(
+            namespace=namespace,
+            target="pathway",
+            pathway_level=pathway_level,
+        )
         snapshot = copy.copy(self)
-        schema = dict.fromkeys(["reactome_pathway_id", "uniprot_id"], pl.String)
+        schema = dict.fromkeys(
+            [
+                "uniprot_id",
+                "reactome_pathway_id",
+                "reactome_url",
+                "pathway_name",
+                "evidence_code",
+                "species",
+            ],
+            pl.String,
+        )
         if snapshot._publication_path is not None:
             return register_replayable_source(
                 schema=schema,
                 batches=lambda request: _iter_publication_relation_batches(
                     snapshot,
-                    relation="pathway_genes",
+                    relation="pathway_mappings",
+                    pathway_level=pathway_level,
                     schema=schema,
                     request=request,
                 ),
             )
-        if not snapshot._has_mapping():
-            snapshot._raise_missing_capability(
-                "Cannot extract Reactome mapping without UniProt2Reactome file",
-                "Reactome publication does not contain protein-pathway mappings",
-            )
-        assert snapshot.snapshot.file_uniprot2reactome is not None
-        lf_mapping = scan_mapping_frame(snapshot.snapshot.file_uniprot2reactome)
+        snapshot._require_mapping_capability(pathway_level)
+        file_mapping = snapshot._mapping_source_path(pathway_level)
+        assert file_mapping is not None
+        lf_mapping = scan_mapping_frame(file_mapping)
         if snapshot.species is not None:
             lf_mapping = lf_mapping.filter(pl.col("species") == snapshot.species)
         return lf_mapping.select(list(schema)).unique().sort(list(schema))
 
-    def _eager_pathway_genes(self) -> pl.DataFrame:
+    def pathway_genes(self, *, pathway_level: str = "lowest_level") -> pl.LazyFrame:
+        """Return distinct Reactome pathway-to-UniProt edges lazily.
+
+        ``pathway_level`` is explicit because all-level enrichment has a
+        different biological universe from the preserved lowest-level default.
+
+        Examples:
+            >>> db.pathway_genes().collect()  # doctest: +SKIP
+            shape: (..., 2)
+            >>> db.pathway_genes(pathway_level="all_levels")  # doctest: +SKIP
+            shape: (..., 2)
+        """
+        mapping = self.pathway_mappings(pathway_level=pathway_level)
+        schema = dict.fromkeys(["reactome_pathway_id", "uniprot_id"], pl.String)
+        return mapping.select(list(schema)).unique().sort(list(schema))
+
+    def _eager_pathway_genes(self, pathway_level: str = "lowest_level") -> pl.DataFrame:
         """Extract distinct Reactome-pathway-to-UniProt enrichment pairs.
 
         The current species scope is applied before pairs are deduplicated and
@@ -437,9 +582,7 @@ class ReactomeDatabase:
             [{'reactome_pathway_id': 'R-HSA-6798695', 'uniprot_id': 'P04637'}, {'reactome_pathway_id': 'R-HSA-6798695', 'uniprot_id': 'Q9Y243'}]
         """
         self._assert_publication_current()
-        if self._df_term2gene is None:
-            self._df_term2gene = extract_term2gene_frame(self._mapping_frame())
-        return self._df_term2gene
+        return extract_term2gene_frame(self._mapping_frame(pathway_level))
 
     def pathway_names(self) -> pl.LazyFrame:
         """Return Reactome pathway display names and species lazily.
@@ -614,33 +757,28 @@ class ReactomeDatabase:
         """Build a lazy Reactome tidy dataset from the available source files.
 
         Returns:
-            A `TidyDataset` containing only assets derivable from the provided
-            raw files. Species scoping is reflected in every applicable frame.
+            A `TidyDataset` containing only canonical role assets derivable from
+            the provided raw files. Species scoping is reflected in every
+            applicable frame.
 
         Examples:
-            Build all five tidy frames when every resource is available:
+            Build all four canonical role frames when every P1 resource is
+            available:
 
             >>> db = ReactomeDatabase.from_files(
             ...     uniprot_mapping="data/reactome/UniProt2Reactome.txt",
+            ...     uniprot_all_levels="data/reactome/UniProt2Reactome_All_Levels.txt",
             ...     pathways="data/reactome/ReactomePathways.txt",
             ...     relations="data/reactome/ReactomePathwaysRelation.txt",
             ... )
             >>> sorted(db.build_tidy().frames)
-            ['mapping', 'pathway', 'relation', 'term2gene', 'term2name']
+            ['pathway', 'pathway_relation', 'uniprot_pathway_all_level', 'uniprot_pathway_lowest_level']
         """
         self._assert_publication_current()
         frames: dict[str, pl.DataFrame] = {}
         assets: list[TidyAsset] = []
         for path, kind, frame_name in ASSET_SPECS:
-            if frame_name == "mapping" and not self._has_mapping():
-                continue
-            if frame_name == "term2gene" and not self._has_mapping():
-                continue
-            if frame_name == "pathway" and not self._has_pathway():
-                continue
-            if frame_name == "term2name" and not self._has_pathway():
-                continue
-            if frame_name == "relation" and not self._has_relation():
+            if not self._has_tidy_role(frame_name):
                 continue
             frames[frame_name] = self._build_tidy_frame(frame_name)
             assets.append(TidyAsset(path=path, kind=kind, frame_name=frame_name))
@@ -654,10 +792,12 @@ class ReactomeDatabase:
             frames={frame_name: frame.lazy() for frame_name, frame in frames.items()},
             source=self._tidy_sources(),
             resource_schema_version=SCHEMA_VERSION,
-            source_schema_profile="reactome-mapping-files-v1",
+            source_schema_profile=SOURCE_SCHEMA_PROFILE,
             build_id_prefix="reactome-mapping",
             assets=tuple(assets),
             resource_name="reactome",
+            release_version=self._release_version,
+            release_version_source=self._release_version_source,
         )
 
     def write_duckdb(
@@ -668,8 +808,8 @@ class ReactomeDatabase:
     ) -> DuckDBWriteResult:
         """Atomically publish available Reactome relations as one DuckDB.
 
-        Enrichment projections are omitted because they duplicate the canonical
-        protein-pathway and pathway relations.
+        Enrichment projections are omitted because they are derived from the
+        canonical role tables.
 
         Examples:
             >>> from tempfile import TemporaryDirectory
@@ -679,59 +819,60 @@ class ReactomeDatabase:
             >>> with TemporaryDirectory() as dir_out:
             ...     result = db.write_duckdb(Path(dir_out) / "reactome.duckdb")
             ...     result.tables
-            ('protein_pathway',)
+            ('uniprot_pathway_lowest_level',)
         """
         if self._publication_path is not None:
             raise CapabilityError(
                 "write_duckdb() requires a Reactome source-file handle"
             )
         dataset = self.build_tidy()
-        assets = tuple(
-            asset
-            for asset in dataset.assets
-            if asset.frame_name not in {"term2gene", "term2name"}
-        )
-        canonical = TidyDataset(
-            frames=dataset.frames,
-            source=dataset.source,
-            resource_schema_version=dataset.resource_schema_version,
-            source_schema_profile=dataset.source_schema_profile,
-            build_id_prefix=dataset.build_id_prefix,
-            assets=assets,
-            resource_name=dataset.resource_name,
-            release_version=dataset.release_version,
-        )
-        return canonical.write_duckdb(
-            path,
-            table_names={
-                "mapping": "protein_pathway",
-                "relation": "pathway_relation",
-            },
-            if_exists=if_exists,
-        )
-
-    def _mapping_frame(self) -> pl.DataFrame:
-        """Return and cache the normalized mapping in the current scope.
-
-        Raises:
-            ValueError: If the UniProt-to-Reactome mapping file was not supplied.
-
-        Notes:
-            Public extractors own the stable output contracts. Keep this raw
-            normalized frame private so parser columns cannot become an
-            accidental API.
-        """
-        if not self._has_mapping():
-            self._raise_missing_capability(
-                "Cannot extract Reactome mapping without UniProt2Reactome file",
-                "Reactome publication does not contain protein-pathway mappings",
+        relations = tuple(
+            RelationSpec(
+                table_name=asset.frame_name,
+                frame=dataset.frames[asset.frame_name],
+                role=asset.kind,
             )
-        if self._df_mapping is None:
-            self._df_mapping = filter_species_frame(
-                self._mapping_raw_frame(),
+            for asset in dataset.assets
+        )
+        sources = tuple(
+            SourceFileRecord(
+                logical_name=source.logical_name,
+                path=source.path,
+                media_type=source.media_type,
+                bytes=source.bytes,
+                sha256=source.sha256,
+            )
+            for source in self._tidy_sources()
+        )
+        return write_duckdb_publication(
+            relations,
+            path,
+            resource_name="reactome",
+            resource_schema_version=SCHEMA_VERSION,
+            source_schema_profile=SOURCE_SCHEMA_PROFILE,
+            sources=sources,
+            release_version=self._release_version,
+            release_version_source=self._release_version_source,
+            if_exists=if_exists,
+            validation_issues=self._validation_issues(),
+        )
+
+    def _mapping_frame(self, pathway_level: str = "lowest_level") -> pl.DataFrame:
+        """Return and cache one normalized UniProt mapping level in scope."""
+        self._require_mapping_capability(pathway_level)
+        if pathway_level == "lowest_level":
+            if self._df_mapping is None:
+                self._df_mapping = filter_species_frame(
+                    self._mapping_raw_frame(pathway_level),
+                    self.species,
+                )
+            return self._df_mapping
+        if self._df_mapping_all_levels is None:
+            self._df_mapping_all_levels = filter_species_frame(
+                self._mapping_raw_frame(pathway_level),
                 self.species,
             )
-        return self._df_mapping
+        return self._df_mapping_all_levels
 
     def _pathway_frame(self) -> pl.DataFrame:
         if not self._has_pathway():
@@ -746,21 +887,48 @@ class ReactomeDatabase:
             )
         return self._df_pathways
 
-    def _mapping_raw_frame(self) -> pl.DataFrame:
-        if not self._has_mapping():
-            self._raise_missing_capability(
-                "Cannot read Reactome mapping without UniProt2Reactome file",
-                "Reactome publication does not contain protein-pathway mappings",
-            )
-        if self._df_mapping_raw is None:
+    def _mapping_raw_frame(self, pathway_level: str = "lowest_level") -> pl.DataFrame:
+        self._require_mapping_capability(pathway_level)
+        if pathway_level == "lowest_level":
+            if self._df_mapping_raw is None:
+                if self._publication_path is None:
+                    assert self.snapshot.file_uniprot2reactome is not None
+                    self._df_mapping_raw = read_mapping_frame(
+                        self.snapshot.file_uniprot2reactome
+                    )
+                else:
+                    self._df_mapping_raw = self._read_publication_table(
+                        MAPPING_LOWEST_LEVEL_ROLE
+                    )
+            return self._df_mapping_raw
+        if self._df_mapping_all_levels_raw is None:
             if self._publication_path is None:
-                assert self.snapshot.file_uniprot2reactome is not None
-                self._df_mapping_raw = read_mapping_frame(
-                    self.snapshot.file_uniprot2reactome
+                assert self.snapshot.file_uniprot_all_levels is not None
+                self._df_mapping_all_levels_raw = read_mapping_family_frame(
+                    self.snapshot.file_uniprot_all_levels,
+                    columns=[
+                        "uniprot_id",
+                        "reactome_pathway_id",
+                        "reactome_url",
+                        "pathway_name",
+                        "evidence_code",
+                        "species",
+                    ],
+                    schema={
+                        "uniprot_id": pl.String,
+                        "reactome_pathway_id": pl.String,
+                        "reactome_url": pl.String,
+                        "pathway_name": pl.String,
+                        "evidence_code": pl.String,
+                        "species": pl.String,
+                    },
+                    context="Reactome UniProt2Reactome all-levels file",
                 )
             else:
-                self._df_mapping_raw = self._read_publication_table("protein_pathway")
-        return self._df_mapping_raw
+                self._df_mapping_all_levels_raw = self._read_publication_table(
+                    MAPPING_ALL_LEVEL_ROLE
+                )
+        return self._df_mapping_all_levels_raw
 
     def _pathway_raw_frame(self) -> pl.DataFrame:
         if not self._has_pathway():
@@ -794,10 +962,33 @@ class ReactomeDatabase:
                 )
         return self._df_relations_raw
 
-    def _has_mapping(self) -> bool:
-        return (
-            self.snapshot.file_uniprot2reactome is not None
-            or "protein_pathway" in self._publication_tables
+    def _mapping_source_path(self, pathway_level: str) -> Path | None:
+        _mapping_role_for_level(pathway_level)
+        if pathway_level == "lowest_level":
+            return self.snapshot.file_uniprot2reactome
+        return self.snapshot.file_uniprot_all_levels
+
+    def _mapping_table(self, pathway_level: str) -> str:
+        return _mapping_role_for_level(pathway_level)
+
+    def _has_mapping(self, pathway_level: str = "lowest_level") -> bool:
+        table_name = self._mapping_table(pathway_level)
+        return self._mapping_source_path(pathway_level) is not None or table_name in (
+            self._publication_tables
+        )
+
+    def _require_mapping_capability(self, pathway_level: str) -> None:
+        if self._has_mapping(pathway_level):
+            return
+        if pathway_level == "all_levels":
+            self._raise_missing_capability(
+                "Cannot extract all-level Reactome mapping without "
+                "UniProt2Reactome_All_Levels file",
+                "Reactome publication does not contain all-level UniProt pathway mappings",
+            )
+        self._raise_missing_capability(
+            "Cannot extract Reactome mapping without UniProt2Reactome file",
+            "Reactome publication does not contain lowest-level UniProt pathway mappings",
         )
 
     def _has_pathway(self) -> bool:
@@ -811,6 +1002,17 @@ class ReactomeDatabase:
             self.snapshot.file_relations is not None
             or "pathway_relation" in self._publication_tables
         )
+
+    def _has_tidy_role(self, frame_name: str) -> bool:
+        if frame_name == MAPPING_LOWEST_LEVEL_ROLE:
+            return self._has_mapping("lowest_level")
+        if frame_name == MAPPING_ALL_LEVEL_ROLE:
+            return self._has_mapping("all_levels")
+        if frame_name == "pathway":
+            return self._has_pathway()
+        if frame_name == "pathway_relation":
+            return self._has_relation()
+        raise ValueError(f"Unsupported Reactome tidy role: {frame_name}")
 
     def _assert_publication_identity(self) -> None:
         path = self._publication_path
@@ -843,18 +1045,101 @@ class ReactomeDatabase:
             )
         return frame
 
+    def _validation_issues(self) -> tuple[ValidationIssue, ...]:
+        """Return bounded non-fatal publication issues and enforce P1 parity."""
+        issues: list[ValidationIssue] = []
+        if self._has_pathway():
+            pathway_ids = self._pathway_frame().select("reactome_pathway_id").unique()
+            for pathway_level in ("lowest_level", "all_levels"):
+                if not self._has_mapping(pathway_level):
+                    continue
+                role = self._mapping_table(pathway_level)
+                missing = (
+                    self._mapping_frame(pathway_level)
+                    .select("reactome_pathway_id")
+                    .unique()
+                    .join(pathway_ids, on="reactome_pathway_id", how="anti")
+                    .sort("reactome_pathway_id")
+                )
+                issues.extend(
+                    ValidationIssue(
+                        severity="warning",
+                        issue_code="missing_pathway_metadata",
+                        source_name=role,
+                        relation_name=role,
+                        identifier_namespace="reactome_pathway_id",
+                        identifier_value=str(pathway_id),
+                        referenced_relation="pathway",
+                        referenced_identifier=str(pathway_id),
+                        message=(
+                            f"Reactome pathway {pathway_id} is present in {role} "
+                            "but absent from pathway metadata"
+                        ),
+                    )
+                    for pathway_id in missing.get_column(
+                        "reactome_pathway_id"
+                    ).to_list()
+                )
+
+        if (
+            self._has_mapping("lowest_level")
+            and self._has_mapping("all_levels")
+            and self._has_relation()
+        ):
+            self._validate_uniprot_level_closure()
+        return tuple(issues)
+
+    def _validate_uniprot_level_closure(self) -> None:
+        key_columns = [
+            "uniprot_id",
+            "reactome_pathway_id",
+            "evidence_code",
+            "species",
+        ]
+        relations = self._relation_raw_frame().unique()
+        closure = self._mapping_frame("lowest_level").select(key_columns).unique()
+        frontier = closure
+        while frontier.height:
+            expanded = (
+                frontier.join(
+                    relations,
+                    left_on="reactome_pathway_id",
+                    right_on="child_reactome_pathway_id",
+                    how="inner",
+                )
+                .select(
+                    "uniprot_id",
+                    pl.col("parent_reactome_pathway_id").alias("reactome_pathway_id"),
+                    "evidence_code",
+                    "species",
+                )
+                .unique()
+                .join(closure, on=key_columns, how="anti")
+            )
+            if not expanded.height:
+                break
+            closure = pl.concat([closure, expanded], how="vertical_relaxed").unique()
+            frontier = expanded
+
+        official = self._mapping_frame("all_levels").select(key_columns).unique()
+        derived_only = closure.join(official, on=key_columns, how="anti").height
+        official_only = official.join(closure, on=key_columns, how="anti").height
+        if derived_only or official_only:
+            raise IntegrityError(
+                "Reactome UniProt all-level closure mismatch: "
+                f"derived_only={derived_only}, official_only={official_only}"
+            )
+
     def _build_tidy_frame(self, frame_name: str) -> pl.DataFrame:
         match frame_name:
-            case "mapping":
-                return self._mapping_frame()
+            case "uniprot_pathway_lowest_level":
+                return self._mapping_frame("lowest_level")
+            case "uniprot_pathway_all_level":
+                return self._mapping_frame("all_levels")
             case "pathway":
                 return self._pathway_frame()
-            case "relation":
+            case "pathway_relation":
                 return self._eager_pathway_relations()
-            case "term2gene":
-                return self._eager_pathway_genes()
-            case "term2name":
-                return self._eager_pathway_names()
             case _:
                 raise ValueError(f"Unsupported Reactome tidy frame: {frame_name}")
 
@@ -863,15 +1148,23 @@ class ReactomeDatabase:
         if self.snapshot.file_uniprot2reactome is not None:
             sources.append(
                 TidySource(
-                    logical_name="uniprot_mapping",
+                    logical_name=MAPPING_LOWEST_LEVEL_ROLE,
                     path=self.snapshot.file_uniprot2reactome,
+                    media_type=MEDIA_TYPE_TSV,
+                )
+            )
+        if self.snapshot.file_uniprot_all_levels is not None:
+            sources.append(
+                TidySource(
+                    logical_name=MAPPING_ALL_LEVEL_ROLE,
+                    path=self.snapshot.file_uniprot_all_levels,
                     media_type=MEDIA_TYPE_TSV,
                 )
             )
         if self.snapshot.file_pathways is not None:
             sources.append(
                 TidySource(
-                    logical_name="pathways",
+                    logical_name="pathway",
                     path=self.snapshot.file_pathways,
                     media_type=MEDIA_TYPE_TSV,
                 )
@@ -879,7 +1172,7 @@ class ReactomeDatabase:
         if self.snapshot.file_relations is not None:
             sources.append(
                 TidySource(
-                    logical_name="relations",
+                    logical_name="pathway_relation",
                     path=self.snapshot.file_relations,
                     media_type=MEDIA_TYPE_TSV,
                 )
@@ -916,6 +1209,9 @@ class ReactomeSelection:
     _df_input_ids: pl.DataFrame = field(repr=False)
     _df_groups: pl.DataFrame | None = field(repr=False)
     _df_group_membership: pl.DataFrame | None = field(repr=False)
+    namespace: str = field(default="uniprot", repr=False)
+    target: str = field(default="pathway", repr=False)
+    pathway_level: str = field(default="lowest_level", repr=False)
 
     @property
     def is_grouped(self) -> bool:
@@ -960,16 +1256,17 @@ class ReactomeSelection:
                     request=request,
                 ),
             )
-        if not snapshot.dataset._has_mapping():  # pyright: ignore[reportPrivateUsage]
-            snapshot.dataset._raise_missing_capability(  # pyright: ignore[reportPrivateUsage]
-                "Cannot extract Reactome mapping without UniProt2Reactome file",
-                "Reactome publication does not contain protein-pathway mappings",
-            )
-        assert snapshot.dataset.snapshot.file_uniprot2reactome is not None
+        snapshot.dataset._require_mapping_capability(  # pyright: ignore[reportPrivateUsage]
+            snapshot.pathway_level
+        )
+        file_mapping = snapshot.dataset._mapping_source_path(  # pyright: ignore[reportPrivateUsage]
+            snapshot.pathway_level
+        )
+        assert file_mapping is not None
         input_ids = snapshot._df_input_ids.get_column("input_id").to_list()  # pyright: ignore[reportPrivateUsage]
-        lf_mapping = scan_mapping_frame(
-            snapshot.dataset.snapshot.file_uniprot2reactome
-        ).filter(pl.col("uniprot_id").is_in(input_ids))
+        lf_mapping = scan_mapping_frame(file_mapping).filter(
+            pl.col("uniprot_id").is_in(input_ids)
+        )
         if snapshot.dataset.species is not None:
             lf_mapping = lf_mapping.filter(
                 pl.col("species") == snapshot.dataset.species
@@ -1006,16 +1303,17 @@ class ReactomeSelection:
                     request=request,
                 ),
             )
-        if not snapshot.dataset._has_mapping():  # pyright: ignore[reportPrivateUsage]
-            snapshot.dataset._raise_missing_capability(  # pyright: ignore[reportPrivateUsage]
-                "Cannot extract Reactome mapping without UniProt2Reactome file",
-                "Reactome publication does not contain protein-pathway mappings",
-            )
-        assert snapshot.dataset.snapshot.file_uniprot2reactome is not None
+        snapshot.dataset._require_mapping_capability(  # pyright: ignore[reportPrivateUsage]
+            snapshot.pathway_level
+        )
+        file_mapping = snapshot.dataset._mapping_source_path(  # pyright: ignore[reportPrivateUsage]
+            snapshot.pathway_level
+        )
+        assert file_mapping is not None
         input_ids = snapshot._df_input_ids.get_column("input_id").to_list()  # pyright: ignore[reportPrivateUsage]
-        lf_mapping = scan_mapping_frame(
-            snapshot.dataset.snapshot.file_uniprot2reactome
-        ).filter(pl.col("uniprot_id").is_in(input_ids))
+        lf_mapping = scan_mapping_frame(file_mapping).filter(
+            pl.col("uniprot_id").is_in(input_ids)
+        )
         if snapshot.dataset.species is not None:
             lf_mapping = lf_mapping.filter(
                 pl.col("species") == snapshot.dataset.species
@@ -1033,14 +1331,48 @@ class ReactomeSelection:
         )
 
 
+def _validate_selection_dimensions(
+    *,
+    namespace: str,
+    target: str,
+    pathway_level: str,
+) -> tuple[str, str, str]:
+    if namespace != "uniprot":
+        raise ValueError(f"Unsupported Reactome namespace: {namespace!r}")
+    if target != "pathway":
+        raise ValueError(f"Unsupported Reactome target: {target!r}")
+    _mapping_role_for_level(pathway_level)
+    return namespace, target, pathway_level
+
+
+def _mapping_role_for_level(pathway_level: str) -> str:
+    if pathway_level == "lowest_level":
+        return MAPPING_LOWEST_LEVEL_ROLE
+    if pathway_level == "all_levels":
+        return MAPPING_ALL_LEVEL_ROLE
+    raise ValueError(f"Unsupported Reactome pathway level: {pathway_level!r}")
+
+
+def _normalize_release_version(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        raise ValueError("release_version must be non-empty when provided")
+    return normalized
+
+
 def _validate_reactome_file(
     file_path: os.PathLike[str] | str,
     *,
     label: str,
+    forbidden_names: Collection[str] = (),
 ) -> Path:
     file_path = Path(file_path)
-    if not file_path.exists():
+    if not file_path.is_file():
         raise FileNotFoundError(f"{label} not found: {file_path}")
+    if file_path.name in forbidden_names:
+        raise ValueError(f"{label} has the wrong declared role: {file_path.name}")
     return file_path
 
 
@@ -1048,23 +1380,35 @@ def _iter_publication_relation_batches(
     database: ReactomeDatabase,
     *,
     relation: str,
+    pathway_level: str = "lowest_level",
     schema: SchemaDict,
     request: _RelationScanRequest,
 ) -> Iterator[pl.DataFrame]:
     database._assert_publication_current()  # pyright: ignore[reportPrivateUsage]  # paired publication boundary
     species = database.species
-    if relation == "pathway_genes":
-        if not database._has_mapping():  # pyright: ignore[reportPrivateUsage]
-            database._raise_missing_capability(  # pyright: ignore[reportPrivateUsage]
-                "Cannot extract Reactome mapping without UniProt2Reactome file",
-                "Reactome publication does not contain protein-pathway mappings",
+    if relation in {"pathway_mappings", "pathway_genes"}:
+        database._require_mapping_capability(pathway_level)  # pyright: ignore[reportPrivateUsage]
+        table_name = database._mapping_table(pathway_level)  # pyright: ignore[reportPrivateUsage]
+        if relation == "pathway_genes":
+            query = (
+                f'SELECT DISTINCT reactome_pathway_id, uniprot_id FROM "{table_name}"'
             )
-        query = "SELECT DISTINCT reactome_pathway_id, uniprot_id FROM protein_pathway"
+        else:
+            query = (
+                "SELECT DISTINCT uniprot_id, reactome_pathway_id, reactome_url, "
+                f'pathway_name, evidence_code, species FROM "{table_name}"'
+            )
         params: list[str] = []
         if species is not None:
             query += " WHERE species = ?"
             params.append(species)
-        query += " ORDER BY reactome_pathway_id, uniprot_id"
+        if relation == "pathway_genes":
+            query += " ORDER BY reactome_pathway_id, uniprot_id"
+        else:
+            query += (
+                " ORDER BY uniprot_id, reactome_pathway_id, reactome_url, "
+                "pathway_name, evidence_code, species"
+            )
     elif relation == "pathway_names":
         if not database._has_pathway():  # pyright: ignore[reportPrivateUsage]
             database._raise_missing_capability(  # pyright: ignore[reportPrivateUsage]
@@ -1152,7 +1496,10 @@ def _iter_selection_mapping_batches(
             "INSERT INTO _reactome_input VALUES (?)",
             [(str(value),) for value in input_ids],
         )
-        query = """
+        table_name = database._mapping_table(  # pyright: ignore[reportPrivateUsage]
+            selection.pathway_level
+        )
+        query = f"""
             SELECT DISTINCT
                 input.input_id AS input_id,
                 input.input_id AS uniprot_id,
@@ -1162,14 +1509,17 @@ def _iter_selection_mapping_batches(
                 mapping.species,
                 mapping.reactome_url
             FROM _reactome_input AS input
-            JOIN protein_pathway AS mapping
+            JOIN "{table_name}" AS mapping
               ON mapping.uniprot_id = input.input_id
         """
         params: list[str] = []
         if database.species is not None:
             query += " WHERE mapping.species = ?"
             params.append(database.species)
-        query += " ORDER BY input_id, reactome_pathway_id"
+        query += (
+            " ORDER BY input_id, uniprot_id, reactome_pathway_id, pathway_name, "
+            "evidence_code, species, reactome_url"
+        )
         requested = (
             None
             if request.columns is None
@@ -1224,9 +1574,12 @@ def _iter_selection_unmatched_batches(
             "INSERT INTO _reactome_input VALUES (?)",
             [(str(value),) for value in input_ids],
         )
+        table_name = database._mapping_table(  # pyright: ignore[reportPrivateUsage]
+            selection.pathway_level
+        )
         query = (
             "SELECT DISTINCT input.input_id FROM _reactome_input AS input "
-            "JOIN protein_pathway AS mapping "
+            f'JOIN "{table_name}" AS mapping '
             "ON mapping.uniprot_id = input.input_id"
         )
         params: list[str] = []
@@ -1270,8 +1623,20 @@ def _reactome_arrow_reader(result: Any, batch_size: int) -> Any:
 
 
 _REACTOME_TABLE_CONTRACTS: dict[str, tuple[str, str, tuple[tuple[str, str], ...]]] = {
-    "protein_pathway": (
-        "uniprot_mapping",
+    MAPPING_LOWEST_LEVEL_ROLE: (
+        MAPPING_LOWEST_LEVEL_ROLE,
+        "canonical",
+        (
+            ("uniprot_id", "VARCHAR"),
+            ("reactome_pathway_id", "VARCHAR"),
+            ("reactome_url", "VARCHAR"),
+            ("pathway_name", "VARCHAR"),
+            ("evidence_code", "VARCHAR"),
+            ("species", "VARCHAR"),
+        ),
+    ),
+    MAPPING_ALL_LEVEL_ROLE: (
+        MAPPING_ALL_LEVEL_ROLE,
         "canonical",
         (
             ("uniprot_id", "VARCHAR"),
@@ -1283,7 +1648,7 @@ _REACTOME_TABLE_CONTRACTS: dict[str, tuple[str, str, tuple[tuple[str, str], ...]
         ),
     ),
     "pathway": (
-        "pathways",
+        "pathway",
         "canonical",
         (
             ("reactome_pathway_id", "VARCHAR"),
@@ -1292,7 +1657,7 @@ _REACTOME_TABLE_CONTRACTS: dict[str, tuple[str, str, tuple[tuple[str, str], ...]
         ),
     ),
     "pathway_relation": (
-        "relations",
+        "pathway_relation",
         "canonical",
         (
             ("parent_reactome_pathway_id", "VARCHAR"),
@@ -1302,7 +1667,9 @@ _REACTOME_TABLE_CONTRACTS: dict[str, tuple[str, str, tuple[tuple[str, str], ...]
 }
 
 
-def _validate_reactome_publication(path: Path) -> frozenset[str]:
+def _validate_reactome_publication(
+    path: Path,
+) -> tuple[frozenset[str], str | None, str | None]:
     if not path.is_file():
         raise FileNotFoundError(path)
     try:
@@ -1321,17 +1688,22 @@ def _validate_reactome_publication(path: Path) -> frozenset[str]:
             validate_duckdb_metadata_v2(connection, metadata)
             if metadata.get("bioextract.resource_name") != "reactome":
                 raise ValueError("DuckDB file is not a bioextract Reactome publication")
-            if metadata.get("bioextract.source_schema_profile") != (
-                "reactome-mapping-files-v1"
+            if (
+                metadata.get("bioextract.source_schema_profile")
+                != SOURCE_SCHEMA_PROFILE
             ):
                 raise ValueError("Unsupported Reactome source schema profile")
             if metadata.get("bioextract.resource_schema_version") != SCHEMA_VERSION:
                 raise ValueError("Unsupported Reactome resource schema version")
             if "bioextract.scope" in metadata:
                 raise ValueError("Reactome publication scope is unsupported")
+            release_version = metadata.get("bioextract.release_version")
+            release_version_source = metadata.get("bioextract.release_version_source")
+            if release_version is not None and release_version_source != "caller":
+                raise ValueError("Reactome publication release identity is unsupported")
 
             source_rows = connection.execute(
-                "SELECT logical_name, bytes FROM _bioextract.source_file"
+                "SELECT logical_name, bytes, media_type FROM _bioextract.source_file"
             ).fetchall()
             source_roles = {str(row[0]) for row in source_rows}
             allowed_roles = {
@@ -1341,7 +1713,11 @@ def _validate_reactome_publication(path: Path) -> frozenset[str]:
                 not source_roles
                 or len(source_roles) != len(source_rows)
                 or not source_roles <= allowed_roles
-                or any(row[1] is not None and int(row[1]) < 0 for row in source_rows)
+                or any(
+                    (row[1] is not None and int(row[1]) < 0)
+                    or str(row[2]) != MEDIA_TYPE_TSV
+                    for row in source_rows
+                )
             ):
                 raise ValueError("Reactome source capability inventory is unsupported")
 
@@ -1403,7 +1779,7 @@ def _validate_reactome_publication(path: Path) -> frozenset[str]:
                 raise ValueError("Reactome column provenance inventory is unsupported")
     except duckdb.Error as error:
         raise ValueError(f"Cannot open Reactome DuckDB publication: {path}") from error
-    return frozenset(expected_tables)
+    return frozenset(expected_tables), release_version, release_version_source
 
 
 def _file_identity(path: Path) -> tuple[int, int, int, int, int]:

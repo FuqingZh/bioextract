@@ -3,8 +3,12 @@ from __future__ import annotations
 import polars as pl
 from polars._typing import SchemaDict
 
-SCHEMA_VERSION = "reactome-mapping-v0.1"
+SCHEMA_VERSION = "reactome-mapping-v0.2"
+SOURCE_SCHEMA_PROFILE = "reactome-mapping-files-v2"
 MEDIA_TYPE_TSV = "text/tab-separated-values"
+
+MAPPING_LOWEST_LEVEL_ROLE = "uniprot_pathway_lowest_level"
+MAPPING_ALL_LEVEL_ROLE = "uniprot_pathway_all_level"
 
 COLS_MAPPING_RAW = [
     "uniprot_id",
@@ -32,9 +36,8 @@ SCHEMA_GROUP_INPUT_IDS: SchemaDict = {
 }
 
 ASSET_SPECS = (
-    ("mapping.parquet", "canonical", "mapping"),
+    ("uniprot_pathway_lowest_level.parquet", "canonical", MAPPING_LOWEST_LEVEL_ROLE),
+    ("uniprot_pathway_all_level.parquet", "canonical", MAPPING_ALL_LEVEL_ROLE),
     ("pathway.parquet", "canonical", "pathway"),
-    ("relation.parquet", "canonical", "relation"),
-    ("term2gene.parquet", "derived", "term2gene"),
-    ("term2name.parquet", "derived", "term2name"),
+    ("pathway_relation.parquet", "canonical", "pathway_relation"),
 )

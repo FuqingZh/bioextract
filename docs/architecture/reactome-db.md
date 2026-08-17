@@ -1,49 +1,40 @@
 # ReactomeDatabase Architecture
 
-Version: v1.0
-Date: 2026-07-30
+Version: v1.1
+Date: 2026-08-17
 Status: current
 
 ## Goal
 
-`bioextract.reactome.ReactomeDatabase` provides path-first access to local Reactome
-mapping snapshots. It supports annotation lookup and
-standard enrichment inputs from Reactome open-data files without calling the
-Reactome web services at runtime.
+`bioextract.reactome.ReactomeDatabase` provides path-first access to caller-
+supplied local Reactome mapping snapshots. It parses official TSV files,
+exposes native Polars relations for annotation and enrichment callers, and can
+publish or reopen one provenance-aware DuckDB. It does not call Reactome web
+services or calculate enrichment statistics.
 
-The implemented MVP covers:
+P1 implements two explicit UniProt-to-pathway capabilities:
 
-- UniProt accession to Reactome pathway mapping
-- Reactome pathway metadata
-- Reactome pathway parent-child relations
-- species-scoped extraction
-- single-query and grouped protein selections
-- `term2gene` and `term2name` frames for ORA and GSEA callers
-- canonical single-DuckDB publication through the shared materialized-dataset
-  contract
-- composable input files, so annotation-only and metadata-only use cases do
-  not need unrelated raw files
+- `lowest_level`: `UniProt2Reactome.txt`, the preserved default;
+- `all_levels`: `UniProt2Reactome_All_Levels.txt`, the explicit hierarchy-
+  expanded relation.
 
-The MVP intentionally does not cover:
-
-- Reactome online Analysis Service calls
-- ReactomePA result compatibility
-- enrichment p-value calculation
-- reaction-level graph traversal
-- cross-species orthology inference
-- identifier mapping from gene symbol, Entrez, Ensembl, or STRING IDs
+The two capabilities never share an ambiguous union table. Reaction,
+NCBI Gene, ChEBI, GtoP, Complex, EWAS, and GMT roles remain deferred.
 
 ## Raw Inputs
 
-The local v96 mapping snapshot currently has:
+The constructor accepts any non-empty combination of these caller-declared
+roles:
 
 ```text
-UniProt2Reactome.txt
-ReactomePathways.txt
-ReactomePathwaysRelation.txt
+uniprot_mapping     -> UniProt2Reactome.txt
+uniprot_all_levels  -> UniProt2Reactome_All_Levels.txt
+pathways            -> ReactomePathways.txt
+relations           -> ReactomePathwaysRelation.txt
 ```
 
-`UniProt2Reactome.txt` is tab-separated with six columns:
+Both UniProt mapping files are literal six-column TSV relations. Their columns
+are preserved in this order:
 
 ```text
 uniprot_id
@@ -54,23 +45,14 @@ evidence_code
 species
 ```
 
-`ReactomePathways.txt` is tab-separated with three columns:
+The shared mapping-family parser disables CSV quoting, rejects ragged records
+and empty required fields, retains literal quote characters, removes only
+exact duplicate six-column rows, and retains rows that differ by
+`evidence_code`.
 
-```text
-reactome_pathway_id
-pathway_name
-species
-```
-
-`ReactomePathwaysRelation.txt` is tab-separated with two columns:
-
-```text
-parent_reactome_pathway_id
-child_reactome_pathway_id
-```
-
-The files are small enough for eager Polars reads in the first version. The
-largest current input is `UniProt2Reactome.txt`, about 43 MB and 322,435 rows.
+`release_version` is optional caller-declared identity. It is trimmed and must
+be non-empty when supplied. It is never inferred from a directory, filename,
+manifest, or modification time.
 
 ## Public API
 
@@ -79,84 +61,66 @@ from bioextract import ReactomeDatabase
 
 db = ReactomeDatabase.from_files(
     uniprot_mapping="UniProt2Reactome.txt",
+    uniprot_all_levels="UniProt2Reactome_All_Levels.txt",
     pathways="ReactomePathways.txt",
     relations="ReactomePathwaysRelation.txt",
+    release_version="96",
 )
 
-selection = (
-    db
-    .with_species("Homo sapiens")
-    .select_ids(["P04637", "Q9Y243", "MISSING"])
-)
+lowest = db.pathway_mappings()
+all_levels = db.pathway_mappings(pathway_level="all_levels")
+lowest_genes = db.pathway_genes()
+all_level_genes = db.pathway_genes(pathway_level="all_levels")
 
+selection = db.with_species("Homo sapiens").select_ids(
+    ["P04637", "MISSING"],
+    pathway_level="all_levels",
+)
 lf_mapping = selection.mappings()
 lf_unmapped = selection.unmatched_ids()
-
-lf_term2gene = db.with_species("Homo sapiens").pathway_genes()
-lf_term2name = db.with_species("Homo sapiens").pathway_names()
+lf_names = db.with_species("Homo sapiens").pathway_names()
 lf_relations = db.with_species("Homo sapiens").pathway_relations()
 ```
 
-Grouped selections should mirror the existing STRINGdb and OmniPath shape:
+`namespace` and `target` are explicit selection dimensions on
+`pathway_mappings()`, `select_ids()`, and `select_groups()`. P1 implements
+only `namespace="uniprot"` and `target="pathway"`; invalid values raise
+`ValueError`. A valid level whose source or publication table is absent raises
+`ValueError` for a source handle or `CapabilityError` for a publication
+handle.
 
-```python
-df_group_mapping = (
-    db.with_species("Homo sapiens")
-    .select_groups(
-        {
-            "TumorA": ["P04637", "Q9Y243"],
-            "TumorB": ["P31749", "P42345"],
-        }
-    )
-    .mappings()
-)
-```
+Calls that omit `pathway_level` remain lowest-level UniProt pathway calls.
+There is no implicit hierarchy closure and no silent union across levels.
 
-## Data Flow
-
-`ReactomeDatabase.from_files()` accepts any non-empty combination of the three
-raw files, validates provided file existence, then stores paths only. Parsing
-happens when a frame is first needed.
-
-Capability dependencies are explicit:
-
-```text
- mappings                     -> UniProt2Reactome.txt
- unmatched_ids                -> UniProt2Reactome.txt
- pathway_genes                -> UniProt2Reactome.txt
- pathway_names                -> ReactomePathways.txt
- pathway_relations            -> ReactomePathwaysRelation.txt
-species-scoped relations     -> ReactomePathwaysRelation.txt + ReactomePathways.txt
-```
-
-If a caller invokes a capability whose backing file was not provided, the method
-raises a targeted `ValueError`. This mirrors the STRINGdb behavior where aliases
-and links can be supplied independently and missing-file failures occur at the
-feature boundary.
-
-`with_species(species)` returns a lightweight resource view with a species
-filter. The filter should match the Reactome species display name exactly after
-trimming whitespace. Case-insensitive convenience can be added later if there is
-a demonstrated caller need, but exact matching keeps the first contract
-auditable.
-
-`select_ids(ids)` normalizes input IDs by trimming whitespace and dropping empty
-values. The selected IDs are interpreted as UniProt accessions. The method does
-not attempt gene-symbol or isoform conversion.
-
-Relation access is lazy and native to Polars:
-
-1. return a replayable lazy relation
-2. apply species filter when present
-3. join or filter with the normalized selected IDs
-4. let the caller choose `collect()`, `collect_batches()`, or `sink_*()`
-
-The implementation may use private caches inside one execution, but cache
-identity is not part of the public relation contract.
+`with_species()` applies an exact trimmed Reactome species display-name filter
+before selection or enrichment deduplication. Pathway relations in a species
+scope retain only edges whose two endpoints exist in that species' pathway
+metadata.
 
 ## Output Contract
 
-`mappings()` returns a lazy relation with:
+`pathway_mappings()` returns the six canonical mapping columns in source order:
+
+```text
+uniprot_id
+reactome_pathway_id
+reactome_url
+pathway_name
+evidence_code
+species
+```
+
+`pathway_genes()` returns distinct, sorted pairs:
+
+```text
+reactome_pathway_id
+uniprot_id
+```
+
+Canonical mapping relations retain evidence-distinct rows. Only the explicit
+`pathway_genes()` projection deduplicates to a pathway/UniProt pair.
+
+Selection mappings retain the existing shape:
 
 ```text
 input_id
@@ -168,122 +132,91 @@ species
 reactome_url
 ```
 
-For grouped selections it prepends:
+Grouped mappings prepend `group_id`; unmatched outputs remain `input_id` or
+`group_id, input_id`.
+
+## Data Flow And Capability Boundaries
+
+`from_files()` validates that every supplied path is a regular file and stores
+paths only. Parsing is performed by the capability that needs the relation.
+The all-level path is never used to satisfy the lowest-level role, and a
+missing all-level source is not synthesized from `pathway_relation`.
+
+The role-to-table boundary is private to the Reactome implementation:
 
 ```text
-group_id
-input_id
-uniprot_id
-reactome_pathway_id
-pathway_name
-evidence_code
-species
-reactome_url
+uniprot_pathway_lowest_level -> UniProt2Reactome.txt
+uniprot_pathway_all_level    -> UniProt2Reactome_All_Levels.txt
+pathway                      -> ReactomePathways.txt
+pathway_relation             -> ReactomePathwaysRelation.txt
 ```
 
-`unmatched_ids()` returns:
-
-```text
-input_id
-```
-
-For grouped selections it returns:
-
-```text
-group_id
-input_id
-```
-
-`pathway_genes()` returns:
-
-```text
-reactome_pathway_id
-uniprot_id
-```
-
-`pathway_names()` returns:
-
-```text
-reactome_pathway_id
-pathway_name
-species
-```
-
-`pathway_relations()` returns:
-
-```text
-parent_reactome_pathway_id
-child_reactome_pathway_id
-```
-
-When species-scoped, relations should be limited to edges where both parent and
-child exist in the species-scoped pathway metadata.
+Source-backed and reopened handles use the same public query semantics. A
+reopened handle validates metadata, source-role inventory, exact physical
+tables, and column schemas without recounting biological tables. Each
+`connect()` call returns an independent native DuckDB connection opened
+read-only and pins the validated file identity.
 
 ## Materialized Dataset
 
-`build_tidy()` is optional but useful for resource publication and snapshot
-inspection. Its internal frames are:
+`build_tidy()` exposes only the canonical role frames that are available:
 
 ```text
-mapping
+uniprot_pathway_lowest_level
+uniprot_pathway_all_level
 pathway
-relation
-term2gene
-term2name
+pathway_relation
 ```
 
-With a partial snapshot, it builds only frames derivable from the provided
-files. `term2gene` and `term2name` remain convenient in-memory enrichment
-projections.
+`pathway_genes()` and `pathway_names()` are public lazy projections, not
+redundant publication relations. `write_duckdb()` publishes exactly the available
+canonical roles and the shared five `_bioextract` metadata-v2 relations.
 
-Suggested schema version:
+The P1 publication identity is:
 
 ```text
-reactome-mapping-v0.1
+bioextract.metadata_schema_version = 2
+bioextract.source_schema_profile   = reactome-mapping-files-v2
+bioextract.resource_schema_version = reactome-mapping-v0.2
 ```
 
-Canonical publication uses `write_duckdb(path)`. `protein_pathway`,
-`pathway`, and `pathway_relation` stay together; duplicate enrichment
-projections are not stored. Provenance and row counts live in `_bioextract`.
+Mapping rows whose pathway IDs are absent from supplied pathway metadata remain
+published. When the affected mapping and `pathway` roles are both present,
+publication records one `missing_pathway_metadata` warning per distinct
+`(mapping_role, reactome_pathway_id)` in
+`_bioextract.validation_issue`.
 
-`ReactomeDatabase.from_duckdb(path)` reopens full or partial publications that
-conform to metadata v2 and `reactome-mapping-files-v1`. Reopen validation is
-bounded to provenance, source capabilities, the exact table/view inventory,
-and physical column schemas; recorded biological row counts are trusted rather
-than recomputed. Existing selection, grouped-selection, enrichment, relation,
-and species-scoping behavior is shared with source-backed handles.
+When lowest-level, all-level, and pathway-relation roles are all present, the
+publisher compares all-level keys with the reflexive hierarchy closure of the
+lowest-level keys at
+`(uniprot_id, reactome_pathway_id, evidence_code, species)` grain. Any
+mismatch is fatal; absence of a comparison role is simply an unavailable
+check.
 
-Each `connect()` call on a reopened handle returns an independent native DuckDB
-connection opened read-only and owned by the caller. The handle pins the
-validated file identity and rejects access after atomic replacement. Source
-handles do not expose native connections, and reopened handles do not republish
-the validated database.
+The old `protein_pathway` table, metadata-v1 reader, v0.1 reader, compatibility
+view, and automatic migration are intentionally absent before v1.0.
 
-The pre-convergence verified v96 artifact was retained through the rebuild and
-then removed during the explicit post-refresh cleanup. The current publication
-is:
+## Formal Publication Boundary
 
-```text
-reactome/mapping/v96/tidy/data.duckdb
-```
-
-It contains 322,435 `protein_pathway` rows, 23,498 `pathway` rows, and
-23,612 `pathway_relation` rows. The prior multi-Parquet `tidy/reactome/`
-directory remains a preserved migration artifact; no legacy DuckDB path
-overrides the current versioned CephFS convention.
+P1 code and temporary local publications do not replace the formal v96
+CephFS artifact. A later release must build outside the formal resource path,
+validate all-level closure and warning preservation, then stage and replace an
+artifact atomically under its own release authority. Package release, catalog
+admission, downstream activation, and old-artifact deletion are separate
+decisions.
 
 ## Why Not reactome2py
 
 `reactome2py` is useful for online Reactome API calls. It is not a replacement
-for this layer because `bioextract` needs deterministic local resource access,
-offline operation, and snapshot-specific outputs. A future caller may offer a
-separate online integration, but `ReactomeDatabase` should stay local-file-first.
+for this layer because `bioextract` needs deterministic local access,
+offline operation, and snapshot-specific outputs.
 
 ## Implementation Notes
 
 - Keep `ReactomeDatabase` under `src/bioextract/reactome/`.
-- Export only `ReactomeDatabase`; abbreviated aliases are not supported.
-- Keep parsing helpers module-level and prefix them with `read_`, `filter_`, or
-  `extract_` according to their behavior.
-- Do not introduce pandas or network dependencies.
-- Prefer Polars expressions for filtering, joins, and deduplication.
+- Export only `ReactomeDatabase`; selection classes remain implementation
+  types.
+- Keep mapping-family parsing shared and module-local; do not add a generic
+  query facade or network dependency.
+- Prefer Polars expressions for filtering, joining, closure validation, and
+  deduplication.
