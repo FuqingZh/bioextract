@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import posixpath
+import zipfile
 from pathlib import Path
 
 import polars as pl
@@ -12,6 +14,7 @@ from .constant import (
     SCHEMA_MAPPING_RAW,
     SCHEMA_PATHWAY_RAW,
     SCHEMA_RELATION_RAW,
+    MappingRoleSpec,
 )
 
 
@@ -69,6 +72,157 @@ def scan_mapping_family_frame(
         columns=columns,
         schema=schema,
         context=context,
+    )
+
+
+def read_mapping_role_frame(
+    file_mapping: Path,
+    role: MappingRoleSpec,
+) -> pl.DataFrame:
+    """Read one registered Reactome mapping role."""
+    return read_mapping_family_frame(
+        file_mapping,
+        columns=list(role.raw_columns),
+        schema=dict.fromkeys(role.raw_columns, pl.String),
+        context=f"Reactome {role.role} file",
+    )
+
+
+def scan_mapping_role_frame(
+    file_mapping: Path,
+    role: MappingRoleSpec,
+) -> pl.LazyFrame:
+    """Return a strict lazy scan for one registered mapping role."""
+    return scan_mapping_family_frame(
+        file_mapping,
+        columns=list(role.raw_columns),
+        schema=dict.fromkeys(role.raw_columns, pl.String),
+        context=f"Reactome {role.role} file",
+    )
+
+
+def read_entity_pathway_frame(
+    file_path: Path,
+    *,
+    source_columns: tuple[str, str, str],
+    public_columns: tuple[str, str, str],
+    context: str,
+) -> pl.DataFrame:
+    """Read one exact-header Reactome human entity relation."""
+    lf = scan_entity_pathway_frame(
+        file_path,
+        source_columns=source_columns,
+        public_columns=public_columns,
+        context=context,
+    )
+    try:
+        frame = lf.collect()
+    except Exception as error:
+        raise ValueError(f"{context} contains an invalid TSV record") from error
+    _validate_required_values(frame, list(public_columns), context)
+    return frame.unique(maintain_order=True).sort(list(public_columns))
+
+
+def scan_entity_pathway_frame(
+    file_path: Path,
+    *,
+    source_columns: tuple[str, str, str],
+    public_columns: tuple[str, str, str],
+    context: str,
+) -> pl.LazyFrame:
+    """Return a strict lazy scan for one headered human entity relation."""
+    try:
+        lf = pl.scan_csv(
+            file_path,
+            separator="\t",
+            has_header=True,
+            schema_overrides=dict.fromkeys(source_columns, pl.String),
+            quote_char=None,
+            truncate_ragged_lines=False,
+        )
+        observed_columns = lf.collect_schema().names()
+    except Exception as error:
+        raise ValueError(
+            f"{context} must contain the exact ordered header: {list(source_columns)!r}"
+        ) from error
+    if observed_columns != list(source_columns):
+        raise ValueError(
+            f"{context} must contain the exact ordered header: {list(source_columns)!r}"
+        )
+    return lf.rename(dict(zip(source_columns, public_columns, strict=True)))
+
+
+def read_gmt_frame(
+    file_path: Path,
+    *,
+    public_columns: tuple[str, str, str],
+    context: str,
+) -> pl.DataFrame:
+    """Read the one-member human Reactome GMT archive without extraction."""
+    rows: list[tuple[str, str, str]] = []
+    labels_by_pathway: dict[str, set[str]] = {}
+    try:
+        with zipfile.ZipFile(file_path) as archive:
+            infos = archive.infolist()
+            if len(infos) != 1:
+                raise ValueError(f"{context} must contain exactly one file entry")
+            info = infos[0]
+            normalized_name = posixpath.normpath(info.filename)
+            if (
+                normalized_name != "ReactomePathways.gmt"
+                or info.is_dir()
+                or info.filename.startswith("/")
+                or "\\" in info.filename
+                or info.filename.startswith("../")
+                or "/../" in info.filename
+                or info.filename == ".."
+                or info.flag_bits & 0x1
+            ):
+                raise ValueError(
+                    f"{context} must contain one unencrypted ReactomePathways.gmt member"
+                )
+            with archive.open(info, "r") as binary_stream:
+                for line_number, raw_line in enumerate(binary_stream, start=1):
+                    try:
+                        line = raw_line.decode("utf-8").rstrip("\r\n")
+                    except UnicodeDecodeError as error:
+                        raise ValueError(
+                            f"{context} is not valid UTF-8 at line {line_number}"
+                        ) from error
+                    fields = line.split("\t")
+                    if len(fields) < 3 or any(field == "" for field in fields):
+                        raise ValueError(
+                            f"{context} has an invalid GMT record at line {line_number}"
+                        )
+                    gene_set_name, pathway_id, *symbols = fields
+                    labels_by_pathway.setdefault(pathway_id, set()).add(gene_set_name)
+                    rows.extend(
+                        (pathway_id, gene_set_name, symbol) for symbol in symbols
+                    )
+    except zipfile.BadZipFile as error:
+        raise ValueError(f"{context} is not a valid ZIP archive") from error
+    except (OSError, RuntimeError) as error:
+        raise ValueError(f"{context} cannot be read") from error
+    conflicting = sorted(
+        pathway_id
+        for pathway_id, labels in labels_by_pathway.items()
+        if len(labels) > 1
+    )
+    if conflicting:
+        raise ValueError(
+            f"{context} has multiple gene-set labels for pathway {conflicting[0]}"
+        )
+    return (
+        pl.DataFrame(
+            {
+                public_columns[0]: [row[0] for row in rows],
+                public_columns[1]: [row[1] for row in rows],
+                public_columns[2]: [row[2] for row in rows],
+            },
+            schema=dict.fromkeys(public_columns, pl.String),
+        )
+        .unique()
+        .sort(list(public_columns))
     )
 
 

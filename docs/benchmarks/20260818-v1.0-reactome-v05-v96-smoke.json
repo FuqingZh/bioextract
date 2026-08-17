@@ -1,0 +1,250 @@
+{
+  "status": "passed",
+  "resource": "reactome",
+  "release_version": "96",
+  "resource_schema_version": "reactome-mapping-v0.5",
+  "source_schema_profile": "reactome-mapping-files-v5",
+  "source_root": "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/reactome/mapping/v96/raw",
+  "candidate": {
+    "path": "/tmp/reactome-v05-v96.hx5wVJ/reactome-v05.duckdb",
+    "bytes": 129249280,
+    "sha256": "42d58b7e4f117b872099ce69509fe95b9434dc80dda3a985e376d741b2fa4531",
+    "table_count": 17,
+    "generated_from_all_roles": true,
+    "formal_resource_tree_written": false
+  },
+  "mapping_roles": {
+    "uniprot_pathway_lowest_level": {
+      "source_rows": 322435,
+      "publication_rows": 322435,
+      "unique_source_ids": 91421,
+      "unique_reactome_target_ids": 17848,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "f4b161f1a60950c257fd6b0faaffd6ee3ddde222fe8c374ee7114dbda0a2e6d3",
+      "publication_semantic_sha256": "f4b161f1a60950c257fd6b0faaffd6ee3ddde222fe8c374ee7114dbda0a2e6d3",
+      "selected_rows": 1,
+      "grouped_rows": 1
+    },
+    "uniprot_pathway_all_level": {
+      "source_rows": 934947,
+      "publication_rows": 934947,
+      "unique_source_ids": 91421,
+      "unique_reactome_target_ids": 23480,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "3ca1d71bd76076835a8a7be6539c4955c2c306fdbfd2205abeab1c1e746df5f2",
+      "publication_semantic_sha256": "3ca1d71bd76076835a8a7be6539c4955c2c306fdbfd2205abeab1c1e746df5f2",
+      "selected_rows": 2,
+      "grouped_rows": 2
+    },
+    "uniprot_reaction": {
+      "source_rows": 734129,
+      "publication_rows": 734129,
+      "unique_source_ids": 92613,
+      "unique_reactome_target_ids": 94960,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "c036005b4dc61747132e78fb38fb1876128125deedc1af56f00851f3e8459332",
+      "publication_semantic_sha256": "c036005b4dc61747132e78fb38fb1876128125deedc1af56f00851f3e8459332",
+      "selected_rows": 2,
+      "grouped_rows": 2
+    },
+    "ncbi_pathway_lowest_level": {
+      "source_rows": 265977,
+      "publication_rows": 265977,
+      "unique_source_ids": 73530,
+      "unique_reactome_target_ids": 17470,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "1e65a6e8c651276d84c612f524b8448d1531530270b5d12e2f53a11c4ecc99b8",
+      "publication_semantic_sha256": "1e65a6e8c651276d84c612f524b8448d1531530270b5d12e2f53a11c4ecc99b8",
+      "selected_rows": 2,
+      "grouped_rows": 2
+    },
+    "ncbi_pathway_all_level": {
+      "source_rows": 780042,
+      "publication_rows": 780042,
+      "unique_source_ids": 73530,
+      "unique_reactome_target_ids": 23144,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "30d751a4555f9ce6aa7edc151b740514ae9dcae1708c7a1c531c6be1f9c7d3b9",
+      "publication_semantic_sha256": "30d751a4555f9ce6aa7edc151b740514ae9dcae1708c7a1c531c6be1f9c7d3b9",
+      "selected_rows": 7,
+      "grouped_rows": 7
+    },
+    "ncbi_reaction": {
+      "source_rows": 611842,
+      "publication_rows": 611842,
+      "unique_source_ids": 74528,
+      "unique_reactome_target_ids": 88785,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "496f1c13215c973e9f9fa1d5f55efc26b86c30cec4912da0d77df731fb3cf1e2",
+      "publication_semantic_sha256": "496f1c13215c973e9f9fa1d5f55efc26b86c30cec4912da0d77df731fb3cf1e2",
+      "selected_rows": 3,
+      "grouped_rows": 3
+    },
+    "chebi_pathway_lowest_level": {
+      "source_rows": 113685,
+      "publication_rows": 113685,
+      "unique_source_ids": 3266,
+      "unique_reactome_target_ids": 14919,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "25a5b17985c7793f08b0d5c41e3ddc158e4c3defdebf2d63fa2f8abebdfe2201",
+      "publication_semantic_sha256": "25a5b17985c7793f08b0d5c41e3ddc158e4c3defdebf2d63fa2f8abebdfe2201",
+      "selected_rows": 3,
+      "grouped_rows": 3
+    },
+    "chebi_pathway_all_level": {
+      "source_rows": 307067,
+      "publication_rows": 307067,
+      "unique_source_ids": 3266,
+      "unique_reactome_target_ids": 20444,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "7945209620ff3fb5af650b7f88816ed15e46bd67013331e50b366a208f278e07",
+      "publication_semantic_sha256": "7945209620ff3fb5af650b7f88816ed15e46bd67013331e50b366a208f278e07",
+      "selected_rows": 9,
+      "grouped_rows": 9
+    },
+    "chebi_reaction": {
+      "source_rows": 222048,
+      "publication_rows": 222048,
+      "unique_source_ids": 3274,
+      "unique_reactome_target_ids": 62964,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "0635c692f7dc470a016ecaa6a2abf2f306af5f0d26c2656963e9198ce17a4c9b",
+      "publication_semantic_sha256": "0635c692f7dc470a016ecaa6a2abf2f306af5f0d26c2656963e9198ce17a4c9b",
+      "selected_rows": 7,
+      "grouped_rows": 7
+    },
+    "gtop_pathway_lowest_level": {
+      "source_rows": 18142,
+      "publication_rows": 18142,
+      "unique_source_ids": 1179,
+      "unique_reactome_target_ids": 4107,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "8715c9e23a525a48dd4fa4a95842b295de730a7378a7be1d2de50d9bd468b1ad",
+      "publication_semantic_sha256": "8715c9e23a525a48dd4fa4a95842b295de730a7378a7be1d2de50d9bd468b1ad",
+      "selected_rows": 9,
+      "grouped_rows": 9
+    },
+    "gtop_pathway_all_level": {
+      "source_rows": 63266,
+      "publication_rows": 63266,
+      "unique_source_ids": 1179,
+      "unique_reactome_target_ids": 7009,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "4d01ebb596a7c3eac1cadb715dc1d62a277fd07912c10ccfeade0b0cd541a3d1",
+      "publication_semantic_sha256": "4d01ebb596a7c3eac1cadb715dc1d62a277fd07912c10ccfeade0b0cd541a3d1",
+      "selected_rows": 54,
+      "grouped_rows": 54
+    },
+    "gtop_reaction": {
+      "source_rows": 28325,
+      "publication_rows": 28325,
+      "unique_source_ids": 1180,
+      "unique_reactome_target_ids": 11110,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "e0775ea9f9035105768dac3233b123f4baf7ebad17ee47d003b54625ec36f05c",
+      "publication_semantic_sha256": "e0775ea9f9035105768dac3233b123f4baf7ebad17ee47d003b54625ec36f05c",
+      "selected_rows": 9,
+      "grouped_rows": 9
+    }
+  },
+  "supporting_roles": {
+    "pathway": {
+      "source_rows": 23498,
+      "publication_rows": 23498,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "180703cfffc8caa05816e4b3a6d718e528b79cad3c3e187508063b9eeb649dad",
+      "publication_semantic_sha256": "180703cfffc8caa05816e4b3a6d718e528b79cad3c3e187508063b9eeb649dad"
+    },
+    "pathway_relation": {
+      "source_rows": 23612,
+      "publication_rows": 23612,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "1e1f41340f6319ec33e3895b04ed965f1ceaee7ae2cb7bec355625063a40c48a",
+      "publication_semantic_sha256": "1e1f41340f6319ec33e3895b04ed965f1ceaee7ae2cb7bec355625063a40c48a"
+    },
+    "complex_pathway": {
+      "source_rows": 28387,
+      "publication_rows": 28387,
+      "unique_entities": 16505,
+      "unique_pathways": 1999,
+      "unique_top_level_pathways": 29,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "46d697cfc5d796e600b900727565ef6f5d282cb87cc38313b0182c8b3fcc5362",
+      "publication_semantic_sha256": "46d697cfc5d796e600b900727565ef6f5d282cb87cc38313b0182c8b3fcc5362"
+    },
+    "ewas_pathway": {
+      "source_rows": 82411,
+      "publication_rows": 82411,
+      "unique_entities": 33628,
+      "unique_pathways": 2333,
+      "unique_top_level_pathways": 29,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "9a4ee2bcbdb62e89a25da8b036de0b27a6d2f68f5c80920bc0abbff1acc9d5b8",
+      "publication_semantic_sha256": "9a4ee2bcbdb62e89a25da8b036de0b27a6d2f68f5c80920bc0abbff1acc9d5b8"
+    },
+    "pathway_gene_set": {
+      "source_rows": 140638,
+      "publication_rows": 140638,
+      "raw_exact_duplicate_rows": 0,
+      "source_semantic_sha256": "2471ec3eaca0a364ce49f7d9ebcadc6042d5d42096a587c11ac1c67d37d970e5",
+      "publication_semantic_sha256": "2471ec3eaca0a364ce49f7d9ebcadc6042d5d42096a587c11ac1c67d37d970e5"
+    }
+  },
+  "mapping_closure": {
+    "uniprot": {"derived_only": 0, "official_only": 0},
+    "ncbi": {"derived_only": 0, "official_only": 0},
+    "chebi": {"derived_only": 0, "official_only": 0},
+    "gtop": {"derived_only": 0, "official_only": 0}
+  },
+  "entity_endpoint_checks": {
+    "complex_missing_human_pathways": 0,
+    "ewas_missing_human_pathways": 0,
+    "non_ancestor_top_level_triples": 0
+  },
+  "scope_probes": {
+    "complex_homo_sapiens": 28387,
+    "complex_mus_musculus": 0,
+    "ewas_homo_sapiens": 82411,
+    "ewas_mus_musculus": 0,
+    "gmt_homo_sapiens": 140638,
+    "gmt_mus_musculus": 0
+  },
+  "gmt": {
+    "member": "ReactomePathways.gmt",
+    "compressed_bytes": 294083,
+    "uncompressed_bytes": 1017374,
+    "sha256": "ed5c201339fc5ae6f98d625325a2feb47f2b0576a0529dc937e4587fa498243b",
+    "pathway_count": 2855,
+    "membership_count": 140638,
+    "symbol_count": 11963,
+    "empty_symbol_count": 0,
+    "duplicate_pair_count": 0,
+    "missing_human_pathway_count": 0,
+    "label_mismatch_classes": {
+      "whitespace_only": 28,
+      "stable_id_suffix_only": 22,
+      "other": 0
+    }
+  },
+  "validation": {
+    "issue_count": 6,
+    "issue_codes": ["missing_pathway_metadata"],
+    "issues_are_warnings": true
+  },
+  "measurements": {
+    "candidate_build_elapsed_seconds": null,
+    "candidate_build_peak_rss_bytes": null,
+    "note": "No elapsed-time or peak-RSS claim was made for the completed full-source build."
+  },
+  "verification": {
+    "selected_and_grouped_probes_cover_all_twelve_mapping_roles": true,
+    "source_and_reopened_semantic_hashes_match": true,
+    "formal_resource_tree_written": false,
+    "canonical_gate": "BIOEXTRACT_TEST_THREADS=1 pdm run check",
+    "canonical_gate_result": "840 passed"
+  },
+  "notes": [
+    "The candidate was generated before a docstring-only correction; no runtime behavior or table contract changed afterward.",
+    "The full raw-source candidate was reused for this read-only audit; no full rebuild was performed during verification."
+  ]
+}

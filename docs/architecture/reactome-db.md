@@ -1,43 +1,64 @@
 # ReactomeDatabase Architecture
 
-Version: v1.1
-Date: 2026-08-17
+Version: v1.2
+Date: 2026-08-18
 Status: current
 
 ## Goal
 
-`bioextract.reactome.ReactomeDatabase` provides path-first access to caller-
-supplied local Reactome mapping snapshots. It parses official TSV files,
-exposes native Polars relations for annotation and enrichment callers, and can
-publish or reopen one provenance-aware DuckDB. It does not call Reactome web
-services or calculate enrichment statistics.
+`bioextract.reactome.ReactomeDatabase` provides offline, path-first access to
+caller-supplied Reactome snapshots. It parses the official local files,
+exposes replayable Polars relations, and can publish or reopen one
+provenance-aware metadata-v2 DuckDB. It does not download data, call Reactome
+web services, or calculate enrichment statistics.
 
-P1 implements two explicit UniProt-to-pathway capabilities:
+The current implemented capability set is `reactome-mapping-v0.5`:
 
-- `lowest_level`: `UniProt2Reactome.txt`, the preserved default;
-- `all_levels`: `UniProt2Reactome_All_Levels.txt`, the explicit hierarchy-
-  expanded relation.
+- twelve six-column identifier-to-Reactome mapping roles across `uniprot`,
+  `ncbi`, `chebi`, and `gtop`;
+- `pathway` and `pathway_relation` metadata roles;
+- human `complex_pathway` and `ewas_pathway` entity membership; and
+- human `pathway_gene_set` membership from the official one-member GMT zip.
 
-The two capabilities never share an ambiguous union table. Reaction,
-NCBI Gene, ChEBI, GtoP, Complex, EWAS, and GMT roles remain deferred.
+Every source role has its own physical table. There is no union table, target
+column, compatibility alias, or filename-derived schema identity.
 
-## Raw Inputs
+## Construction And Roles
 
-The constructor accepts any non-empty combination of these caller-declared
-roles:
+`from_files()` accepts explicit keyword-only roles. The mapping arguments are:
 
 ```text
-uniprot_mapping     -> UniProt2Reactome.txt
-uniprot_all_levels  -> UniProt2Reactome_All_Levels.txt
-pathways            -> ReactomePathways.txt
-relations           -> ReactomePathwaysRelation.txt
+uniprot_mapping       UniProt2Reactome.txt
+uniprot_all_levels    UniProt2Reactome_All_Levels.txt
+uniprot_reactions     UniProt2ReactomeReactions.txt
+ncbi_mapping          NCBI2Reactome.txt
+ncbi_all_levels       NCBI2Reactome_All_Levels.txt
+ncbi_reactions        NCBI2ReactomeReactions.txt
+chebi_mapping         ChEBI2Reactome.txt
+chebi_all_levels      ChEBI2Reactome_All_Levels.txt
+chebi_reactions       ChEBI2ReactomeReactions.txt
+gtop_mapping          GtoP2Reactome.txt
+gtop_all_levels       GtoP2Reactome_All_Levels.txt
+gtop_reactions        GtoP2ReactomeReactions.txt
 ```
 
-Both UniProt mapping files are literal six-column TSV relations. Their columns
-are preserved in this order:
+The remaining roles are `pathways`, `relations`, `complex_pathways`,
+`ewas_pathways`, and `pathway_gene_sets`. Any non-empty combination is valid;
+missing roles remain unavailable capabilities. Every supplied path must be a
+regular file. Release identity is optional caller input and is never inferred
+from a path, basename, directory, or manifest.
+
+## Mapping Contract
+
+All twelve mapping sources are literal, headerless six-field TSV files. CSV
+quoting is disabled, ragged or empty records fail closed, exact six-field
+duplicates are removed, and rows differing in evidence remain distinct. All
+canonical values are strings.
+
+Pathway mapping tables use this source-specific schema and order:
 
 ```text
-uniprot_id
+<namespace>_id
 reactome_pathway_id
 reactome_url
 pathway_name
@@ -45,178 +66,120 @@ evidence_code
 species
 ```
 
-The shared mapping-family parser disables CSV quoting, rejects ragged records
-and empty required fields, retains literal quote characters, removes only
-exact duplicate six-column rows, and retains rows that differ by
-`evidence_code`.
+Reaction mapping tables use:
 
-`release_version` is optional caller-declared identity. It is trimmed and must
-be non-empty when supplied. It is never inferred from a directory, filename,
-manifest, or modification time.
+```text
+<namespace>_id
+reactome_reaction_id
+reactome_url
+reaction_name
+evidence_code
+species
+```
 
-## Public API
+The public whole-resource relations are:
 
 ```python
-from bioextract import ReactomeDatabase
+db.pathway_mappings(namespace="uniprot", pathway_level="lowest_level")
+db.reaction_mappings(namespace="uniprot")
+db.pathway_genes(pathway_level="lowest_level")  # UniProt only
+```
 
-db = ReactomeDatabase.from_files(
-    uniprot_mapping="UniProt2Reactome.txt",
-    uniprot_all_levels="UniProt2Reactome_All_Levels.txt",
-    pathways="ReactomePathways.txt",
-    relations="ReactomePathwaysRelation.txt",
-    release_version="96",
+`pathway_mappings()` never unions namespaces or levels. `reaction_mappings()`
+is evidence of identifier-to-event membership only; it does not claim reaction
+participants, direction, catalysts, regulation, or topology.
+
+Selection dimensions are explicit:
+
+```python
+db.select_ids(ids, namespace="uniprot", target="pathway", pathway_level=None)
+db.select_groups(
+    ids_by_group, namespace="uniprot", target="pathway", pathway_level=None
 )
-
-lowest = db.pathway_mappings()
-all_levels = db.pathway_mappings(pathway_level="all_levels")
-lowest_genes = db.pathway_genes()
-all_level_genes = db.pathway_genes(pathway_level="all_levels")
-
-selection = db.with_species("Homo sapiens").select_ids(
-    ["P04637", "MISSING"],
-    pathway_level="all_levels",
-)
-lf_mapping = selection.mappings()
-lf_unmapped = selection.unmatched_ids()
-lf_names = db.with_species("Homo sapiens").pathway_names()
-lf_relations = db.with_species("Homo sapiens").pathway_relations()
 ```
 
-`namespace` and `target` are explicit selection dimensions on
-`pathway_mappings()`, `select_ids()`, and `select_groups()`. P1 implements
-only `namespace="uniprot"` and `target="pathway"`; invalid values raise
-`ValueError`. A valid level whose source or publication table is absent raises
-`ValueError` for a source handle or `CapabilityError` for a publication
-handle.
+For pathway targets, `None` resolves to `lowest_level`; `all_levels` remains
+explicit. Reaction targets require `pathway_level=None`. Selected output keeps
+the source-specific identifier column. Existing UniProt pathway selection
+retains its established column order; reaction selections use
+`input_id, <namespace>_id, reactome_reaction_id, reaction_name, evidence_code,
+species, reactome_url`.
 
-Calls that omit `pathway_level` remain lowest-level UniProt pathway calls.
-There is no implicit hierarchy closure and no silent union across levels.
+Input normalization is namespace-aware:
 
-`with_species()` applies an exact trimmed Reactome species display-name filter
-before selection or enrichment deduplication. Pathway relations in a species
-scope retain only edges whose two endpoints exist in that species' pathway
-metadata.
+| Namespace | Accepted input | Lookup | Public `input_id` |
+| --- | --- | --- | --- |
+| `uniprot` | accession or pipe form | accession | accession |
+| `ncbi` | any non-empty trimmed official text | same text | same text |
+| `chebi` | decimal or `CHEBI:<digits>` | decimal text | `CHEBI:<integer>` |
+| `gtop` | decimal text | same text | same text |
 
-## Output Contract
+Invalid non-empty ChEBI/GtoP inputs raise `ValueError`; they are not reported
+as unmatched. NCBI identifiers are deliberately not restricted to decimal Gene
+IDs, because the official snapshot also contains GenBank/RefSeq-style values.
 
-`pathway_mappings()` returns the six canonical mapping columns in source order:
+## Human Relations And GMT
 
-```text
-uniprot_id
-reactome_pathway_id
-reactome_url
-pathway_name
-evidence_code
-species
-```
+`complex_pathways()` returns
+`reactome_complex_id, reactome_pathway_id, top_level_reactome_pathway_id`.
+`ewas_pathways()` returns the analogous `reactome_ewas_id` relation. The
+headered source columns are exact and are recorded in
+`_bioextract.column_mapping`; no entity-prefix species inference is used.
 
-`pathway_genes()` returns distinct, sorted pairs:
+`pathway_gene_sets()` returns
+`reactome_pathway_id, gene_set_name, gene_symbol` from exactly one regular
+`ReactomePathways.gmt` member in the supplied zip. The archive is inspected
+without extraction; encrypted, nested, parent-traversing, extra-member,
+invalid-UTF-8, CRC, and decompression failures fail closed. GMT labels and gene
+symbols are preserved as opaque source tokens. A pathway cannot have multiple
+distinct GMT labels in one source.
 
-```text
-reactome_pathway_id
-uniprot_id
-```
+Complex, EWAS, and GMT are file-scoped human relations: unscoped and
+`with_species("Homo sapiens")` return all rows, while any other species returns
+an empty relation with the stable schema. They have no selected/grouped API or
+per-row species column.
 
-Canonical mapping relations retain evidence-distinct rows. Only the explicit
-`pathway_genes()` projection deduplicates to a pathway/UniProt pair.
+## Validation And Publication
 
-Selection mappings retain the existing shape:
+When pathway metadata is present, mapping rows, entity endpoints, and GMT
+pathway IDs missing from human metadata are preserved and produce visible
+`missing_pathway_metadata` warnings. Mapping closure is checked per namespace
+when lowest-level, all-level, and hierarchy roles are all available. Entity
+top-level claims are checked for reflexive ancestry when hierarchy is present;
+cycles or contradictory claims are fatal. Absent comparison roles make the
+check unavailable rather than synthesizing data.
 
-```text
-input_id
-uniprot_id
-reactome_pathway_id
-pathway_name
-evidence_code
-species
-reactome_url
-```
-
-Grouped mappings prepend `group_id`; unmatched outputs remain `input_id` or
-`group_id, input_id`.
-
-## Data Flow And Capability Boundaries
-
-`from_files()` validates that every supplied path is a regular file and stores
-paths only. Parsing is performed by the capability that needs the relation.
-The all-level path is never used to satisfy the lowest-level role, and a
-missing all-level source is not synthesized from `pathway_relation`.
-
-The role-to-table boundary is private to the Reactome implementation:
-
-```text
-uniprot_pathway_lowest_level -> UniProt2Reactome.txt
-uniprot_pathway_all_level    -> UniProt2Reactome_All_Levels.txt
-pathway                      -> ReactomePathways.txt
-pathway_relation             -> ReactomePathwaysRelation.txt
-```
-
-Source-backed and reopened handles use the same public query semantics. A
-reopened handle validates metadata, source-role inventory, exact physical
-tables, and column schemas without recounting biological tables. Each
-`connect()` call returns an independent native DuckDB connection opened
-read-only and pins the validated file identity.
-
-## Materialized Dataset
-
-`build_tidy()` exposes only the canonical role frames that are available:
-
-```text
-uniprot_pathway_lowest_level
-uniprot_pathway_all_level
-pathway
-pathway_relation
-```
-
-`pathway_genes()` and `pathway_names()` are public lazy projections, not
-redundant publication relations. `write_duckdb()` publishes exactly the available
-canonical roles and the shared five `_bioextract` metadata-v2 relations.
-
-The P1 publication identity is:
+The v0.5 publication identity is:
 
 ```text
 bioextract.metadata_schema_version = 2
-bioextract.source_schema_profile   = reactome-mapping-files-v2
-bioextract.resource_schema_version = reactome-mapping-v0.2
+bioextract.source_schema_profile   = reactome-mapping-files-v5
+bioextract.resource_schema_version = reactome-mapping-v0.5
 ```
 
-Mapping rows whose pathway IDs are absent from supplied pathway metadata remain
-published. When the affected mapping and `pathway` roles are both present,
-publication records one `missing_pathway_metadata` warning per distinct
-`(mapping_role, reactome_pathway_id)` in
-`_bioextract.validation_issue`.
+`write_duckdb()` publishes exactly the available biological roles plus the five
+shared `_bioextract` metadata tables. `_bioextract.source_file` is the
+capability inventory. The GMT source is recorded as `application/zip`; all
+other Reactome sources are `text/tab-separated-values`. Reopen validates exact
+role/table presence, ordered physical schemas, expected entity column lineage,
+media types, validation-state consistency, and the pinned file identity without
+recounting biological rows. v0.4 and earlier Reactome publications are
+intentionally rejected.
 
-When lowest-level, all-level, and pathway-relation roles are all present, the
-publisher compares all-level keys with the reflexive hierarchy closure of the
-lowest-level keys at
-`(uniprot_id, reactome_pathway_id, evidence_code, species)` grain. Any
-mismatch is fatal; absence of a comparison role is simply an unavailable
-check.
+## Formal Boundary
 
-The old `protein_pathway` table, metadata-v1 reader, v0.1 reader, compatibility
-view, and automatic migration are intentionally absent before v1.0.
-
-## Formal Publication Boundary
-
-P1 code and temporary local publications do not replace the formal v96
-CephFS artifact. A later release must build outside the formal resource path,
-validate all-level closure and warning preservation, then stage and replace an
-artifact atomically under its own release authority. Package release, catalog
-admission, downstream activation, and old-artifact deletion are separate
-decisions.
-
-## Why Not reactome2py
-
-`reactome2py` is useful for online Reactome API calls. It is not a replacement
-for this layer because `bioextract` needs deterministic local access,
-offline operation, and snapshot-specific outputs.
+Source parsing and temporary publications are separate from formal resource
+replacement. A formal v96 delivery must build outside the live resource path,
+validate the complete role set, preserve a rollback artifact, replace the
+target atomically, and regenerate the release catalog from the exact package
+and publication. Package release, catalog admission, downstream activation,
+and deletion of old artifacts remain separately controlled operations.
 
 ## Implementation Notes
 
-- Keep `ReactomeDatabase` under `src/bioextract/reactome/`.
-- Export only `ReactomeDatabase`; selection classes remain implementation
-  types.
-- Keep mapping-family parsing shared and module-local; do not add a generic
+- Keep `ReactomeDatabase` under `src/bioextract/reactome/` and export only the
+  database class.
+- Keep the role registry and parsers private to Reactome; do not add a generic
   query facade or network dependency.
-- Prefer Polars expressions for filtering, joining, closure validation, and
-  deduplication.
+- Use Polars relations for source/publication query execution and deterministic
+  canonical ordering.
