@@ -250,8 +250,10 @@ from bioextract import ReactomeDatabase, WikiPathwaysDatabase
 
 ReactomeDatabase.from_files(
     uniprot_mapping="UniProt2Reactome.txt",
+    uniprot_all_levels="UniProt2Reactome_All_Levels.txt",
     pathways="ReactomePathways.txt",
     relations="ReactomePathwaysRelation.txt",
+    release_version="96",
 ).write_duckdb("out/reactome.duckdb")
 
 WikiPathwaysDatabase.from_gmt(
@@ -261,7 +263,9 @@ WikiPathwaysDatabase.from_gmt(
 ```
 
 Selection methods such as `select_ids()` retain unmatched inputs and hide
-resource-specific mapping joins. They do not calculate enrichment statistics.
+resource-specific mapping joins. Reactome calls default to lowest-level UniProt
+pathways; request `pathway_level="all_levels"` explicitly for hierarchy-
+expanded mappings. They do not calculate enrichment statistics.
 WikiPathways glob expansion is enabled by default; pass `glob=False` for a
 literal path or sequence. The constructor validates one Collection and Version
 and unique pathway IDs across the complete resolved file set before applying

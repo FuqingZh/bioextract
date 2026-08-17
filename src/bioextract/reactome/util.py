@@ -5,8 +5,6 @@ from pathlib import Path
 import polars as pl
 from polars._typing import SchemaDict
 
-from bioextract._shared import validate_required_cols
-
 from .constant import (
     COLS_MAPPING_RAW,
     COLS_PATHWAY_RAW,
@@ -18,7 +16,7 @@ from .constant import (
 
 
 def read_mapping_frame(file_uniprot2reactome: Path) -> pl.DataFrame:
-    return _read_reactome_tsv(
+    return read_mapping_family_frame(
         file_uniprot2reactome,
         columns=COLS_MAPPING_RAW,
         schema=SCHEMA_MAPPING_RAW,
@@ -26,14 +24,52 @@ def read_mapping_frame(file_uniprot2reactome: Path) -> pl.DataFrame:
     )
 
 
+def read_mapping_family_frame(
+    file_mapping: Path,
+    *,
+    columns: list[str],
+    schema: SchemaDict,
+    context: str,
+) -> pl.DataFrame:
+    """Read one official six-column Reactome mapping-family relation.
+
+    The upstream files are literal TSV records, not CSV records. Quoting is
+    therefore disabled so an embedded double quote remains part of the field,
+    while exact-width and required-field checks keep malformed records out of
+    canonical publication.
+    """
+    return _read_reactome_tsv(
+        file_mapping,
+        columns=columns,
+        schema=schema,
+        context=context,
+        deduplicate=True,
+    )
+
+
 def scan_mapping_frame(file_uniprot2reactome: Path) -> pl.LazyFrame:
-    return pl.scan_csv(
+    return scan_mapping_family_frame(
         file_uniprot2reactome,
-        separator="\t",
-        has_header=False,
-        new_columns=COLS_MAPPING_RAW,
-        schema_overrides=SCHEMA_MAPPING_RAW,
-    ).select(COLS_MAPPING_RAW)
+        columns=COLS_MAPPING_RAW,
+        schema=SCHEMA_MAPPING_RAW,
+        context="Reactome UniProt2Reactome file",
+    )
+
+
+def scan_mapping_family_frame(
+    file_mapping: Path,
+    *,
+    columns: list[str],
+    schema: SchemaDict,
+    context: str,
+) -> pl.LazyFrame:
+    """Return a strict-schema lazy scan for one mapping-family relation."""
+    return _scan_reactome_tsv(
+        file_mapping,
+        columns=columns,
+        schema=schema,
+        context=context,
+    )
 
 
 def read_pathway_frame(file_pathways: Path) -> pl.DataFrame:
@@ -46,13 +82,12 @@ def read_pathway_frame(file_pathways: Path) -> pl.DataFrame:
 
 
 def scan_pathway_frame(file_pathways: Path) -> pl.LazyFrame:
-    return pl.scan_csv(
+    return _scan_reactome_tsv(
         file_pathways,
-        separator="\t",
-        has_header=False,
-        new_columns=COLS_PATHWAY_RAW,
-        schema_overrides=SCHEMA_PATHWAY_RAW,
-    ).select(COLS_PATHWAY_RAW)
+        columns=COLS_PATHWAY_RAW,
+        schema=SCHEMA_PATHWAY_RAW,
+        context="Reactome pathways file",
+    )
 
 
 def read_relation_frame(file_relations: Path) -> pl.DataFrame:
@@ -65,13 +100,12 @@ def read_relation_frame(file_relations: Path) -> pl.DataFrame:
 
 
 def scan_relation_frame(file_relations: Path) -> pl.LazyFrame:
-    return pl.scan_csv(
+    return _scan_reactome_tsv(
         file_relations,
-        separator="\t",
-        has_header=False,
-        new_columns=COLS_RELATION_RAW,
-        schema_overrides=SCHEMA_RELATION_RAW,
-    ).select(COLS_RELATION_RAW)
+        columns=COLS_RELATION_RAW,
+        schema=SCHEMA_RELATION_RAW,
+        context="Reactome pathway relations file",
+    )
 
 
 def filter_species_frame(df: pl.DataFrame, species: str | None) -> pl.DataFrame:
@@ -184,14 +218,66 @@ def _read_reactome_tsv(
     columns: list[str],
     schema: SchemaDict,
     context: str,
+    deduplicate: bool = False,
 ) -> pl.DataFrame:
-    lf = pl.scan_csv(
+    lf = _scan_reactome_tsv(
         file_path,
-        separator="\t",
-        has_header=False,
-        new_columns=columns,
-        schema_overrides=schema,
+        columns=columns,
+        schema=schema,
+        context=context,
     )
-    df = lf.select(columns).collect()
-    validate_required_cols(df.columns, columns, context)
+    try:
+        df = lf.collect()
+    except Exception as error:
+        raise ValueError(f"{context} contains an invalid TSV record") from error
+    _validate_required_values(df, columns, context)
+    if deduplicate:
+        df = df.unique(maintain_order=True)
     return df
+
+
+def _scan_reactome_tsv(
+    file_path: Path,
+    *,
+    columns: list[str],
+    schema: SchemaDict,
+    context: str,
+) -> pl.LazyFrame:
+    try:
+        lf = pl.scan_csv(
+            file_path,
+            separator="\t",
+            has_header=False,
+            new_columns=columns,
+            schema_overrides=schema,
+            quote_char=None,
+            truncate_ragged_lines=False,
+        )
+        observed_columns = lf.collect_schema().names()
+    except Exception as error:
+        raise ValueError(
+            f"{context} must contain exactly {len(columns)} tab-separated fields"
+        ) from error
+    if observed_columns != columns:
+        raise ValueError(
+            f"{context} must contain exactly {len(columns)} tab-separated fields"
+        )
+    return lf
+
+
+def _validate_required_values(
+    df: pl.DataFrame,
+    columns: list[str],
+    context: str,
+) -> None:
+    if df.columns != columns:
+        raise ValueError(
+            f"{context} must contain exactly {len(columns)} tab-separated fields"
+        )
+    empty = df.select(
+        pl.any_horizontal(
+            [pl.col(column).is_null() | (pl.col(column) == "") for column in columns]
+        ).any()
+    ).item()
+    if bool(empty):
+        raise ValueError(f"{context} contains empty required fields")

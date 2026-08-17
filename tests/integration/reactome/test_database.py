@@ -54,6 +54,26 @@ def write_reactome_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
     return file_mapping, file_pathways, file_relations
 
 
+def write_reactome_all_levels_fixture(tmp_path: Path) -> Path:
+    file_all_levels = tmp_path / "UniProt2Reactome_All_Levels.txt"
+    file_all_levels.write_text(
+        "\n".join(
+            [
+                "P04637\tR-HSA-69563\thttps://reactome.org/PathwayBrowser/#/R-HSA-69563\tp53-Dependent G1 DNA Damage Response\tTAS\tHomo sapiens",
+                "P04637\tR-HSA-6798695\thttps://reactome.org/PathwayBrowser/#/R-HSA-6798695\tNeutrophil degranulation\tTAS\tHomo sapiens",
+                "P04637\tR-HSA-1640170\thttps://reactome.org/PathwayBrowser/#/R-HSA-1640170\tCell Cycle\tTAS\tHomo sapiens",
+                "Q9Y243\tR-HSA-6798695\thttps://reactome.org/PathwayBrowser/#/R-HSA-6798695\tNeutrophil degranulation\tTAS\tHomo sapiens",
+                "Q9Y243\tR-HSA-1640170\thttps://reactome.org/PathwayBrowser/#/R-HSA-1640170\tCell Cycle\tTAS\tHomo sapiens",
+                "P31749\tR-MMU-1257604\thttps://reactome.org/PathwayBrowser/#/R-MMU-1257604\tPIP3 activates AKT signaling\tTAS\tMus musculus",
+                "P31749\tR-MMU-000001\thttps://reactome.org/PathwayBrowser/#/R-MMU-000001\tMouse parent pathway\tTAS\tMus musculus",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return file_all_levels
+
+
 def test_extract_mapping_and_unmapped_single_selection(tmp_path: Path) -> None:
     file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
 
@@ -186,14 +206,16 @@ def test_build_tidy_writes_duckdb(tmp_path: Path) -> None:
 
     tidy = db.build_tidy()
     assert set(tidy.frames) == {
-        "mapping",
+        "uniprot_pathway_lowest_level",
         "pathway",
-        "relation",
-        "term2gene",
-        "term2name",
+        "pathway_relation",
     }
     result = db.write_duckdb(tmp_path / "reactome.duckdb")
-    assert result.tables == ("protein_pathway", "pathway", "pathway_relation")
+    assert result.tables == (
+        "uniprot_pathway_lowest_level",
+        "pathway",
+        "pathway_relation",
+    )
     assert not (tmp_path / "manifest.json").exists()
 
 
@@ -276,7 +298,7 @@ def test_duckdb_reopen_validates_bounded_physical_contract(tmp_path: Path) -> No
     with duckdb.connect(str(publication)) as connection:
         connection.execute(
             "UPDATE _bioextract.table_info SET row_count=999999999 "
-            "WHERE table_name='protein_pathway'"
+            "WHERE table_name='uniprot_pathway_lowest_level'"
         )
     assert (
         ReactomeDatabase.from_duckdb(publication)
@@ -364,9 +386,9 @@ def test_mapping_only_snapshot_supports_annotation_and_term2gene(
     assert db.select_ids(["P04637"]).mappings().collect().height == 2
 
     tidy = db.build_tidy()
-    assert set(tidy.frames) == {"mapping", "term2gene"}
+    assert set(tidy.frames) == {"uniprot_pathway_lowest_level"}
     result = db.write_duckdb(tmp_path / "reactome_mapping.duckdb")
-    assert result.tables == ("protein_pathway",)
+    assert result.tables == ("uniprot_pathway_lowest_level",)
 
     with pytest.raises((ValueError, pl.exceptions.ComputeError), match="pathways file"):
         db.pathway_names().collect()
@@ -383,7 +405,7 @@ def test_pathway_only_snapshot_supports_term2name(tmp_path: Path) -> None:
     )
 
     assert db.pathway_names().collect().height == 3
-    assert set(db.build_tidy().frames) == {"pathway", "term2name"}
+    assert set(db.build_tidy().frames) == {"pathway"}
 
     with pytest.raises(
         (ValueError, pl.exceptions.ComputeError), match="UniProt2Reactome file"
@@ -398,7 +420,7 @@ def test_relation_only_snapshot_supports_unscoped_relations(
     db = ReactomeDatabase.from_files(relations=file_relations)
 
     assert db.pathway_relations().collect().height == 3
-    assert set(db.build_tidy().frames) == {"relation"}
+    assert set(db.build_tidy().frames) == {"pathway_relation"}
 
     with pytest.raises(
         (ValueError, pl.exceptions.ComputeError),
@@ -429,3 +451,114 @@ def test_from_files_rejects_missing_files(tmp_path: Path) -> None:
             pathways=file_pathways,
             relations=file_relations,
         )
+
+
+def test_lowest_and_all_level_capabilities_are_explicit(tmp_path: Path) -> None:
+    file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
+    file_all_levels = write_reactome_all_levels_fixture(tmp_path)
+    db = ReactomeDatabase.from_files(
+        uniprot_mapping=file_mapping,
+        uniprot_all_levels=file_all_levels,
+        pathways=file_pathways,
+        relations=file_relations,
+    ).with_species("Homo sapiens")
+
+    assert db.pathway_mappings().collect().height == 3
+    assert db.pathway_mappings(pathway_level="all_levels").collect().height == 5
+    assert db.pathway_genes().collect().height == 3
+    assert db.pathway_genes(pathway_level="all_levels").collect().height == 5
+    assert db.select_ids(
+        ["P04637"], pathway_level="all_levels"
+    ).mappings().collect().select("reactome_pathway_id").to_series().to_list() == [
+        "R-HSA-1640170",
+        "R-HSA-6798695",
+        "R-HSA-69563",
+    ]
+
+
+def test_mapping_role_arguments_do_not_infer_or_swap_level(tmp_path: Path) -> None:
+    file_mapping, _, _ = write_reactome_fixture(tmp_path)
+    file_all_levels = write_reactome_all_levels_fixture(tmp_path)
+
+    with pytest.raises(ValueError, match="wrong declared role"):
+        ReactomeDatabase.from_files(uniprot_mapping=file_all_levels)
+    with pytest.raises(ValueError, match="wrong declared role"):
+        ReactomeDatabase.from_files(uniprot_all_levels=file_mapping)
+
+
+def test_missing_all_level_capability_fails_closed(tmp_path: Path) -> None:
+    file_mapping, _, _ = write_reactome_fixture(tmp_path)
+    db = ReactomeDatabase.from_files(uniprot_mapping=file_mapping)
+
+    with pytest.raises(ValueError, match="all-level"):
+        db.pathway_mappings(pathway_level="all_levels").collect()
+    with pytest.raises(ValueError, match="all-level"):
+        db.select_ids(["P04637"], pathway_level="all_levels").mappings().collect()
+
+
+def test_v02_publication_preserves_roles_release_and_warning(tmp_path: Path) -> None:
+    file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
+    file_all_levels = write_reactome_all_levels_fixture(tmp_path)
+    publication = tmp_path / "reactome-v02.duckdb"
+    source = ReactomeDatabase.from_files(
+        uniprot_mapping=file_mapping,
+        uniprot_all_levels=file_all_levels,
+        pathways=file_pathways,
+        relations=file_relations,
+        release_version=" 96 ",
+    )
+
+    result = source.write_duckdb(publication)
+    assert result.tables == (
+        "uniprot_pathway_lowest_level",
+        "uniprot_pathway_all_level",
+        "pathway",
+        "pathway_relation",
+    )
+    assert result.validation_issue_count == 1
+
+    with duckdb.connect(str(publication), read_only=True) as connection:
+        metadata = dict(
+            connection.execute("SELECT key, value FROM _bioextract.metadata").fetchall()
+        )
+        assert (
+            metadata["bioextract.source_schema_profile"] == "reactome-mapping-files-v2"
+        )
+        assert metadata["bioextract.resource_schema_version"] == "reactome-mapping-v0.2"
+        assert metadata["bioextract.release_version"] == "96"
+        assert metadata["bioextract.release_version_source"] == "caller"
+        assert metadata["bioextract.validation_status"] == "passed_with_warnings"
+        assert connection.execute(
+            "SELECT issue_code, identifier_value FROM _bioextract.validation_issue"
+        ).fetchall() == [("missing_pathway_metadata", "R-MMU-000001")]
+        assert connection.execute(
+            "SELECT count(*) FROM uniprot_pathway_all_level"
+        ).fetchone() == (7,)
+        assert connection.execute(
+            "SELECT count(*) FROM information_schema.tables "
+            "WHERE table_schema='main' AND table_name='protein_pathway'"
+        ).fetchone() == (0,)
+
+    reopened = ReactomeDatabase.from_duckdb(publication)
+    assert reopened.release_version == "96"
+    assert reopened.pathway_genes(pathway_level="all_levels").collect().height == 7
+    assert reopened.build_tidy().release_version == "96"
+
+
+def test_partial_all_level_publication_reopens_only_its_capability(
+    tmp_path: Path,
+) -> None:
+    file_all_levels = write_reactome_all_levels_fixture(tmp_path)
+    publication = tmp_path / "all-only.duckdb"
+    ReactomeDatabase.from_files(
+        uniprot_all_levels=file_all_levels,
+        release_version="96",
+    ).write_duckdb(publication)
+
+    reopened = ReactomeDatabase.from_duckdb(publication)
+    assert set(reopened.build_tidy().frames) == {"uniprot_pathway_all_level"}
+    assert reopened.pathway_mappings(pathway_level="all_levels").collect().height == 7
+    with pytest.raises(
+        (CapabilityError, pl.exceptions.ComputeError), match="lowest-level"
+    ):
+        reopened.pathway_mappings().collect()

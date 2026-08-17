@@ -1,180 +1,142 @@
 # ReactomeDatabase Test Standard
 
-Version: v1.0
-Date: 2026-07-30
+Version: v1.1
+Date: 2026-08-17
 Status: current
 
 ## Scope
 
-The ReactomeDatabase test suite verifies local raw-file parsing,
-selection behavior, species scoping, enrichment input extraction, relation
-filtering, tidy writing, DuckDB reopen parity, and error handling.
-
-It does not test online Reactome services, ReactomePA behavior, or statistical
-enrichment calculations.
+The ReactomeDatabase suite verifies local official-format parsing, explicit
+lowest/all-level capability semantics, selection behavior, species scoping,
+enrichment projections, hierarchy validation, metadata-v2 publication, and
+DuckDB reopen parity. It does not test online Reactome services or statistical
+enrichment.
 
 ## Fixtures
 
-Use tiny tab-separated fixtures that preserve the real file shapes.
-
-`UniProt2Reactome.txt`:
-
-```text
-P04637	R-HSA-69563	https://reactome.org/PathwayBrowser/#/R-HSA-69563	p53-Dependent G1 DNA Damage Response	Gene Ontology	Homo sapiens
-P04637	R-HSA-6798695	https://reactome.org/PathwayBrowser/#/R-HSA-6798695	Neutrophil degranulation	TAS	Homo sapiens
-Q9Y243	R-HSA-6798695	https://reactome.org/PathwayBrowser/#/R-HSA-6798695	Neutrophil degranulation	TAS	Homo sapiens
-P31749	R-MMU-1257604	https://reactome.org/PathwayBrowser/#/R-MMU-1257604	PIP3 activates AKT signaling	TAS	Mus musculus
-```
-
-`ReactomePathways.txt`:
+Keep compact fixtures headerless and tab-separated. Mapping fixtures use the
+six columns:
 
 ```text
-R-HSA-69563	p53-Dependent G1 DNA Damage Response	Homo sapiens
-R-HSA-6798695	Neutrophil degranulation	Homo sapiens
-R-HSA-1640170	Cell Cycle	Homo sapiens
-R-MMU-1257604	PIP3 activates AKT signaling	Mus musculus
+uniprot_id
+reactome_pathway_id
+reactome_url
+pathway_name
+evidence_code
+species
 ```
 
-`ReactomePathwaysRelation.txt`:
+Provide separate `UniProt2Reactome.txt` and
+`UniProt2Reactome_All_Levels.txt` fixtures. The all-level fixture must not be
+passed through the lowest-level role. Include:
 
-```text
-R-HSA-1640170	R-HSA-69563
-R-HSA-1640170	R-HSA-6798695
-R-MMU-000001	R-MMU-1257604
-```
+- an ancestor mapping present only at all levels;
+- an exact duplicate row;
+- two rows differing only by `evidence_code`;
+- an embedded double quote in a reaction-shaped six-field fixture; and
+- a missing pathway metadata ID for publication-warning coverage.
+
+Tests use `tmp_path` and never write to the formal resource tree or CephFS.
 
 ## Unit Tests
 
-### Construction
+- The shared mapping-family reader disables CSV quoting and preserves literal
+  quotes.
+- Short, extra-field, null, and empty-field records fail closed.
+- Exact duplicate six-column rows are removed; evidence-distinct rows remain.
+- Pathway and relation readers preserve their declared schemas.
 
-- `from_files()` accepts all three files.
-- `from_files()` accepts mapping-only, pathways-only, and relations-only
-  snapshots.
-- `from_files()` rejects a call with no files.
-- `from_files()` rejects missing provided files.
-- Missing-file failures happen at the feature boundary. For example,
-  `extract_term2name()` without pathways raises a targeted `ValueError`.
+## Integration Tests
 
-### Species Scope
+### Construction and query
 
-- `with_species("Homo sapiens")` filters mapping and pathway frames.
-- `with_species("Mus musculus")` returns mouse-only rows.
-- Unknown species returns empty extraction frames, not a crash.
-- Species matching trims whitespace.
+- `from_files()` accepts any non-empty combination of the four P1 roles.
+- `uniprot_all_levels` is independent from `uniprot_mapping`.
+- `release_version` trims caller input and rejects an empty value.
+- Missing paths and non-files fail at construction.
+- Default `pathway_mappings()`, `pathway_genes()`, `select_ids()`, and
+  `select_groups()` are lowest-level UniProt behavior.
+- `pathway_level="all_levels"` is explicit for whole-resource and selected
+  queries; absent capability raises `CapabilityError` or the source-handle
+  `ValueError` at the feature boundary.
+- Invalid namespace, target, and level values raise `ValueError`.
+- Evidence-distinct selected rows survive; `pathway_genes()` deduplicates only
+  pathway/UniProt pairs.
+- Grouped mapping and unmatched output retain their existing shapes.
+- Species filtering occurs before enrichment deduplication.
 
-### Single Selection
+### Publication and reopen
 
-- `select_ids([" P04637 ", "", "MISSING"])` trims input IDs and drops blanks.
-- `extract_mapping()` returns only selected IDs.
-- Duplicate raw mappings are deduplicated by UniProt and pathway ID.
-- `extract_unmatched_ids()` reports `MISSING`.
-- Empty selection returns empty mapping and unmapped frames with stable columns.
+For lowest-only, all-only, pathway-only, relation-only, and combined fixtures:
 
-### Grouped Selection
+- `build_tidy().frames` contains only the available canonical role names:
 
-- `select_groups()` preserves group labels.
-- Grouped mapping prepends `group_id`.
-- Grouped unmapped output includes `group_id` and `input_id`.
-- The same UniProt ID can appear in multiple groups without being collapsed
-  across groups.
+  ```text
+  uniprot_pathway_lowest_level
+  uniprot_pathway_all_level
+  pathway
+  pathway_relation
+  ```
 
-### Enrichment Input Frames
+- `write_duckdb()` publishes exactly those biological tables plus the five
+  metadata-v2 tables.
+- Metadata identifies `reactome-mapping-files-v2` and
+  `reactome-mapping-v0.2`.
+- `_bioextract.source_file` contains the exact role inventory.
+- The old `protein_pathway` relation is absent.
+- `release_version` survives publication, inspection, and reopen.
+- Missing pathway metadata creates a visible
+  `missing_pathway_metadata` warning without dropping mapping rows.
+- When all three UniProt pathway roles are present, all-level keys equal the
+  reflexive lowest-level hierarchy closure; a mismatch fails publication.
+- Reopen derives capabilities from the unique source-role inventory and rejects
+  forged roles, wrong profile/version, extra or missing physical tables,
+  physical schema changes, and v0.1 publications.
+- Reopen trusts non-negative recorded biological row counts and does not recount
+  them during validation.
+- Source and reopened whole-resource, species-scoped, selected, grouped,
+  unmatched, enrichment, and relation results agree.
+- Reopened `connect()` calls are distinct read-only caller-owned connections,
+  and atomic replacement invalidates the old handle.
 
-- `extract_term2gene()` returns `reactome_pathway_id, uniprot_id`.
-- `extract_term2gene()` is species-scoped.
-- `extract_term2name()` returns `reactome_pathway_id, pathway_name, species`.
-- `extract_term2name()` is deduplicated by pathway ID.
+## Bounded v96 Smoke
 
-### Relations
+External snapshot smoke is opt-in and read-only. Use the concrete raw subtree
+only after resolving it explicitly; do not recursively scan `/cephfs_data`.
+The smoke writes any temporary publication under a unique `/tmp` directory.
 
-- `extract_pathway_relations()` returns `parent_reactome_pathway_id` and
-  `child_reactome_pathway_id`.
-- Species-scoped relations keep only edges where both endpoints are in
-  species-scoped pathway metadata.
-- Relations are stable when relation rows reference pathways absent from
-  metadata.
-- Relations-only snapshots can extract unscoped raw relations.
-- Species-scoped relations without pathways raise a targeted `ValueError`.
-
-### Tidy
-
-- `build_tidy().frames` contains `mapping`, `pathway`, `relation`,
-  `term2gene`, and `term2name`.
-- `write_duckdb(path)` writes canonical relations to one database.
-- `_bioextract.table_info` agrees with every physical table row count.
-- Partial snapshots write only derivable relations and list only provided
-  source files.
-
-### DuckDB Reopen
-
-- Build a representative source fixture, publish it, reopen it with
-  `from_duckdb()`, and compare single/grouped selection plus whole-domain
-  extraction results.
-- `connect()` returns distinct caller-owned native read-only connections and
-  permits arbitrary read SQL while rejecting writes.
-- Metadata v2 resource identity, source schema profile, resource schema,
-  source capability roles, exact physical table/view inventory, table roles,
-  and physical column schemas are rejected when incompatible.
-- Validation accepts non-negative recorded biological row counts without
-  recounting the biological tables during reopen.
-- A reopened handle rejects a vanished or atomically replaced file and requires
-  the caller to reopen it.
-
-## Real-Data Smoke
-
-Use the local v96 snapshot:
+The v96 checks record, at minimum:
 
 ```text
-/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/reactome/mapping/v96/raw
+lowest-level rows                    322435
+all-level rows                       934947
+lowest-level unique pathway pairs   317978
+all-level unique pathway pairs      917206
+human lowest-level rows              53996
+human all-level rows                 159114
+human unique UniProt IDs              12136 at both levels
+closure derived-only keys                 0
+closure official-only keys                 0
 ```
 
-Expected raw sizes observed during design:
+The smoke also proves that the 13 all-level rows for
+`R-SCE-9865878` remain queryable and that the corresponding publication
+warning is visible. It records runtime and output hashes only when the bounded
+run actually completes; fixture results are not substituted for skipped
+external evidence.
 
-```text
-UniProt2Reactome.txt: 322435 rows
-ReactomePathways.txt: 23498 rows
-ReactomePathwaysRelation.txt: 23612 rows
+## Commands
+
+```console
+BIOEXTRACT_TEST_THREADS=1 pdm run pytest \
+  tests/unit/reactome \
+  tests/integration/reactome \
+  tests/contract/resources/reactome \
+  -q
+
+BIOEXTRACT_TEST_THREADS=1 pdm run check
 ```
 
-The smoke test should verify:
-
-- files read without missing columns
-- Homo sapiens `term2gene` and `term2name` are non-empty
-- relation filtering completes
-- DuckDB publication succeeds under `/tmp`
-- the formal v96 publication has 322,435 `protein_pathway`, 23,498 `pathway`,
-  and 23,612 `pathway_relation` rows
-- metadata schema v1 has all five `_bioextract` tables and reports
-  `validation_status=passed`
-
-Example command:
-
-```bash
-PYTHONPATH=src .venv/bin/python - <<'PY'
-from pathlib import Path
-from bioextract import ReactomeDatabase
-
-base = Path("/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/reactome/mapping/v96/raw")
-db = ReactomeDatabase.from_files(
-    uniprot_mapping=base / "UniProt2Reactome.txt",
-    pathways=base / "ReactomePathways.txt",
-    relations=base / "ReactomePathwaysRelation.txt",
-)
-view = db.with_species("Homo sapiens")
-assert view.extract_term2gene().height > 0
-assert view.extract_term2name().height > 0
-assert view.extract_pathway_relations().height > 0
-view.write_duckdb("/tmp/reactome.duckdb")
-reopened = ReactomeDatabase.from_duckdb("/tmp/reactome.duckdb")
-assert reopened.with_species("Homo sapiens").extract_term2gene().height > 0
-with reopened.connect() as connection:
-    assert connection.sql("SELECT count(*) FROM protein_pathway").fetchone()[0] > 0
-PY
-```
-
-## Non-Goals
-
-- No live Reactome API calls in unit tests.
-- No statistical enrichment p-value tests.
-- No ReactomePA output parity test.
-- No gene-symbol conversion test until ID mapping is explicitly added.
+The complete gate is required for this public API and publication-schema
+change. Formal CephFS replacement, release catalog admission, and package
+release are outside this test standard.
