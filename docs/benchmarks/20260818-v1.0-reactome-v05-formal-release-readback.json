@@ -1,0 +1,68 @@
+{
+  "schema": "reactome-v0.5-formal-release-readback-v1",
+  "observed_at": "2026-08-18",
+  "package": {
+    "name": "bioextract",
+    "version": "0.7.0",
+    "tag": "0.7.0",
+    "merge_commit": "bfed4b1e3864ba58a54505917052f9298c8d0da2",
+    "publish_workflow_run": 32053937566,
+    "wheel_sha256": "81e523f24d22eee58f7a9055b745964aa4f51c4e11a712fc8a54a307ff9deabf",
+    "sdist_sha256": "e0017567433e788114c0162d3caa73c23bad8700bff1e64388509b2abb62d609"
+  },
+  "reactome": {
+    "formal_path": "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/reactome/mapping/v96/tidy/data.duckdb",
+    "candidate_path": "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/.release-staging/20260818-r2/candidates/reactome/mapping/v96/tidy/data.duckdb",
+    "release_version": "96",
+    "bytes": 129249280,
+    "sha256": "dc2ecb5823786deccecc87b5ff368e9f50c3abbff60d16c5d5143ced7aeae890",
+    "package_version": "0.7.0",
+    "resource_schema_version": "reactome-mapping-v0.5",
+    "source_schema_profile": "reactome-mapping-files-v5",
+    "validation_status": "passed_with_warnings",
+    "validation_issue_count": 6,
+    "table_count": 17
+  },
+  "rollback": {
+    "path": "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/.release-rollback/20260818-r2/reactome-mapping-v96-v0.2.duckdb",
+    "bytes": 31731712,
+    "sha256": "f740d5148c0425c0854f3102b6c5e12b1cbd8843b859cacedb7a6d95062b8476"
+  },
+  "kegg_mapping": {
+    "formal_path": "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/kegg/mapping/2026-06/tidy/data.duckdb",
+    "release_version": "2026-06",
+    "bytes": 2728144896,
+    "sha256": "f179ff99a45dd72705f6f35aebc022d02644f7ef4a2bab054c64ce9680062889",
+    "package_version": "0.5.0",
+    "resource_schema_version": "kegg-mapping-v1.0",
+    "source_schema_profile": "kegg-organism-mapping-files-v2",
+    "validation_status": "passed",
+    "validation_issue_count": 0,
+    "tables": {
+      "organism": 11782,
+      "gene_annotation": 62719958,
+      "ko_annotation": 27272
+    }
+  },
+  "catalog": {
+    "release_id": "20260818-r2",
+    "path": "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/meta/releases/20260818-r2/catalog.toml",
+    "sha256": "83e40c5e2b599ae690b3715b808ac509db0633f87e6418c7f1da41c677c571af",
+    "schema_version": "bioinfo-publication-catalog-v1",
+    "publication_count": 10,
+    "skipped_snapshot_count": 20,
+    "table_count": 99,
+    "validation_issue_count": 8,
+    "receipt_input_supplied": false,
+    "publication_receipt_present": false,
+    "license_conclusion_asserted": false
+  },
+  "catalog_builder": {
+    "repository": "/home/fqzhang/project/bioinfo-resource-tools",
+    "optional_admission_inputs_commit": "8a2e138",
+    "bioextract_0_7_pin_commit": "17a8f10",
+    "repository_remote_configured": false,
+    "check": "pdm run check: 20 passed"
+  },
+  "bioextract_check": "BIOEXTRACT_TEST_THREADS=1 pdm run check: 840 passed in 270.05s"
+}
