@@ -22,6 +22,15 @@ wheel_sha256 = "f43b8890dbf0fbe980f5474f45d30cf3eee6e10ad2b59a23a215e6070ca76f77
 source_tag = "0.5.0"
 source_commit = "cf18a96f73f09c249be4285ca7a67c07acc7f3db"
 
+[a_reader]
+version = "0.4.0"
+wheel_filename = "bioextract-0.4.0-py3-none-any.whl"
+wheel_path = "/tmp/bioextract-a-20260817/bioextract-0.4.0-py3-none-any.whl"
+wheel_sha256 = "1c90e51161bb7c4530dc7c0246c3bd776b2b1e5df65d2f5b040bdc4801c71e97"
+metadata_v1_formal_publications_readable = true
+five_publication_reader_probe = "passed"
+harness_status = "missing_from_joint_omics"
+
 [catalog]
 baseline_path = "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/meta/releases/20260813-r1/catalog.toml"
 baseline_sha256 = "4f508c22f7f1fe7111447a8742ca6f8f077db5950246f149771ee3213e445170"
