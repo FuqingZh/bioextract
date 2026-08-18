@@ -2333,6 +2333,8 @@ def _iter_selection_unmatched_batches(
             .select("group_id", "input_id")
             .sort("group_id", "input_id")
         )
+    else:
+        input_frame = input_frame.select("input_id")
     requested = (
         None
         if request.columns is None
