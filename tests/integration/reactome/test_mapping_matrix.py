@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
+import polars as pl
 import pytest
 
 from bioextract.reactome import ReactomeDatabase
@@ -148,6 +149,56 @@ def test_namespace_specific_selection_lineage_and_reaction_shape(
     assert reaction.unmatched_ids().collect().to_dicts() == [
         {"group_id": "control", "input_id": "CHEBI:999999"}
     ]
+
+
+@pytest.mark.parametrize(
+    "selection_kwargs",
+    [
+        pytest.param(
+            {"target": "pathway", "pathway_level": "lowest_level"},
+            id="pathway-lowest-level",
+        ),
+        pytest.param(
+            {"target": "pathway", "pathway_level": "all_levels"},
+            id="pathway-all-levels",
+        ),
+        pytest.param({"target": "reaction"}, id="reaction"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("namespace", "matched_id", "missing_id"),
+    [
+        ("uniprot", "P04637", "P999999"),
+        ("ncbi", "NP_001", "NP_missing"),
+        ("chebi", "CHEBI:100241", "CHEBI:999999"),
+        ("gtop", "1", "999999"),
+    ],
+)
+def test_publication_single_selection_unmatched_ids_keep_public_schema(
+    tmp_path: Path,
+    selection_kwargs: dict[str, str],
+    namespace: str,
+    matched_id: str,
+    missing_id: str,
+) -> None:
+    paths = _write_mapping_matrix_fixture(tmp_path)
+    source = ReactomeDatabase.from_files(  # pyright: ignore[reportArgumentType]
+        **paths  # pyright: ignore[reportArgumentType]
+    ).with_species("Homo sapiens")
+    publication = tmp_path / "matrix-selection.duckdb"
+    source.write_duckdb(publication)
+    reopened = ReactomeDatabase.from_duckdb(publication).with_species("Homo sapiens")
+
+    for database in (source, reopened):
+        selection = database.select_ids(
+            [matched_id, missing_id],
+            namespace=namespace,
+            **selection_kwargs,
+        )
+        assert selection.mappings().collect().height == 1
+        unmatched = selection.unmatched_ids().collect()
+        assert unmatched.schema == {"input_id": pl.String}
+        assert unmatched.to_dicts() == [{"input_id": missing_id}]
 
 
 def test_reaction_pathway_level_and_namespace_grammars_fail_closed(
