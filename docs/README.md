@@ -1,6 +1,6 @@
 # bioextract Documentation
 
-Version: v1.8
+Version: v1.9
 Date: 2026-08-26
 Status: current
 
@@ -31,11 +31,13 @@ contract. Remediation order is the
 
 ## Recorded Tree Review
 
-The tree review of commit `64a8802` records that the independence boundary and
-metadata-v2 publication path hold in executable code, while the root README
-still teaches metadata v1 and deleted `extract_*` terminals, and package
-identity is split across `pyproject.toml` `0.1.0`, `dist/` `0.5.0`, and later
-plan versions. It does not authorize CephFS publication or a new resource.
+The revised tree review of commit `64a8802` records that the independence
+boundary and metadata-v2 publication path hold in executable code, while the
+root README still teaches metadata v1 and deleted `extract_*` terminals, and
+package identity is split across `pyproject.toml` `0.1.0`, historical `dist/`
+`0.5.0`, and the `0.7.0` release line. Its contract review keeps Reactome NCBI
+identifiers exact after trimming and scopes pipe-form normalization to declared
+UniProt namespaces. It does not authorize CephFS publication or a new resource.
 
 ## Directory Map
 
@@ -74,9 +76,10 @@ plan versions. It does not authorize CephFS publication or a new resource.
 
 The active
 [tree-review remediation plan](implementation-plans/20260826-v1.0-tree-review-remediation-implementation-plan.md)
-orders README/metadata-v2 honesty, package-identity alignment, UniProt ID
-normalization, bounded directory discovery, and related integrity fixes. It is
-not runtime authority and does not publish formal artifacts.
+orders README/metadata-v2 honesty, package-identity alignment, namespace-aware
+UniProt normalization, GO/KEGG integrity fixes, contract-first directory
+discovery review, and related hygiene. It is not runtime authority and does
+not publish formal artifacts.
 
 The accepted
 [Reactome Mapping Capability Expansion Plan](implementation-plans/20260817-v1.0-reactome-mapping-capability-expansion-implementation-plan.md)
