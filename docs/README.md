@@ -1,7 +1,7 @@
 # bioextract Documentation
 
-Version: v1.7
-Date: 2026-08-18
+Version: v1.8
+Date: 2026-08-26
 Status: current
 
 This directory contains durable architecture, data contracts, test standards,
@@ -24,9 +24,24 @@ when a domain does not yet have a dedicated architecture document.
 5. Read the repository [delivery boundaries](runbooks/repository-delivery.md)
    before starting PR-bound work or changing repository gates.
 
+The [2026-08-26 tree review](architecture/20260826-v1.0-bioextract-tree-review.md)
+is observational. It does not replace the domain architecture or tidy-dataset
+contract. Remediation order is the
+[tree-review remediation plan](implementation-plans/20260826-v1.0-tree-review-remediation-implementation-plan.md).
+
+## Recorded Tree Review
+
+The tree review of commit `64a8802` records that the independence boundary and
+metadata-v2 publication path hold in executable code, while the root README
+still teaches metadata v1 and deleted `extract_*` terminals, and package
+identity is split across `pyproject.toml` `0.1.0`, `dist/` `0.5.0`, and later
+plan versions. It does not authorize CephFS publication or a new resource.
+
 ## Directory Map
 
 - `architecture/` — current system boundaries and materialized-data contracts.
+  Recorded tree reviews in this directory are observational and are not current
+  contracts.
 - `implementation-plans/` — accepted execution plans and their historical
   closeout records.
 - `testing/` — reusable validation standards and resource-specific checks.
@@ -56,6 +71,12 @@ when a domain does not yet have a dedicated architecture document.
 | OmniPath | [OmniPath architecture](architecture/omnipath-db.md) | [OmniPath test standard](testing/omnipath-db.md) | — |
 
 ## Plans And History
+
+The active
+[tree-review remediation plan](implementation-plans/20260826-v1.0-tree-review-remediation-implementation-plan.md)
+orders README/metadata-v2 honesty, package-identity alignment, UniProt ID
+normalization, bounded directory discovery, and related integrity fixes. It is
+not runtime authority and does not publish formal artifacts.
 
 The accepted
 [Reactome Mapping Capability Expansion Plan](implementation-plans/20260817-v1.0-reactome-mapping-capability-expansion-implementation-plan.md)
