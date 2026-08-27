@@ -91,19 +91,20 @@ publication, clean-source distribution, canonical final/RC tag, and legacy
 
 ## Plans And History
 
-The active
+The completed
 [tree-review remediation plan](implementation-plans/20260826-v1.0-tree-review-remediation-implementation-plan.md)
-orders README/metadata-v2 honesty, package-identity alignment, namespace-aware
-UniProt normalization, GO/KEGG integrity fixes, contract-first directory
-discovery review, and related hygiene. It is not runtime authority and does
-not publish formal artifacts. Its four delivery slices are README/history
-truth; package provenance and release harness; the cross-resource UniProt
-caller-input contract; and GO/KEGG integrity plus local hygiene. Follow the
-[v1.2 assessment](architecture/20260826-v1.2-tree-review-plan-assessment.md):
-shared input-frame helpers previously pipe-normalized single and grouped
-callers. The implemented slice makes them trim-only, rejects malformed pipe
-forms at declared UniProt-capable caller boundaries, and keeps source parsing
-resource-owned.
+records the `0.8.0` implementation and package-release closeout for
+README/metadata-v2 honesty, package-identity alignment, namespace-aware
+UniProt normalization, GO/KEGG integrity fixes, and related local hygiene. It
+is a historical delivery record, not runtime authority, and it did not publish
+formal database snapshots or CephFS artifacts. Its four delivered slices are
+README/history truth; package provenance and release harness; the
+cross-resource UniProt caller-input contract; and GO/KEGG integrity plus local
+hygiene. The
+[v1.2 assessment](architecture/20260826-v1.2-tree-review-plan-assessment.md)
+records why shared input-frame helpers became trim-only, malformed pipe forms
+are rejected at declared UniProt-capable caller boundaries, and source parsing
+remains resource-owned.
 
 The accepted
 [Reactome Mapping Capability Expansion Plan](implementation-plans/20260817-v1.0-reactome-mapping-capability-expansion-implementation-plan.md)
