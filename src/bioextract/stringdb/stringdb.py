@@ -17,6 +17,7 @@ from bioextract._lazy import (
 from bioextract._shared import (
     create_group_input_frames,
     create_input_id_frame,
+    normalize_uniprot_selection_id,
     validate_required_cols,
 )
 from bioextract.errors import CapabilityError, IntegrityError
@@ -126,12 +127,16 @@ class STRINGDatabase:
     def scan_aliases(self) -> pl.LazyFrame:
         """Scan the official aliases relation in source column order.
 
+        Raises:
+            CapabilityError: If the required aliases source is absent from the
+                local snapshot.
+
         Examples:
             >>> database.scan_aliases()  # doctest: +SKIP
             <LazyFrame ...>
         """
         if self.snapshot.file_aliases is None:
-            raise CapabilityError("STRING publication has no aliases resource")
+            raise CapabilityError("STRING aliases source is absent from this snapshot")
         return scan_aliases(
             self.snapshot.file_aliases,
             version=self.snapshot.parser_version,
@@ -140,12 +145,16 @@ class STRINGDatabase:
     def scan_links(self) -> pl.LazyFrame:
         """Scan the official links relation in source column order.
 
+        Raises:
+            CapabilityError: If the required links source is absent from the
+                local snapshot.
+
         Examples:
             >>> database.scan_links()  # doctest: +SKIP
             <LazyFrame ...>
         """
         if self.snapshot.file_links is None:
-            raise CapabilityError("STRING publication has no links resource")
+            raise CapabilityError("STRING links source is absent from this snapshot")
         return scan_links(
             self.snapshot.file_links,
             version=self.snapshot.parser_version,
@@ -249,8 +258,9 @@ class STRINGDatabase:
         Input IDs are normalized before selection:
 
         - surrounding whitespace is stripped
-        - UniProt pipe-style values such as `sp|P04637|P53_HUMAN` are reduced
-          to the middle accession token
+        - alias inputs accept complete UniProt pipe-style values and reduce
+          them to the accession
+        - direct STRING namespace inputs retain pipe-bearing text exactly
         - empty normalized IDs are dropped
         - duplicates are removed
 
@@ -261,6 +271,10 @@ class STRINGDatabase:
         Returns:
             A `StringSelection` in single-query mode. The returned selection
             can extract mapping, unmapped IDs, and edges.
+
+        Raises:
+            ValueError: If the namespace is unsupported or an alias
+                pipe-bearing value is not one complete supported UniProt form.
 
         Examples:
             Normalize an input ID and retain an unmapped alias:
@@ -276,7 +290,14 @@ class STRINGDatabase:
         """
         if namespace not in ("alias", "string"):
             raise ValueError(f"Unknown STRING namespace: {namespace!r}")
-        df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
+        normalized_ids = (
+            (normalize_uniprot_selection_id(value) for value in ids)
+            if namespace == "alias"
+            else ids
+        )
+        df_input_ids = create_input_id_frame(
+            normalized_ids, schema_unmapped=SCHEMA_UNMAPPED
+        )
         return StringSelection(
             dataset=self,
             _df_input_ids=df_input_ids,
@@ -295,7 +316,7 @@ class STRINGDatabase:
         """Create a grouped selection from multiple input-ID sets.
 
         Each group key is normalized with `str(...).strip()`. Input IDs within
-        each group follow the same normalization rules as :meth:`select_ids`.
+        each group follow the namespace-specific rules of :meth:`select_ids`.
         Alias resolution and source ranking run once per globally unique
         normalized ID, then the result is expanded through group membership.
         Edge extraction remains isolated by group. Returned mapping, unmatched,
@@ -310,8 +331,9 @@ class STRINGDatabase:
             flat grouped tables with `group_id` as the leading column.
 
         Raises:
-            ValueError: If any normalized `group_id` is empty, if normalized
-                `group_id` values are duplicated.
+            ValueError: If any normalized `group_id` is empty, normalized
+                `group_id` values are duplicated, or an alias pipe-bearing
+                value is malformed.
 
         Examples:
             Keep each mapping in its original comparison:
@@ -329,8 +351,16 @@ class STRINGDatabase:
         """
         if namespace not in ("alias", "string"):
             raise ValueError(f"Unknown STRING namespace: {namespace!r}")
+        normalized = (
+            {
+                group_id: (normalize_uniprot_selection_id(value) for value in input_ids)
+                for group_id, input_ids in ids_by_group.items()
+            }
+            if namespace == "alias"
+            else ids_by_group
+        )
         grp_in_frames = create_group_input_frames(
-            ids_by_group,
+            normalized,
             schema_groups=SCHEMA_GROUPS,
             schema_group_input_ids=SCHEMA_GROUP_INPUT_IDS,
         )
@@ -553,6 +583,11 @@ class StringSelection:
     def mappings(self) -> pl.LazyFrame:
         """Return the input-to-STRING alias mapping lazily.
 
+        Raises:
+            CapabilityError: If alias mapping is unavailable for the selected
+                namespace or the required aliases source is absent from the
+                local snapshot.
+
         Examples:
             >>> selection.mappings().collect().head(1)  # doctest: +SKIP
             shape: (1, ...)
@@ -578,7 +613,7 @@ class StringSelection:
         else:
             if self.dataset.snapshot.file_links is None:
                 raise CapabilityError(
-                    "STRING namespace='string' requires the links resource"
+                    "STRING links source is absent from this snapshot"
                 )
             mapped = pl.concat(
                 [
@@ -602,6 +637,11 @@ class StringSelection:
 
     def edges(self) -> pl.LazyFrame:
         """Return the STRING subnetwork induced by selected IDs lazily.
+
+        Raises:
+            CapabilityError: If the required links source is absent from the
+                local snapshot, or an alias selection also lacks its required
+                aliases source.
 
         Examples:
             >>> selection.edges().collect().head(1)  # doctest: +SKIP
@@ -650,7 +690,7 @@ def _mapping_plan(
         )
     alias_info = selection.dataset._alias_schema  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
     if alias_info is None:
-        raise CapabilityError("Cannot extract STRING mapping without aliases file")
+        raise CapabilityError("STRING aliases source is absent from this snapshot")
     selection.dataset._validate_taxon_compatibility()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
     schema = selection._schema_string_map_result  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
     if selection._df_input_ids.height == 0:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
@@ -697,7 +737,7 @@ def _iter_edge_batches(
     request: _RelationScanRequest,
 ) -> Iterator[pl.DataFrame]:
     if selection.dataset.snapshot.file_links is None:
-        raise CapabilityError("Cannot extract STRING edges without links file")
+        raise CapabilityError("STRING links source is absent from this snapshot")
     selection.dataset._validate_taxon_compatibility()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
     col_group_id = list(selection._col_group_id)  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
     if selection.namespace == "string":
@@ -713,9 +753,7 @@ def _iter_edge_batches(
         lf_mapping, _mapping_schema, _mapping_columns = _mapping_plan(selection)
         alias_info = selection.dataset._alias_schema  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
         if alias_info is None:
-            raise CapabilityError(
-                "STRING alias namespace requires the aliases resource"
-            )
+            raise CapabilityError("STRING aliases source is absent from this snapshot")
         lf_string_ids = (
             lf_mapping.select(  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
                 [

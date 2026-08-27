@@ -262,7 +262,10 @@ class RheaDatabase:
         """Create a deferred exact-reaction selection from one ID namespace.
 
         Args:
-            ids: Identifiers from the declared namespace.
+            ids: Identifiers from the declared namespace. UniProt accepts a
+                plain accession or one complete sp|accession|entry_name /
+                tr|accession|entry_name representation. This is same-namespace
+                representation normalization, not identifier conversion.
             namespace: Rhea, ChEBI, UniProt, EC, GO, or another supported
                 official Rhea cross-reference namespace.
             include_obsolete: Include obsolete reaction records when available.
@@ -304,6 +307,8 @@ class RheaDatabase:
 
         Args:
             ids_by_group: Mapping of non-empty group IDs to identifiers.
+                UniProt pipe forms follow the same strict contract as
+                select_reactions().
             namespace: Namespace shared by every identifier in this selection.
             include_obsolete: Include obsolete reaction records when available.
 

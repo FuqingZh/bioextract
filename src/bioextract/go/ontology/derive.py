@@ -124,6 +124,11 @@ def derive_graph_tables(
     ):
         if relation_type not in HIERARCHICAL_RELATION_TYPES:
             continue
+        if child_node not in set_nodes or parent_node not in set_nodes:
+            raise ValueError(
+                "GO hierarchical edge references missing term: "
+                f"child {child_node!r}, parent {parent_node!r}"
+            )
         map_parents[child_node].append(parent_node)
         map_children[parent_node].append(child_node)
         map_indegree[child_node] = map_indegree.get(child_node, 0) + 1

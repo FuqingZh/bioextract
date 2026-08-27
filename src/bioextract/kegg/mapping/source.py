@@ -10,6 +10,7 @@ from pathlib import Path
 
 from bioextract.errors import CapabilityError, IntegrityError
 
+from .._publication_identity import FileIdentity
 from .constant import ORGANISM_ROLE_FILENAMES
 
 _ORGANISM_CODE = re.compile(r"^[a-z]{3,4}$")
@@ -31,6 +32,7 @@ class MappingSnapshot:
     publication_path: Path | None = None
     publication_capabilities: Mapping[str, bool] | None = None
     publication_members: tuple[str, ...] | None = None
+    publication_identity: FileIdentity | None = None
 
     def with_organisms(self, organism_codes: Sequence[str]) -> MappingSnapshot:
         """Return an immutable source or publication scope."""

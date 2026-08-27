@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import duckdb
@@ -7,6 +8,22 @@ import polars as pl
 import pytest
 
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
+
+
+def test_tidy_dataset_requires_explicit_nonempty_resource_name() -> None:
+    parameter = inspect.signature(TidyDataset).parameters["resource_name"]
+    assert parameter.default is inspect.Parameter.empty
+
+    with pytest.raises(ValueError, match="resource_name must be non-empty"):
+        TidyDataset(
+            frames={},
+            source=(),
+            resource_schema_version="fixture-v1",
+            source_schema_profile="fixture-source-v1",
+            build_id_prefix="fixture",
+            assets=(),
+            resource_name=" ",
+        )
 
 
 def test_canonical_publication_requires_final_derived_columns(
@@ -31,6 +48,7 @@ def test_canonical_publication_requires_final_derived_columns(
                 "protein_pathway",
             ),
         ),
+        resource_name="example",
     )
 
     file_duckdb = tmp_path / "example.duckdb"
@@ -58,6 +76,7 @@ def test_derived_pascal_case_is_rejected_instead_of_normalized(tmp_path: Path) -
         source_schema_profile="fixture-source-v1",
         build_id_prefix="fixture",
         assets=(TidyAsset("term.parquet", "canonical", "term"),),
+        resource_name="fixture",
     )
 
     with pytest.raises(ValueError, match="lowercase snake_case"):
@@ -76,6 +95,7 @@ def test_official_headers_receive_only_required_duckdb_mapping(
         source_schema_profile="official-source-v1",
         build_id_prefix="official",
         assets=(TidyAsset("official.parquet", "canonical", "official"),),
+        resource_name="official",
     )
 
     path = tmp_path / "official.duckdb"

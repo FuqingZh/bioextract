@@ -7,6 +7,8 @@ contract without network or CephFS access.
 - optional `enzsub` and `interactions` resources fail clearly when absent;
 - `protein` namespace validation is explicit;
 - single and grouped selections preserve evidence fields and unmatched IDs;
+- protein selections canonicalize complete sp/tr UniProt pipe forms and reject
+  other pipe-bearing caller values in both single and grouped construction;
 - grouped extraction resolves shared identifiers once and retains empty groups;
 - plain and gzip inputs follow the same relation semantics; and
 - malformed headers are rejected at the source-profile boundary.

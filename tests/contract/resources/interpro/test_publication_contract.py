@@ -128,6 +128,61 @@ def test_reopened_grouped_selection_preserves_unique_fan_out_and_unmatched(
     ]
 
 
+def test_uniprot_input_contract_matches_source_and_reopened(
+    tmp_path: Path,
+) -> None:
+    source = _source(tmp_path)
+    path = tmp_path / "interpro.duckdb"
+    source.write_duckdb(path)
+    reopened = InterProDatabase.from_duckdb(path)
+
+    inputs = ["sp|P12345|TEST", "P12345", "missing"]
+    source_selection = source.select_ids(inputs)
+    reopened_selection = reopened.select_ids(inputs)
+    assert (
+        reopened_selection.mappings()
+        .collect()
+        .equals(source_selection.mappings().collect())
+    )
+    assert (
+        reopened_selection.unmatched_ids()
+        .collect()
+        .equals(source_selection.unmatched_ids().collect())
+    )
+    assert reopened_selection.mappings().collect().select("input_id").to_dicts() == [
+        {"input_id": "P12345"}
+    ]
+    assert reopened_selection.unmatched_ids().collect().to_dicts() == [
+        {"input_id": "missing"}
+    ]
+
+    grouped_inputs = {
+        "case": ["sp|P12345|TEST", "P12345", "missing"],
+        "control": ["P12345"],
+    }
+    source_grouped = source.select_groups(grouped_inputs)
+    reopened_grouped = reopened.select_groups(grouped_inputs)
+    assert (
+        reopened_grouped.mappings()
+        .collect()
+        .equals(source_grouped.mappings().collect())
+    )
+    assert (
+        reopened_grouped.unmatched_ids()
+        .collect()
+        .equals(source_grouped.unmatched_ids().collect())
+    )
+    assert reopened_grouped.unmatched_ids().collect().to_dicts() == [
+        {"group_id": "case", "input_id": "missing"}
+    ]
+
+    for database in (source, reopened):
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_ids(["db|P12345|TEST"])
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_groups({"case": ["db|P12345|TEST"]})
+
+
 def test_reopened_selection_queries_only_unique_input_ids(
     tmp_path: Path,
 ) -> None:

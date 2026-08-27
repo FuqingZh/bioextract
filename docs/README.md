@@ -1,7 +1,7 @@
 # bioextract Documentation
 
-Version: v1.9
-Date: 2026-08-26
+Version: v1.13
+Date: 2026-08-27
 Status: current
 
 This directory contains durable architecture, data contracts, test standards,
@@ -28,16 +28,33 @@ The [2026-08-26 tree review](architecture/20260826-v1.0-bioextract-tree-review.m
 is observational. It does not replace the domain architecture or tidy-dataset
 contract. Remediation order is the
 [tree-review remediation plan](implementation-plans/20260826-v1.0-tree-review-remediation-implementation-plan.md).
+The [v1.2 assessment of review v1.1 and plan v1.1](architecture/20260826-v1.2-tree-review-plan-assessment.md)
+records which corrections hold, the confirmed caller-input normalization
+matrix, and the four delivery slices that replace the earlier Unit 0–3 shape.
 
 ## Recorded Tree Review
 
 The revised tree review of commit `64a8802` records that the independence
 boundary and metadata-v2 publication path hold in executable code, while the
 root README still teaches metadata v1 and deleted `extract_*` terminals, and
-package identity is split across `pyproject.toml` `0.1.0`, historical `dist/`
-`0.5.0`, and the `0.7.0` release line. Its contract review keeps Reactome NCBI
-identifiers exact after trimming and scopes pipe-form normalization to declared
-UniProt namespaces. It does not authorize CephFS publication or a new resource.
+development/editable identity remains the static `pyproject.toml` `0.1.0`
+despite the `0.7.0` release line. Historical `dist/` `0.5.0` artifacts are not
+a current version authority, and tag builds already synchronize their formal
+distribution version. The remaining provenance defect is local/development
+identity plus the `"unknown"` writer fallback. Its contract review keeps
+Reactome NCBI identifiers exact after trimming. It does not authorize CephFS
+publication or a new resource.
+
+The [v1.2 assessment](architecture/20260826-v1.2-tree-review-plan-assessment.md)
+defines the target execution boundary: the plan requires generic input-frame
+helpers to become trim-only and owning UniProt-capable caller APIs to apply one
+mandatory strict pipe grammar with no public toggle. That boundary is now
+implemented: generic builders preserve trimmed exact text, while only declared
+UniProt-capable caller APIs parse a complete pipe form. Official source parsers
+remain separate. The assessment also
+records the SCM-version, nightly-artifact, protected-release, exact-wheel
+publication, clean-source distribution, canonical final/RC tag, and legacy
+`"unknown"` migration decisions. It is not runtime authority.
 
 ## Directory Map
 
@@ -79,7 +96,14 @@ The active
 orders README/metadata-v2 honesty, package-identity alignment, namespace-aware
 UniProt normalization, GO/KEGG integrity fixes, contract-first directory
 discovery review, and related hygiene. It is not runtime authority and does
-not publish formal artifacts.
+not publish formal artifacts. Its four delivery slices are README/history
+truth; package provenance and release harness; the cross-resource UniProt
+caller-input contract; and GO/KEGG integrity plus local hygiene. Follow the
+[v1.2 assessment](architecture/20260826-v1.2-tree-review-plan-assessment.md):
+shared input-frame helpers previously pipe-normalized single and grouped
+callers. The implemented slice makes them trim-only, rejects malformed pipe
+forms at declared UniProt-capable caller boundaries, and keeps source parsing
+resource-owned.
 
 The accepted
 [Reactome Mapping Capability Expansion Plan](implementation-plans/20260817-v1.0-reactome-mapping-capability-expansion-implementation-plan.md)

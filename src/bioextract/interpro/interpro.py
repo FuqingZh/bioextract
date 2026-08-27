@@ -24,6 +24,7 @@ from bioextract._publication import (
 from bioextract._shared import (
     create_group_input_frames,
     create_input_id_frame,
+    normalize_uniprot_selection_id,
 )
 from bioextract._tidy import (
     TidyAsset,
@@ -220,11 +221,17 @@ class InterProDatabase:
         """Create a selection for one normalized UniProt ID set.
 
         Args:
-            ids: UniProt accessions. Empty values are discarded and duplicate
-                normalized IDs collapse to one input row.
+            ids: Plain UniProt accessions or complete
+                sp|accession|entry_name / tr|accession|entry_name values.
+                Empty values are discarded and duplicate normalized IDs
+                collapse to one input row.
         Returns:
             A selection handle whose mapping output includes `input_id` and
             `input_namespace` provenance columns.
+
+        Raises:
+            ValueError: If a pipe-bearing caller value is not one complete
+                supported UniProt form.
 
         Examples:
             Normalize a UniProt entry label before selecting its mapping rows:
@@ -238,7 +245,10 @@ class InterProDatabase:
             ... ).rows()
             [('P12345', 'IPR000001', 'PF00051'), ('P12345', 'IPR000001', 'SM00130')]
         """
-        df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
+        df_input_ids = create_input_id_frame(
+            (normalize_uniprot_selection_id(value) for value in ids),
+            schema_unmapped=SCHEMA_UNMAPPED,
+        )
         return InterProSelection(
             dataset=self,
             _df_input_ids=df_input_ids,
@@ -254,13 +264,13 @@ class InterProDatabase:
 
         Args:
             ids_by_group: Mapping from unique, non-empty group IDs to UniProt
-                accessions.
+                accessions or complete supported UniProt pipe forms.
         Returns:
             A selection handle whose mapping and unmapped outputs retain
             `group_id`.
 
         Raises:
-            ValueError: If group IDs are invalid.
+            ValueError: If group IDs or a UniProt pipe-bearing value is invalid.
 
         Examples:
             Preserve comparison labels on every selected mapping row:
@@ -276,8 +286,12 @@ class InterProDatabase:
             ... ).unique().sort("group_id").rows()
             [('down', 'Q9Y243'), ('up', 'P12345')]
         """
+        normalized = {
+            group_id: (normalize_uniprot_selection_id(value) for value in input_ids)
+            for group_id, input_ids in ids_by_group.items()
+        }
         grp_in_frames = create_group_input_frames(
-            ids_by_group,
+            normalized,
             schema_groups=SCHEMA_GROUPS,
             schema_group_input_ids=SCHEMA_GROUP_INPUT_IDS,
         )

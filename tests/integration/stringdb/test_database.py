@@ -157,6 +157,32 @@ def test_selection_exposes_group_mode(tmp_path: Path) -> None:
     assert db.select_groups({"G1": ["TP53"]}).is_grouped is True
 
 
+def test_string_alias_pipe_grammar_does_not_rewrite_direct_string_ids(
+    tmp_path: Path,
+) -> None:
+    file_aliases = tmp_path / "aliases.txt"
+    file_links = tmp_path / "links.txt"
+    _write_demo_string_files(aliases=file_aliases, links=file_links)
+    database = STRINGDatabase.from_files(
+        aliases=file_aliases,
+        links=file_links,
+    )
+
+    for invalid in ("db|P04637|P53", "sp||P53", "sp|P04637|"):
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_ids([invalid], namespace="alias")
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_groups({"case": [invalid]}, namespace="alias")
+
+    exact_string = database.select_ids(
+        [" sp|P04637|P53_HUMAN "],
+        namespace="string",
+    )
+    assert exact_string.unmatched_ids().collect().to_dicts() == [
+        {"input_id": "sp|P04637|P53_HUMAN"}
+    ]
+
+
 def test_stringdb_group_query_minimal_round_trip(tmp_path: Path) -> None:
     file_aliases = tmp_path / "aliases.txt"
     file_links = tmp_path / "links.txt"
@@ -616,9 +642,14 @@ def test_extract_edges_rejects_missing_links_file(tmp_path: Path) -> None:
     )
 
     selection = STRINGDatabase.from_files(aliases=file_aliases).select_ids(["TP53"])
+    with pytest.raises(
+        CapabilityError, match="links source is absent from this snapshot"
+    ):
+        selection.dataset.scan_links()
 
     with pytest.raises(
-        (CapabilityError, pl.exceptions.ComputeError), match="without links file"
+        (CapabilityError, pl.exceptions.ComputeError),
+        match="links source is absent from this snapshot",
     ):
         selection.edges().collect()
 
@@ -632,9 +663,14 @@ def test_extract_string_mapping_rejects_missing_aliases_file(tmp_path: Path) -> 
     )
 
     selection = STRINGDatabase.from_files(links=file_links).select_ids(["TP53"])
+    with pytest.raises(
+        CapabilityError, match="aliases source is absent from this snapshot"
+    ):
+        selection.dataset.scan_aliases()
 
     with pytest.raises(
-        (CapabilityError, pl.exceptions.ComputeError), match="without aliases file"
+        (CapabilityError, pl.exceptions.ComputeError),
+        match="aliases source is absent from this snapshot",
     ):
         selection.mappings().collect()
 

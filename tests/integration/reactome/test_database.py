@@ -129,7 +129,7 @@ def test_grouped_selection_preserves_groups(tmp_path: Path) -> None:
 
     selection = db.select_groups(
         {
-            "TumorA": ["P04637", "MISSING"],
+            "TumorA": ["sp|P04637|P53_HUMAN", "MISSING"],
             "TumorB": ["P04637", "Q9Y243"],
         }
     )
@@ -231,7 +231,7 @@ def test_duckdb_reopen_preserves_domain_selection_and_native_sql(
     expected_mapping = (
         source.select_groups(
             {
-                "TumorA": ["P04637", "MISSING"],
+                "TumorA": ["sp|P04637|P53_HUMAN", "MISSING"],
                 "TumorB": ["P04637", "Q9Y243"],
             }
         )
@@ -241,7 +241,7 @@ def test_duckdb_reopen_preserves_domain_selection_and_native_sql(
     expected_unmatched = (
         source.select_groups(
             {
-                "TumorA": ["P04637", "MISSING"],
+                "TumorA": ["sp|P04637|P53_HUMAN", "MISSING"],
                 "TumorB": ["P04637", "Q9Y243"],
             }
         )
@@ -261,7 +261,7 @@ def test_duckdb_reopen_preserves_domain_selection_and_native_sql(
     reopened = ReactomeDatabase.from_duckdb(publication).with_species("Homo sapiens")
     selection = reopened.select_groups(
         {
-            "TumorA": ["P04637", "MISSING"],
+            "TumorA": ["tr|P04637|P53_HUMAN", "MISSING"],
             "TumorB": ["P04637", "Q9Y243"],
         }
     )
@@ -284,6 +284,38 @@ def test_duckdb_reopen_preserves_domain_selection_and_native_sql(
     finally:
         first.close()
         second.close()
+
+
+def test_uniprot_pipe_grammar_does_not_rewrite_reactome_ncbi(
+    tmp_path: Path,
+) -> None:
+    file_mapping, file_pathways, file_relations = write_reactome_fixture(tmp_path)
+    file_ncbi_mapping = tmp_path / "NCBI2Reactome.txt"
+    file_ncbi_mapping.write_text(
+        "NP_001\tR-HSA-69563\thttps://reactome.org/PathwayBrowser/#/R-HSA-69563\t"
+        "p53-Dependent G1 DNA Damage Response\tTAS\tHomo sapiens\n",
+        encoding="utf-8",
+    )
+    database = ReactomeDatabase.from_files(
+        uniprot_mapping=file_mapping,
+        ncbi_mapping=file_ncbi_mapping,
+        pathways=file_pathways,
+        relations=file_relations,
+    )
+
+    for invalid in ("db|P04637|P53_HUMAN", "sp||P53_HUMAN", "sp|P04637|"):
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_ids([invalid], namespace="uniprot")
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_groups({"case": [invalid]}, namespace="uniprot")
+
+    exact_ncbi = database.select_ids(
+        [" sp|NP_001|SOURCE_TEXT "],
+        namespace="ncbi",
+    )
+    assert exact_ncbi.unmatched_ids().collect().to_dicts() == [
+        {"input_id": "sp|NP_001|SOURCE_TEXT"}
+    ]
 
 
 def test_duckdb_reopen_validates_bounded_physical_contract(tmp_path: Path) -> None:

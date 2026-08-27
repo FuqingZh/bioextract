@@ -25,7 +25,12 @@ from bioextract._publication import (
     validate_duckdb_metadata_v2,
 )
 from bioextract._shared import validate_group_ids
-from bioextract.errors import CapabilityError
+from bioextract.errors import CapabilityError, IntegrityError
+
+from .._publication_identity import (
+    FileIdentity,
+    assert_publication_current,
+)
 
 SCHEMA_VERSION = "kegg-metabolic-v0.1"
 SOURCE_SCHEMA_PROFILE = "kegg-metabolic-flat-files-v1"
@@ -134,6 +139,7 @@ class MetabolicPublication:
     metadata: Mapping[str, str]
     tables: frozenset[str]
     capabilities: frozenset[str]
+    publication_identity: FileIdentity | None = None
 
 
 def _paths(
@@ -801,6 +807,34 @@ def open_publication(path: Path) -> MetabolicPublication:
         con.close()
 
 
+def _connect_publication_readonly(
+    publication: MetabolicPublication,
+) -> duckdb.DuckDBPyConnection:
+    _assert_metabolic_publication_current(publication)
+    try:
+        connection = duckdb.connect(str(publication.path), read_only=True)
+    except duckdb.Error as error:
+        raise IntegrityError(
+            f"Cannot reopen KEGG metabolic publication: {publication.path}"
+        ) from error
+    try:
+        _assert_metabolic_publication_current(publication)
+    except BaseException:
+        connection.close()
+        raise
+    return connection
+
+
+def _assert_metabolic_publication_current(
+    publication: MetabolicPublication,
+) -> None:
+    assert_publication_current(
+        publication.path,
+        publication.publication_identity,
+        profile_label="metabolic",
+    )
+
+
 @dataclass(slots=True)
 class _SelectionState:
     """Shared compact state for copies of one metabolic selection."""
@@ -961,6 +995,7 @@ class KEGGMetabolicSelection:
         )
 
     def _eager_matches(self) -> pl.DataFrame:
+        _assert_metabolic_publication_current(self.publication)
         with self._state.lock:
             if self._state.matches is not None:
                 return self._state.matches.clone()
@@ -971,6 +1006,7 @@ class KEGGMetabolicSelection:
             return matches.clone()
 
     def _resolve_unique_matches(self) -> pl.DataFrame:
+        _assert_metabolic_publication_current(self.publication)
         with self._state.lock:
             if self._state.matches_unique is not None:
                 return self._state.matches_unique.clone()
@@ -998,7 +1034,7 @@ class KEGGMetabolicSelection:
         if not self.input_ids:
             return _empty(columns)
 
-        with duckdb.connect(str(self.publication.path), read_only=True) as connection:
+        with _connect_publication_readonly(self.publication) as connection:
             _create_selection_input_table(connection, self.input_ids)
             result = (
                 self._query_unique_matches(connection)
@@ -1006,6 +1042,7 @@ class KEGGMetabolicSelection:
                 .unique()
                 .sort(list(columns))
             )
+        _assert_metabolic_publication_current(self.publication)
         return result
 
     def _query_unique_matches(
@@ -1320,7 +1357,7 @@ class KEGGMetabolicSelection:
             return
         schema = self._relation_schema(table)
         requested = _requested_columns(request.columns, schema)
-        connection = duckdb.connect(str(self.publication.path), read_only=True)
+        connection = _connect_publication_readonly(self.publication)
         reader: Any = None
         try:
             _create_selected_anchor_table(connection, matches)
@@ -1366,6 +1403,7 @@ class KEGGMetabolicSelection:
                 if close is not None:
                     close()
             connection.close()
+        _assert_metabolic_publication_current(self.publication)
 
     def _relation_lazy(self, table: str, join_column: str) -> pl.LazyFrame:
         self._require(table)
@@ -1400,7 +1438,7 @@ class KEGGMetabolicSelection:
         if matches.is_empty():
             return
         requested = _requested_columns(request.columns, schema)
-        connection = duckdb.connect(str(self.publication.path), read_only=True)
+        connection = _connect_publication_readonly(self.publication)
         reader: Any = None
         try:
             _create_selected_anchor_table(connection, matches)
@@ -1456,6 +1494,7 @@ class KEGGMetabolicSelection:
                 if close is not None:
                     close()
             connection.close()
+        _assert_metabolic_publication_current(self.publication)
 
     def reactions(self) -> pl.LazyFrame:
         """Return selected reactions with input and anchor lineage lazily.
@@ -1670,7 +1709,7 @@ class KEGGMetabolicSelection:
             )
         if not branches:
             return
-        connection = duckdb.connect(str(self.publication.path), read_only=True)
+        connection = _connect_publication_readonly(self.publication)
         reader: Any = None
         try:
             _create_selected_anchor_table(connection, matches)
@@ -1692,6 +1731,7 @@ class KEGGMetabolicSelection:
                 if close is not None:
                     close()
             connection.close()
+        _assert_metabolic_publication_current(self.publication)
 
     def unmatched_ids(self) -> pl.LazyFrame:
         """Return normalized inputs that resolved to no canonical anchor lazily.
@@ -1717,6 +1757,7 @@ class KEGGMetabolicSelection:
         return self._expand_groups(self._resolve_unique_unmatched())
 
     def _resolve_unique_unmatched(self) -> pl.DataFrame:
+        _assert_metabolic_publication_current(self.publication)
         with self._state.lock:
             if self._state.unmatched_unique is not None:
                 return self._state.unmatched_unique.clone()
@@ -1733,9 +1774,7 @@ class KEGGMetabolicSelection:
 
         reasons = dict.fromkeys(missing, "not_found")
         if self.namespace == "ec" and "enzyme" in self.publication.tables:
-            with duckdb.connect(
-                str(self.publication.path), read_only=True
-            ) as connection:
+            with _connect_publication_readonly(self.publication) as connection:
                 _create_selection_input_table(connection, missing)
                 statuses = connection.execute(
                     """
@@ -1744,6 +1783,7 @@ class KEGGMetabolicSelection:
                     JOIN enzyme ON enzyme.ec_number = input.input_id
                     """
                 ).fetchall()
+            _assert_metabolic_publication_current(self.publication)
             for input_id, status in statuses:
                 if status == "deleted" and not self.include_obsolete:
                     reasons[str(input_id)] = "obsolete_excluded"
@@ -1871,7 +1911,7 @@ def validate_selection_namespace(
 ) -> None:
     tables = publication.tables
     cross_reference_namespaces: set[str] = set()
-    with duckdb.connect(str(publication.path), read_only=True) as connection:
+    with _connect_publication_readonly(publication) as connection:
         for table in ("compound_cross_reference", "reaction_cross_reference"):
             if table in tables:
                 cross_reference_namespaces.update(
@@ -1880,6 +1920,7 @@ def validate_selection_namespace(
                         f"SELECT DISTINCT namespace FROM {table}"
                     ).fetchall()
                 )
+    _assert_metabolic_publication_current(publication)
     available = {
         *(
             ("kegg_compound",)
@@ -1908,10 +1949,11 @@ def evaluate_modules(
     if "module_definition_node" not in publication.tables:
         raise CapabilityError("KEGG metabolic publication lacks module definitions")
     available = {str(x).strip().removeprefix("ko:") for x in ko_ids}
-    with duckdb.connect(str(publication.path), read_only=True) as con:
+    with _connect_publication_readonly(publication) as con:
         rows = con.execute(
             "SELECT module_id,node_id,parent_node_id,position,node_kind,member_namespace,member_id FROM module_definition_node ORDER BY module_id,node_id"
         ).fetchall()
+    _assert_metabolic_publication_current(publication)
     by_module: dict[str, dict[int, tuple[int | None, str, str | None]]] = {}
     for module, node, parent, _position, kind, _ns, member in rows:
         by_module.setdefault(module, {})[node] = (parent, kind, member)

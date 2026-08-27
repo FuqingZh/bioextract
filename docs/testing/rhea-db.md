@@ -1,6 +1,7 @@
 # RheaDatabase Test Standard
 
-Version: v1
+Version: v1.1
+Date: 2026-08-27
 Status: current
 
 Changes to `RheaDatabase` must verify:
@@ -29,6 +30,9 @@ Changes to `RheaDatabase` must verify:
 12. Rhea, ChEBI, UniProt, and external-xref selections preserve exact reaction
     ID, master ID, direction, input namespace, unmatched IDs, and group
     isolation.
+    UniProt accepts only plain accessions or complete sp/tr three-field pipe
+    forms; malformed single/grouped inputs fail, while other namespaces retain
+    their resource-owned grammar.
 13. ChEBI selection performs no implicit pH 7.3 conversion.
 14. Domain extraction agrees row-for-row with direct DuckDB SQL for reaction,
     participant, cross-reference, publication, and hierarchy relations.

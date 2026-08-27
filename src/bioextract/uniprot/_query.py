@@ -20,6 +20,7 @@ from bioextract._publication import (
     METADATA_SCHEMA_VERSION,
     validate_duckdb_metadata_v2,
 )
+from bioextract._shared import normalize_uniprot_selection_id
 
 from ._knowledgebase import (
     RESOURCE_SCHEMA_VERSION,
@@ -798,7 +799,7 @@ def make_selection(
     if namespace not in _NAMESPACES:
         raise ValueError(f"Unsupported UniProt identifier namespace: {namespace}")
     if groups is None:
-        input_ids = _normalize_ids(ids)
+        input_ids = _normalize_ids(ids, namespace=namespace)
         membership = tuple((None, value) for value in input_ids)
         group_ids: tuple[str, ...] = ()
     else:
@@ -817,7 +818,7 @@ def make_selection(
             sorted(
                 (group, value)
                 for group, values in normalized_groups.items()
-                for value in _normalize_ids(values)
+                for value in _normalize_ids(values, namespace=namespace)
             )
         )
         input_ids = tuple(sorted({value for _, value in membership}))
@@ -833,10 +834,18 @@ def make_selection(
     )
 
 
-def _normalize_ids(ids: Iterable[str]) -> tuple[str, ...]:
+def _normalize_ids(ids: Iterable[str], *, namespace: str) -> tuple[str, ...]:
     return tuple(
         dict.fromkeys(
-            str(identifier).strip() for identifier in ids if str(identifier).strip()
+            normalized
+            for identifier in ids
+            if (
+                normalized := (
+                    normalize_uniprot_selection_id(identifier)
+                    if namespace == "uniprot"
+                    else str(identifier).strip()
+                )
+            )
         )
     )
 

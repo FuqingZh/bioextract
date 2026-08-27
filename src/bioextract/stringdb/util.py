@@ -4,11 +4,8 @@ from pathlib import Path
 import polars as pl
 import polars.selectors as pl_sel
 
-from bioextract._shared import (
-    RE_UNIPROT_PIPE,
-)
-
 from .constant import (
+    RE_UNIPROT_PIPE,
     SCHEMA_ALIASES,
     SCHEMA_LINKS,
     SCHEMA_PROTEIN_MAP,

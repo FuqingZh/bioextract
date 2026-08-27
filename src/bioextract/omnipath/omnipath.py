@@ -15,6 +15,7 @@ from .._lazy import (
 from .._shared import (
     create_group_input_frames,
     create_input_id_frame,
+    normalize_uniprot_selection_id,
     validate_required_cols,
 )
 from .constant import (
@@ -171,7 +172,7 @@ class OmniPathDatabase:
             <LazyFrame ...>
         """
         if self.snapshot.file_enzsub is None:
-            raise ValueError("OmniPath publication has no enzsub resource")
+            raise ValueError("OmniPath enzsub source is absent from this snapshot")
         frame = scan_enzsub(self.snapshot.file_enzsub)
         validate_required_cols(
             frame.collect_schema().names(),
@@ -188,7 +189,9 @@ class OmniPathDatabase:
             <LazyFrame ...>
         """
         if self.snapshot.file_interactions is None:
-            raise ValueError("OmniPath publication has no interactions resource")
+            raise ValueError(
+                "OmniPath interactions source is absent from this snapshot"
+            )
         frame = scan_interactions(self.snapshot.file_interactions)
         validate_required_cols(
             frame.collect_schema().names(),
@@ -208,8 +211,14 @@ class OmniPathDatabase:
         The selection initially enables every resource backed by this snapshot.
 
         Args:
-            ids: Protein identifiers. Whitespace, blank values, duplicates, and
-                UniProt pipe-style IDs follow the shared normalization contract.
+            ids: Plain protein identifiers or complete
+                sp|accession|entry_name / tr|accession|entry_name values.
+                Whitespace, blanks, and duplicates are normalized at this
+                caller boundary.
+
+        Raises:
+            ValueError: If the namespace is unsupported or a pipe-bearing
+                caller value is not one complete supported UniProt form.
 
         Examples:
             Select the substrates linked to one kinase:
@@ -222,7 +231,10 @@ class OmniPathDatabase:
         """
         if namespace != "protein":
             raise ValueError(f"Unknown OmniPath namespace: {namespace!r}")
-        df_input_ids = create_input_id_frame(ids, schema_unmapped=SCHEMA_UNMAPPED)
+        df_input_ids = create_input_id_frame(
+            (normalize_uniprot_selection_id(value) for value in ids),
+            schema_unmapped=SCHEMA_UNMAPPED,
+        )
         return OmniPathSelection(
             dataset=self,
             _df_input_ids=df_input_ids,
@@ -248,6 +260,10 @@ class OmniPathDatabase:
             ids_by_group: Group labels mapped to protein identifiers. Labels
                 must remain non-empty and unique after stripping whitespace.
 
+        Raises:
+            ValueError: If group labels, the namespace, or a pipe-bearing
+                caller value is invalid.
+
         Examples:
             Preserve comparison labels in a grouped selection:
 
@@ -267,8 +283,12 @@ class OmniPathDatabase:
         """
         if namespace != "protein":
             raise ValueError(f"Unknown OmniPath namespace: {namespace!r}")
+        normalized = {
+            group_id: (normalize_uniprot_selection_id(value) for value in input_ids)
+            for group_id, input_ids in ids_by_group.items()
+        }
         grp_in_frames = create_group_input_frames(
-            ids_by_group,
+            normalized,
             schema_groups=SCHEMA_GROUPS,
             schema_group_input_ids=SCHEMA_GROUP_INPUT_IDS,
         )
@@ -427,8 +447,8 @@ class OmniPathSelection:
 
         Raises:
             ValueError: If the selection does not enable `enzsub`, if the
-                `enzsub` file is missing, or if the file is missing required
-                columns.
+                required `enzsub` source is absent from the local snapshot, or
+                if the source is missing required columns.
 
         Examples:
             Extract a substrate site and modification:
@@ -462,8 +482,8 @@ class OmniPathSelection:
 
         Raises:
             ValueError: If the selection does not enable `interactions`, if the
-                interactions file is missing, or if the file is missing
-                required columns.
+                required `interactions` source is absent from the local
+                snapshot, or if the source is missing required columns.
 
         Examples:
             Extract one interaction and its direction flags:
@@ -552,7 +572,7 @@ def _normalized_enzsub_plan(selection: OmniPathSelection) -> pl.LazyFrame:
         raise ValueError("OmniPath resource 'enzsub' is not enabled for this selection")
     file_enzsub = selection.dataset.snapshot.file_enzsub
     if file_enzsub is None:
-        raise ValueError("Cannot extract OmniPath enzsub without enzsub file")
+        raise ValueError("OmniPath enzsub source is absent from this snapshot")
     lf_base = create_enzsub_lazy_frame(file_enzsub)
     lf_input_ids = selection._df_input_ids.lazy()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
     lf_source = lf_base.join(
@@ -594,9 +614,7 @@ def _normalized_interactions_plan(selection: OmniPathSelection) -> pl.LazyFrame:
         )
     file_interactions = selection.dataset.snapshot.file_interactions
     if file_interactions is None:
-        raise ValueError(
-            "Cannot extract OmniPath interactions without interactions file"
-        )
+        raise ValueError("OmniPath interactions source is absent from this snapshot")
     lf_base = create_interactions_lazy_frame(file_interactions)
     lf_input_ids = selection._df_input_ids.lazy()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
     lf_source = lf_base.join(

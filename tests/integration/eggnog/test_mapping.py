@@ -134,7 +134,7 @@ def test_select_ids_queries_subset_and_reports_unmapped(tmp_path: Path) -> None:
     )
 
     selection = db.select_ids(
-        ["9606.ENSP1", "9606.MISSING"],
+        ["9606.ENSP1", "9606.MISSING", " sp|P12345|TEST "],
     )
 
     df_mapping = selection.mappings().collect()
@@ -158,7 +158,8 @@ def test_select_ids_queries_subset_and_reports_unmapped(tmp_path: Path) -> None:
         },
     ]
     assert selection.unmatched_ids().collect().to_dicts() == [
-        {"input_id": "9606.MISSING"}
+        {"input_id": "9606.MISSING"},
+        {"input_id": "sp|P12345|TEST"},
     ]
 
 
@@ -172,7 +173,7 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     selection = db.select_groups(
         {
             "up": ["9606.ENSP1"],
-            "down": ["9606.ENSP1", "9606.MISSING"],
+            "down": ["9606.ENSP1", "9606.MISSING", "sp|P12345|TEST"],
         },
     )
 
@@ -192,7 +193,8 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
         {"group_id": "up", "cog_category": "S"},
     ]
     assert selection.unmatched_ids().collect().to_dicts() == [
-        {"group_id": "down", "input_id": "9606.MISSING"}
+        {"group_id": "down", "input_id": "9606.MISSING"},
+        {"group_id": "down", "input_id": "sp|P12345|TEST"},
     ]
 
 

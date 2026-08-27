@@ -85,6 +85,46 @@ def test_directory_factory_exposes_fixed_nested_relations_lazily(
     ]
 
 
+def test_reopened_mapping_handle_rejects_replaced_publication(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "mapping.duckdb"
+    replacement = tmp_path / "replacement.duckdb"
+    KEGGDatabase.from_mapping_directory(
+        write_mapping_tree(tmp_path / "first")
+    ).write_duckdb(target)
+    stale = KEGGDatabase.from_duckdb(target)
+    scoped = stale.with_organisms(["hsa"])
+    selection = scoped.select_ids(["P12345"], namespace="uniprot")
+    annotations = scoped.gene_annotations()
+    KEGGDatabase.from_mapping_directory(
+        write_mapping_tree(tmp_path / "second")
+    ).write_duckdb(replacement)
+
+    replacement.replace(target)
+
+    with pytest.raises(IntegrityError, match="mapping publication was replaced"):
+        stale.connect()
+    with pytest.raises(IntegrityError, match="mapping publication was replaced"):
+        scoped.connect()
+    with pytest.raises(
+        (IntegrityError, pl.exceptions.ComputeError),
+        match="mapping publication was replaced",
+    ):
+        selection.matches().collect()
+    with pytest.raises(
+        (IntegrityError, pl.exceptions.ComputeError),
+        match="mapping publication was replaced",
+    ):
+        annotations.collect()
+
+    fresh = KEGGDatabase.from_duckdb(target)
+    assert (
+        fresh.select_ids(["P12345"], namespace="uniprot").matches().collect().height
+        == 2
+    )
+
+
 def test_scope_prunes_organisms_but_keeps_global_kos(tmp_path: Path) -> None:
     db = KEGGDatabase.from_mapping_directory(write_mapping_tree(tmp_path))
     hsa = db.with_organisms(["hsa", "hsa"])
@@ -160,6 +200,26 @@ def test_selection_retains_many_species_and_nested_input_lineage(
     ]
     assert selection.unmatched_ids().collect().to_dicts() == [
         {"group_id": "case", "input_id": "missing"}
+    ]
+
+
+def test_uniprot_pipe_grammar_does_not_rewrite_kegg_ncbi_inputs(
+    tmp_path: Path,
+) -> None:
+    database = KEGGDatabase.from_mapping_directory(write_mapping_tree(tmp_path))
+
+    for invalid in ("db|P12345|TEST", "sp||TEST", "sp|P12345|"):
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_ids([invalid], namespace="uniprot")
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_groups({"case": [invalid]}, namespace="uniprot")
+
+    exact_ncbi = database.select_ids(
+        [" sp|1234|SOURCE_TEXT "],
+        namespace="ncbi_gene",
+    )
+    assert exact_ncbi.unmatched_ids().collect().to_dicts() == [
+        {"input_id": "sp|1234|SOURCE_TEXT"}
     ]
 
 

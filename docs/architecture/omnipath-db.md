@@ -9,6 +9,10 @@ and order lazily.
 The current source profile represents protein identifiers, so selections use
 `namespace="protein"`. The explicit namespace parameter leaves room for a
 future source profile without guessing from filenames or identifier values.
+Caller input accepts a trimmed plain protein identifier or one complete
+`sp|accession|entry_name` / `tr|accession|entry_name` representation. The
+accession is the public `input_id`; any other pipe-bearing caller value raises
+`ValueError`. This rule does not rewrite official OmniPath source fields.
 
 Enzyme-substrate selections preserve the official `enzyme`, `substrate`,
 `residue_type`, `residue_offset`, and `modification` columns. `target_site` is

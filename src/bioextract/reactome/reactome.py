@@ -28,7 +28,7 @@ from bioextract._publication import (
 )
 from bioextract._shared import (
     GroupInputFrames,
-    normalize_input_id,
+    normalize_uniprot_selection_id,
     validate_group_ids,
 )
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
@@ -504,8 +504,10 @@ class ReactomeDatabase:
 
         Args:
             ids: Caller-supplied identifiers in the selected namespace.
-                UniProt pipe values and namespace-specific numeric forms are
-                normalized by the shared input normalizer.
+                UniProt accepts a plain accession or one complete
+                sp|accession|entry_name / tr|accession|entry_name value. NCBI
+                remains exact after trimming; ChEBI and GtoP use their
+                resource-owned rules.
             namespace: ``"uniprot"``, ``"ncbi"``, ``"chebi"``, or ``"gtop"``.
             target: ``"pathway"`` or ``"reaction"``.
             pathway_level: ``"lowest_level"`` or ``"all_levels"`` for pathway
@@ -513,6 +515,10 @@ class ReactomeDatabase:
 
         Returns:
             A selection that can extract pathway mappings and unmapped IDs.
+
+        Raises:
+            ValueError: If a UniProt pipe-bearing caller value is malformed or
+                another selection dimension is invalid.
 
         Examples:
             Normalize a UniProt pipe ID and retain an unmapped accession:
@@ -556,7 +562,9 @@ class ReactomeDatabase:
         """Create a grouped selection for one Reactome capability.
 
         Args:
-            ids_by_group: Mapping from group label to caller-supplied identifiers.
+            ids_by_group: Mapping from group label to caller-supplied
+                identifiers. UniProt pipe forms follow the strict single-query
+                contract; other namespaces keep their owning rules.
             namespace: ``"uniprot"``, ``"ncbi"``, ``"chebi"``, or ``"gtop"``.
             target: ``"pathway"`` or ``"reaction"``.
             pathway_level: ``"lowest_level"`` or ``"all_levels"`` for pathway
@@ -566,7 +574,8 @@ class ReactomeDatabase:
             A grouped selection that carries `group_id` through outputs.
 
         Raises:
-            ValueError: If group IDs are invalid after normalization.
+            ValueError: If group IDs are invalid after normalization or a
+                UniProt pipe-bearing caller value is malformed.
 
         Examples:
             Keep mapped and unmapped accessions in their original groups:
@@ -1936,7 +1945,7 @@ def _normalize_namespace_identifier(
     if not raw:
         return None
     if namespace == "uniprot":
-        normalized = normalize_input_id(raw)
+        normalized = normalize_uniprot_selection_id(raw)
         return (normalized, normalized) if normalized else None
     if namespace == "ncbi":
         return raw, raw

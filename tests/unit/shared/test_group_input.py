@@ -3,10 +3,23 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from bioextract._shared import create_group_input_frames
+from bioextract._shared import create_group_input_frames, create_input_id_frame
 
 SCHEMA_GROUPS = {"group_id": pl.String}
 SCHEMA_GROUP_INPUT_IDS = {"group_id": pl.String, "input_id": pl.String}
+SCHEMA_UNMAPPED = {"input_id": pl.String}
+
+
+def test_create_input_id_frame_is_trim_only() -> None:
+    frame = create_input_id_frame(
+        [" sp|P04637|P53_HUMAN ", "P04637", ""],
+        schema_unmapped=SCHEMA_UNMAPPED,
+    )
+
+    assert frame.to_dicts() == [
+        {"input_id": "P04637"},
+        {"input_id": "sp|P04637|P53_HUMAN"},
+    ]
 
 
 def test_create_group_input_frames_preserves_group_contract() -> None:
@@ -34,13 +47,15 @@ def test_create_group_input_frames_preserves_group_contract() -> None:
     assert df_group_membership.to_dicts() == [
         {"group_id": "A", "input_id": "P04637"},
         {"group_id": "A", "input_id": "TP53"},
+        {"group_id": "A", "input_id": "sp|P04637|P53_HUMAN"},
         {"group_id": "B", "input_id": "EGFR"},
-        {"group_id": "B", "input_id": "P04637"},
+        {"group_id": "B", "input_id": "sp|P04637|P53_HUMAN"},
     ]
     assert df_input_ids.to_dicts() == [
         {"input_id": "EGFR"},
         {"input_id": "P04637"},
         {"input_id": "TP53"},
+        {"input_id": "sp|P04637|P53_HUMAN"},
     ]
 
 

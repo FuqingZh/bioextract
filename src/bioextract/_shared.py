@@ -7,7 +7,7 @@ from typing import Protocol, TextIO
 import polars as pl
 from polars._typing import SchemaDict
 
-RE_UNIPROT_PIPE = re.compile(r"^[^|]+\|([^|]+)\|")
+_RE_UNIPROT_SELECTION = re.compile(r"^(?:sp|tr)\|([^|]+)\|([^|]+)$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,23 +30,35 @@ def create_tsv_writer(handle: TextIO) -> RowWriter:
     return csv.writer(handle, delimiter="\t", lineterminator="\n")
 
 
-def normalize_input_id(value: str) -> str:
-    """Normalize an identifier shared by all selection APIs.
+def normalize_uniprot_selection_id(value: object) -> str:
+    """Normalize one caller-supplied UniProt representation.
 
-    Surrounding whitespace is removed. UniProt pipe-style identifiers are
-    reduced to the accession between the first two pipes; other identifiers
-    are returned unchanged after trimming.
+    Plain non-pipe text is preserved after trimming. Pipe-bearing text must be
+    one complete sp|accession|entry_name or tr|accession|entry_name value;
+    malformed or non-UniProt pipe forms are rejected instead of becoming
+    unmatched identifiers.
 
     Examples:
-        >>> normalize_input_id(" sp|P04637|P53_HUMAN ")
+        >>> normalize_uniprot_selection_id(" sp|P04637|P53_HUMAN ")
         'P04637'
-        >>> normalize_input_id(" TP53 ")
-        'TP53'
+        >>> normalize_uniprot_selection_id(" P04637 ")
+        'P04637'
+        >>> normalize_uniprot_selection_id("db|P04637|P53_HUMAN")
+        Traceback (most recent call last):
+        ...
+        ValueError: Invalid UniProt pipe-form identifier: 'db|P04637|P53_HUMAN'
     """
-    value = value.strip()
-    if (match_pipe := RE_UNIPROT_PIPE.match(value)) is not None:
-        return match_pipe.group(1).strip()
-    return value
+    normalized = str(value).strip()
+    if "|" not in normalized:
+        return normalized
+    match = _RE_UNIPROT_SELECTION.fullmatch(normalized)
+    if match is None:
+        raise ValueError(f"Invalid UniProt pipe-form identifier: {normalized!r}")
+    accession = match.group(1).strip()
+    entry_name = match.group(2).strip()
+    if not accession or not entry_name:
+        raise ValueError(f"Invalid UniProt pipe-form identifier: {normalized!r}")
+    return accession
 
 
 def validate_group_ids(group_ids: list[str]) -> None:
@@ -80,15 +92,15 @@ def create_input_id_frame(
     """Build the canonical single-selection input table.
 
     Args:
-        input_ids: Raw identifiers to normalize.
+        input_ids: Raw identifiers to trim.
         schema_unmapped: Output schema containing the `input_id` column.
 
     Returns:
-        A table of non-empty, unique normalized IDs sorted by `input_id`.
+        A table of non-empty, unique trimmed IDs sorted by `input_id`.
     """
     ids_normalized: list[str] = []
     for input_id in input_ids:
-        if input_id_normalized := normalize_input_id(str(input_id)):
+        if input_id_normalized := str(input_id).strip():
             ids_normalized.append(input_id_normalized)
 
     if not ids_normalized:
@@ -109,10 +121,10 @@ def create_group_input_frames(
 ) -> GroupInputFrames:
     """Build canonical group and grouped-input tables.
 
-    Group labels are stripped and must remain non-empty and unique. Input IDs
-    use `normalize_input_id()`. Membership rows are deduplicated within each
-    group, while the input table contains one globally unique row per normalized
-    ID. Groups with no retained IDs remain present in the group registry.
+    Group labels and input IDs are stripped. Group labels must remain non-empty
+    and unique. Membership rows are deduplicated within each group, while the
+    input table contains one globally unique row per trimmed ID. Groups with no
+    retained IDs remain present in the group registry.
 
     Args:
         ids_by_group: Mapping of raw group labels to raw identifiers.
@@ -134,7 +146,7 @@ def create_group_input_frames(
         group_id = str(group_id_raw).strip()
         group_ids_normalized.append(group_id)
         for input_id in ids:
-            if input_id_normalized := normalize_input_id(str(input_id)):
+            if input_id_normalized := str(input_id).strip():
                 group_ids_col.append(group_id)
                 input_ids_col.append(input_id_normalized)
 

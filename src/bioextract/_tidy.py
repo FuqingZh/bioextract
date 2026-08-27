@@ -86,6 +86,7 @@ class TidyDataset:
         ...     source_schema_profile="example-source-v1",
         ...     build_id_prefix="example",
         ...     assets=(TidyAsset("term.parquet", "canonical", "term"),),
+        ...     resource_name="example",
         ... )
         >>> dataset.frames["term"].collect().to_dicts()
         [{'id': 'T1'}]
@@ -97,13 +98,17 @@ class TidyDataset:
     source_schema_profile: str
     build_id_prefix: str
     assets: tuple[TidyAsset, ...]
-    resource_name: str | None = None
+    resource_name: str
     release_version: str | None = None
     release_version_source: str | None = None
     source_schema_version: str | None = None
     scope: str | None = None
     extra_metadata: Mapping[str, str] | None = None
     before_duckdb_commit: Callable[[], None] | None = None
+
+    def __post_init__(self) -> None:
+        if not self.resource_name.strip():
+            raise ValueError("resource_name must be non-empty")
 
     def write_duckdb(
         self,
@@ -126,6 +131,7 @@ class TidyDataset:
             ...     source_schema_profile="example-source-v1",
             ...     build_id_prefix="example",
             ...     assets=(TidyAsset("term.parquet", "canonical", "term"),),
+            ...     resource_name="example",
             ... )
             >>> with TemporaryDirectory() as dir_out:
             ...     dataset.write_duckdb(
@@ -147,7 +153,7 @@ class TidyDataset:
         return write_duckdb_publication(
             relations,
             path,
-            resource_name=self.resource_name or self.build_id_prefix,
+            resource_name=self.resource_name,
             resource_schema_version=self.resource_schema_version,
             source_schema_profile=self.source_schema_profile,
             source_schema_version=self.source_schema_version,

@@ -551,6 +551,23 @@ def test_if_exists_and_failed_build_preserve_destination(
     assert not list(tmp_path.glob(f".{path.name}.*.tmp*"))
 
 
+def test_missing_package_version_fails_before_rhea_output_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    file_names = _write(tmp_path / "names.tsv", "1\t A\n")
+    destination = tmp_path / "not-created" / "rhea.duckdb"
+
+    def unavailable() -> str:
+        raise RuntimeError("installed package metadata is unavailable")
+
+    monkeypatch.setattr(_duckdb, "require_package_version", unavailable)
+    with pytest.raises(RuntimeError, match="metadata is unavailable"):
+        RheaDatabase.from_files(chebi_names=file_names).write_duckdb(destination)
+
+    assert not destination.parent.exists()
+
+
 def test_source_hashes_are_not_materialized_by_default(tmp_path: Path) -> None:
     file_names = _write(tmp_path / "names.tsv", "1\t A\n")
     path = tmp_path / "rhea.duckdb"

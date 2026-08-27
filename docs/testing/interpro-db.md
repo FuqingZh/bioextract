@@ -1,7 +1,7 @@
 # InterProDatabase Test Standard
 
-Version: v1.0
-Date: 2026-07-14
+Version: v1.1
+Date: 2026-08-27
 Status: current
 
 ## Scope
@@ -27,17 +27,18 @@ It does not cover:
 ## Unit Tests
 
 - `from_mapping_files()` accepts required and optional files.
-- `extract_mapping()` returns the normalized mapping columns.
+- `mappings()` returns the normalized mapping columns.
 - XML enrichment fills `interpro_type` and `member_db` when present.
-- `select_ids(..., namespace="uniprot")` returns filtered rows.
-- `select_groups(..., namespace="uniprot")` preserves `group_id`.
+- `select_ids(ids)` returns filtered UniProt rows.
+- `select_groups(ids_by_group)` preserves `group_id`.
 - unmapped IDs are reported correctly.
 - mapping-only construction writes only the `mapping` DuckDB relation.
 - XML-capable construction writes `mapping`, `protein_term`, `term`, and
   `term_xref` in one DuckDB.
-- `from_duckdb()` rejects non-v1 metadata and forged resource, profile,
-  capability, source-role, table-role, schema/type, row-count, and column
-  provenance inventories, including an incompatible persisted InterPro
+- `from_duckdb()` requires metadata schema v2 and the InterPro source profile
+  and resource schema v1. It rejects forged resource, profile, capability,
+  source-role, table-role, schema/type, row-count, and column-provenance
+  inventories, including an incompatible persisted InterPro
   content-validation result.
 - metadata v2 requires exact names, types, nullability, and primary keys for
   all five `_bioextract` tables.
@@ -47,9 +48,12 @@ It does not cover:
   and cached XML frames reject source identity changes.
 - reopened selections preserve normalization, unique lookup, grouped fan-out,
   and unmatched behavior.
+- source and reopened single/grouped selections canonicalize complete sp/tr
+  UniProt pipe forms to the accession, deduplicate with plain accessions, and
+  reject every other pipe-bearing caller form.
 - `if_exists="fail"` and `"replace"` retain atomic publication behavior.
 - retained lazy datasets reject changed source identities before atomic commit.
-- invalid `namespace` raises targeted `ValueError`.
+- malformed pipe-bearing caller values raise targeted `ValueError`.
 - duplicate positional Pfam matches collapse to one protein-term row.
 - non-PFAM signatures are excluded.
 - Pfam names remain distinct from InterPro entry names.

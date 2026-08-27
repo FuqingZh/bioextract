@@ -30,7 +30,7 @@ Readers use `XDatabase.from_duckdb(path)`, and every `connect()` call returns a
 fresh caller-owned read-only DuckDB connection. Writers validate into a
 staging file and atomically publish only after success. Publication provenance
 lives in exactly five relations in the DuckDB `_bioextract` schema; biological
-relations live in `main`. Metadata v1 is the only supported publication
+relations live in `main`. Metadata v2 is the only supported publication
 metadata contract. Parquet is an upstream, internal-transfer, or general
 interchange format, never a canonical bioextract publication.
 
@@ -94,10 +94,10 @@ selection = database.select_compounds(
     namespace="chebi",
 )
 
-df_compounds = selection.extract_compounds()
-df_names = selection.extract_names()
-df_relations = selection.extract_relations()
-df_unmatched = selection.extract_unmatched_ids()
+lf_compounds = selection.compounds()
+lf_names = selection.names()
+lf_relations = selection.relations()
+lf_unmatched = selection.unmatched_ids()
 
 with database.connect() as connection:
     prefixes = connection.execute(
@@ -149,15 +149,16 @@ selection = database.select_reactions(
     namespace="chebi",
 )
 
-df_matches = selection.extract_matches()
-df_reactions = selection.extract_reactions()
-df_participants = selection.extract_participants()
-df_cross_references = selection.extract_cross_references()
-df_unmatched = selection.extract_unmatched_ids()
+lf_matches = selection.matches()
+lf_reactions = selection.reactions()
+lf_participants = selection.participants()
+lf_cross_references = selection.cross_references()
+lf_unmatched = selection.unmatched_ids()
 ```
 
 `select_reactions()` and `select_groups()` are deferred domain query plans;
-their `extract_*()` terminals return eager Polars `DataFrame` objects.
+their noun terminals return replayable Polars `LazyFrame` objects. Call
+`.collect()` at the application boundary that needs an eager `DataFrame`.
 Participant output retains the exact Rhea ID, master ID, direction, side, and
 compound fields. ChEBI fields are complete `CHEBI:<number>` CURIEs and can be
 equality-joined to a ChEBI publication without prefix construction or casts.
@@ -183,8 +184,8 @@ selection = go.select_ancestors(
     target_subset_id="goslim_generic",
     include_self=True,
 )
-df_ancestors = selection.extract_ancestors()
-df_unmatched = selection.extract_unmatched_ids()
+lf_ancestors = selection.ancestors()
+lf_unmatched = selection.unmatched_ids()
 result = go.write_duckdb("out/go.duckdb")
 ```
 
@@ -223,9 +224,9 @@ database.write_duckdb("out/kegg.duckdb")
 published = KEGGDatabase.from_duckdb("out/kegg.duckdb")
 selection = published.select_ids(["CHEBI:15377"], namespace="chebi")
 
-df_reactions = selection.extract_reactions()
-df_pathways = selection.extract_pathway_memberships()
-df_unmatched = selection.extract_unmatched_ids()
+lf_reactions = selection.reactions()
+lf_pathways = selection.pathway_memberships()
+lf_unmatched = selection.unmatched_ids()
 
 with published.connect() as connection:
     relation = connection.sql(
@@ -282,7 +283,7 @@ db = EggNOGDatabase.from_sqlite(
     "eggnog.db",
     cog_functions="cog-24.fun.tab",
 )
-mapping = db.select_ids(["9606.ENSP00000369497"]).extract_mapping()
+mapping = db.select_ids(["9606.ENSP00000369497"]).mappings()
 ```
 
 Selections query plain SQLite directly without requiring a published
@@ -326,7 +327,7 @@ UniProtDatabase.from_idmapping(
 )
 
 mapping = UniProtDatabase.from_duckdb("out/uniprot_idmapping.duckdb")
-human = mapping.read_mapping(taxon_ids=["9606"])
+human = mapping.scan_mapping(taxon_ids=["9606"])
 with mapping.connect() as connection:
     print(connection.sql("SELECT count(*) FROM mapping").fetchone())
 ```
@@ -346,7 +347,7 @@ proteins = db.select_ids(
     ["P04637"],
     namespace="uniprot",
     taxon_ids=["9606"],
-).extract_proteins()
+).proteins()
 with db.connect() as connection:
     relation_count = connection.execute(
         "SELECT count(*) FROM protein"
@@ -379,13 +380,18 @@ selection = (
     .with_min_combined_score(400)
 )
 
-df_mapping = selection.extract_string_mapping()
-df_unmapped = selection.extract_unmatched_ids()
-df_edges = selection.extract_edges()
+lf_mapping = selection.mappings()
+lf_unmapped = selection.unmatched_ids()
+lf_edges = selection.edges()
 ```
 
 `combined_score` is a STRING confidence score, not an interaction-strength
 measurement.
+
+STRING alias selections accept ordinary non-pipe alias text or one complete
+UniProt `sp|accession|entry_name` / `tr|accession|entry_name` value.
+Malformed pipe-bearing aliases raise `ValueError`. Direct
+`namespace="string"` inputs remain exact STRING protein IDs after trimming.
 
 ## OmniPath
 
@@ -401,9 +407,13 @@ selection = (
     .with_enzsub()
 )
 
-df_enzsub = selection.extract_enzsub()
-df_unmapped = selection.extract_unmatched_ids()
+lf_enzsub = selection.enzsub()
+lf_unmapped = selection.unmatched_ids()
 ```
+
+OmniPath protein selections accept a plain protein identifier or the same
+complete UniProt pipe representation; malformed pipe-bearing caller values are
+rejected before lookup.
 
 ## Naming and compatibility
 

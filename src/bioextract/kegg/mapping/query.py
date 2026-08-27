@@ -15,9 +15,13 @@ from bioextract._lazy import (
     _RelationScanRequest,  # pyright: ignore[reportPrivateUsage]  # typed source boundary
     register_replayable_source,
 )
-from bioextract._shared import create_group_input_frames
+from bioextract._shared import (
+    create_group_input_frames,
+    normalize_uniprot_selection_id,
+)
 from bioextract.errors import CapabilityError, IntegrityError
 
+from .._publication_identity import assert_publication_current
 from .constant import (
     NAMESPACE_VALUES,
     SCHEMA_GENE_PATHWAY_VIA_KO,
@@ -31,8 +35,6 @@ from .constant import (
 )
 from .parse import aggregate_kos, aggregate_organism, parse_organism_list
 from .source import MappingSnapshot, resolve_organism_work, source_capabilities
-
-_UNIPROT_PIPE = re.compile(r"^[^|]+\|([^|]+)\|")
 
 
 @dataclass(slots=True)
@@ -322,12 +324,14 @@ def _iter_publication_matches(
     schema: SchemaDict,
     request: _RelationScanRequest,
 ) -> Iterator[pl.DataFrame]:
+    _assert_mapping_publication_current(selection.snapshot)
     with selection._match_state.lock:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
         if selection._match_state.frame is None:  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
             selection._match_state.frame = _query_publication_matches(selection)  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
         frame = selection._match_state.frame.clone()  # pyright: ignore[reportPrivateUsage]  # paired selection boundary
     requested = _select_requested(frame, request.columns)
     yield from _slices(requested, request.effective_batch_size)
+    _assert_mapping_publication_current(selection.snapshot)
 
 
 def _query_publication_matches(selection: KeggSelection) -> pl.DataFrame:
@@ -339,7 +343,7 @@ def _query_publication_matches(selection: KeggSelection) -> pl.DataFrame:
     if not input_ids:
         frame = pl.DataFrame(schema=schema)
     else:
-        connection = duckdb.connect(str(path), read_only=True)
+        connection = _connect_mapping_publication(selection.snapshot)
         try:
             connection.execute(
                 "CREATE TEMP TABLE _selected_input(input_id VARCHAR PRIMARY KEY)"
@@ -394,6 +398,7 @@ def _query_publication_matches(selection: KeggSelection) -> pl.DataFrame:
             frame = pl.DataFrame(rows, schema=schema, orient="row")
         finally:
             connection.close()
+        _assert_mapping_publication_current(selection.snapshot)
     if selection.group_membership is None:
         return frame.sort(list(schema))
     return (
@@ -471,12 +476,8 @@ def _iter_publication(
     path = snapshot.publication_path
     if path is None:
         raise IntegrityError("KEGG mapping publication path is missing")
-    try:
-        connection = duckdb.connect(str(path), read_only=True)
-    except duckdb.Error as error:
-        raise IntegrityError(
-            f"Cannot reopen KEGG mapping publication: {path}"
-        ) from error
+    connection = _connect_mapping_publication(snapshot)
+    reader: Any = None
     try:
         parameters: list[str] = []
         where = ""
@@ -507,7 +508,44 @@ def _iter_publication(
                 strict=False,
             )
     finally:
+        if reader is not None:
+            close = getattr(reader, "close", None)
+            if close is not None:
+                close()
         connection.close()
+    _assert_mapping_publication_current(snapshot)
+
+
+def _connect_mapping_publication(
+    snapshot: MappingSnapshot,
+) -> duckdb.DuckDBPyConnection:
+    path = snapshot.publication_path
+    if path is None:
+        raise IntegrityError("KEGG mapping publication path is missing")
+    _assert_mapping_publication_current(snapshot)
+    try:
+        connection = duckdb.connect(str(path), read_only=True)
+    except duckdb.Error as error:
+        raise IntegrityError(
+            f"Cannot reopen KEGG mapping publication: {path}"
+        ) from error
+    try:
+        _assert_mapping_publication_current(snapshot)
+    except BaseException:
+        connection.close()
+        raise
+    return connection
+
+
+def _assert_mapping_publication_current(snapshot: MappingSnapshot) -> None:
+    path = snapshot.publication_path
+    if path is None:
+        raise IntegrityError("KEGG mapping publication path is missing")
+    assert_publication_current(
+        path,
+        snapshot.publication_identity,
+        profile_label="mapping",
+    )
 
 
 def _relation_schema(name: str) -> SchemaDict:
@@ -580,9 +618,8 @@ def _normalize_input(value: Any, *, namespace: KEGGNamespace) -> str:
         return ""
     prefixes = ("up:", "ncbi-geneid:", "ko:", "path:")
     if namespace == "uniprot":
-        if match := _UNIPROT_PIPE.match(normalized):
-            normalized = match.group(1).strip()
-        elif normalized.startswith("up:"):
+        normalized = normalize_uniprot_selection_id(normalized)
+        if normalized.startswith("up:"):
             normalized = normalized[3:]
     elif namespace == "ncbi_gene" and normalized.startswith("ncbi-geneid:"):
         normalized = normalized[len("ncbi-geneid:") :]

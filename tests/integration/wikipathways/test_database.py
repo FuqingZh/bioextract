@@ -272,7 +272,7 @@ def test_single_and_grouped_selection(tmp_path: Path) -> None:
     file_gmt = write_wikipathways_fixture(tmp_path)
     db = WikiPathwaysDatabase.from_gmt(file_gmt).with_species("Homo sapiens")
 
-    selection = db.select_ids(["2687", " 435 ", "MISSING", ""])
+    selection = db.select_ids(["2687", " 435 ", "MISSING", " sp|P12345|TEST ", ""])
     assert selection.mappings().collect().to_dicts() == [
         {
             "input_id": "2687",
@@ -291,16 +291,24 @@ def test_single_and_grouped_selection(tmp_path: Path) -> None:
             "url": "https://www.wikipathways.org/instance/WP106",
         },
     ]
-    assert selection.unmatched_ids().collect().to_dicts() == [{"input_id": "MISSING"}]
+    assert selection.unmatched_ids().collect().to_dicts() == [
+        {"input_id": "MISSING"},
+        {"input_id": "sp|P12345|TEST"},
+    ]
 
-    grouped = db.select_groups({"A": ["2687"], "B": ["2687", "MISSING"]})
+    grouped = db.select_groups(
+        {"A": ["2687"], "B": ["2687", "MISSING", "sp|P12345|TEST"]}
+    )
     df_grouped_mapping = grouped.mappings().collect()
     assert grouped.mappings().collect().equals(df_grouped_mapping)
     assert df_grouped_mapping.columns[0] == "group_id"
     assert df_grouped_mapping.height == 2
     df_unmatched = grouped.unmatched_ids().collect()
     assert grouped.unmatched_ids().collect().equals(df_unmatched)
-    assert df_unmatched.to_dicts() == [{"group_id": "B", "input_id": "MISSING"}]
+    assert df_unmatched.to_dicts() == [
+        {"group_id": "B", "input_id": "MISSING"},
+        {"group_id": "B", "input_id": "sp|P12345|TEST"},
+    ]
 
 
 def test_build_tidy_writes_duckdb_without_sidecar(tmp_path: Path) -> None:
@@ -366,21 +374,65 @@ def test_duckdb_reopen_matches_source_extraction_selection_and_native_sql(
     assert reopened.pathway_genes().collect().equals(source.pathway_genes().collect())
     assert reopened.pathway_names().collect().equals(source.pathway_names().collect())
     assert (
-        reopened.select_ids(["2687", "MISSING"])
-        .mappings()
-        .collect()
-        .equals(source.select_ids(["2687", "MISSING"]).mappings().collect())
-    )
-    assert (
-        reopened.select_groups({"case": ["2687"], "control": ["435", "MISSING"]})
+        reopened.select_ids(["2687", "MISSING", "sp|P12345|TEST"])
         .mappings()
         .collect()
         .equals(
-            source.select_groups({"case": ["2687"], "control": ["435", "MISSING"]})
+            source.select_ids(["2687", "MISSING", "sp|P12345|TEST"])
             .mappings()
             .collect()
         )
     )
+    reopened_single_unmatched = (
+        reopened.select_ids(["2687", "MISSING", "sp|P12345|TEST"])
+        .unmatched_ids()
+        .collect()
+    )
+    source_single_unmatched = (
+        source.select_ids(["2687", "MISSING", "sp|P12345|TEST"])
+        .unmatched_ids()
+        .collect()
+    )
+    assert reopened_single_unmatched.equals(source_single_unmatched)
+    assert reopened_single_unmatched.to_dicts() == [
+        {"input_id": "MISSING"},
+        {"input_id": "sp|P12345|TEST"},
+    ]
+    assert (
+        reopened.select_groups(
+            {
+                "case": ["2687"],
+                "control": ["435", "MISSING", "sp|P12345|TEST"],
+            }
+        )
+        .mappings()
+        .collect()
+        .equals(
+            source.select_groups(
+                {
+                    "case": ["2687"],
+                    "control": ["435", "MISSING", "sp|P12345|TEST"],
+                }
+            )
+            .mappings()
+            .collect()
+        )
+    )
+    grouped_inputs = {
+        "case": ["2687"],
+        "control": ["435", "MISSING", "sp|P12345|TEST"],
+    }
+    reopened_group_unmatched = (
+        reopened.select_groups(grouped_inputs).unmatched_ids().collect()
+    )
+    source_group_unmatched = (
+        source.select_groups(grouped_inputs).unmatched_ids().collect()
+    )
+    assert reopened_group_unmatched.equals(source_group_unmatched)
+    assert reopened_group_unmatched.to_dicts() == [
+        {"group_id": "control", "input_id": "MISSING"},
+        {"group_id": "control", "input_id": "sp|P12345|TEST"},
+    ]
 
     first = reopened.connect()
     second = reopened.connect()

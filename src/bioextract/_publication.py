@@ -11,6 +11,7 @@ from pathlib import Path
 
 import duckdb
 import polars as pl
+from packaging.version import InvalidVersion, Version
 
 METADATA_SCHEMA_VERSION = "2"
 BIOEXTRACT_RELATIONS = {
@@ -268,7 +269,9 @@ def write_duckdb_publication(
     for relation in relations:
         _validate_identifier(relation.table_name)
 
-    destination = _prepare_destination(path, if_exists=if_exists)
+    destination = preflight_publication_destination(path, if_exists=if_exists)
+    package_version = require_package_version()
+    destination.parent.mkdir(parents=True, exist_ok=True)
     stage = _create_stage_path(destination, suffix=".duckdb")
     stage.unlink()
     row_counts: dict[str, int] = {}
@@ -302,6 +305,7 @@ def write_duckdb_publication(
                         )
                     row_counts[relation.table_name] = int(count_row[0])
                 publication_metadata = _publication_metadata(
+                    package_version=package_version,
                     resource_name=resource_name,
                     resource_schema_version=resource_schema_version,
                     source_schema_profile=source_schema_profile,
@@ -354,6 +358,7 @@ def write_duckdb_publication(
 
 def _publication_metadata(
     *,
+    package_version: str,
     resource_name: str,
     resource_schema_version: str,
     source_schema_profile: str,
@@ -364,6 +369,8 @@ def _publication_metadata(
     validation_issue_count: int = 0,
 ) -> dict[str, str]:
     generated_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    if not resource_name.strip():
+        raise ValueError("resource_name must be non-empty")
     if not resource_schema_version.strip():
         raise ValueError("resource_schema_version must be non-empty")
     if not source_schema_profile.strip():
@@ -373,7 +380,7 @@ def _publication_metadata(
         "bioextract.resource_name": resource_name,
         "bioextract.resource_schema_version": resource_schema_version,
         "bioextract.source_schema_profile": source_schema_profile,
-        "bioextract.package_version": _package_version(),
+        "bioextract.package_version": package_version,
         "bioextract.generated_at": generated_at,
         "bioextract.validation_status": (
             "passed_with_warnings" if validation_issue_count else "passed"
@@ -717,14 +724,6 @@ def _validate_relation_columns(
     return frame.rename(output_by_source), tuple(mappings)
 
 
-def _prepare_destination(
-    path: os.PathLike[str] | str,
-    *,
-    if_exists: str,
-) -> Path:
-    return preflight_publication_destination(path, if_exists=if_exists)
-
-
 def preflight_publication_destination(
     path: os.PathLike[str] | str,
     *,
@@ -734,7 +733,6 @@ def preflight_publication_destination(
     if if_exists not in {"fail", "replace"}:
         raise ValueError("if_exists must be 'fail' or 'replace'")
     destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists() and if_exists == "fail":
         raise FileExistsError(destination)
     return destination
@@ -758,8 +756,29 @@ def _validate_identifier(identifier: str) -> None:
         )
 
 
-def _package_version() -> str:
+def require_package_version() -> str:
     try:
-        return version("bioextract")
-    except PackageNotFoundError:
-        return "unknown"
+        package_version = version("bioextract").strip()
+    except PackageNotFoundError as error:
+        raise RuntimeError(
+            "Cannot write a bioextract publication because installed package "
+            "metadata is unavailable."
+        ) from error
+
+    try:
+        canonical_version = str(Version(package_version))
+    except InvalidVersion as error:
+        raise RuntimeError(
+            "Cannot write a bioextract publication with a non-PEP-440 package "
+            f"version: {package_version!r}."
+        ) from error
+    if (
+        not package_version
+        or package_version == "unknown"
+        or (canonical_version != package_version)
+    ):
+        raise RuntimeError(
+            "Cannot write a bioextract publication with an unresolved or "
+            f"non-canonical package version: {package_version!r}."
+        )
+    return package_version

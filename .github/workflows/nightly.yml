@@ -1,16 +1,19 @@
-name: py-ci
+name: py-nightly
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: py-nightly-main
+  cancel-in-progress: true
+
 jobs:
-  py:
+  build:
     runs-on: ubuntu-latest
     env:
       PDM_IGNORE_SAVED_PYTHON: "1"
@@ -18,7 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: main
           fetch-depth: 0
+          fetch-tags: true
 
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -34,7 +39,7 @@ jobs:
       - name: Run code checks
         run: pdm run check
 
-      - name: Build distribution
+      - name: Build distributions
         run: pdm build
 
       - name: Verify distribution identity
@@ -49,3 +54,11 @@ jobs:
           .wheel-smoke/bin/python -m pip install -U pip
           .wheel-smoke/bin/python -m pip install dist/*.whl
           .wheel-smoke/bin/python scripts/verify_installed_wheel.py
+
+      - name: Retain finite-lived nightly artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bioextract-nightly-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

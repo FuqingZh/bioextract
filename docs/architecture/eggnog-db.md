@@ -1,7 +1,7 @@
 # EggNOGDatabase Architecture
 
-Version: v1.0
-Date: 2026-07-14
+Version: v1.1
+Date: 2026-08-27
 Status: current
 
 ## Goal
@@ -22,6 +22,11 @@ It intentionally does not cover:
 - emapper runtime execution
 - KEGG/module/domain/pathway annotation beyond the local COG mapping path
 - enrichment p-value calculation
+
+Selection input is an exact eggNOG protein identifier after surrounding
+whitespace is trimmed. Empty values are dropped and exact duplicates collapse;
+pipe-bearing text is not treated as a UniProt representation and remains an
+ordinary eggNOG lookup/unmatched value.
 
 ## Raw Inputs
 

@@ -1,7 +1,7 @@
 # ReactomeDatabase Architecture
 
-Version: v1.2
-Date: 2026-08-18
+Version: v1.3
+Date: 2026-08-27
 Status: current
 
 ## Goal
@@ -109,7 +109,7 @@ Input normalization is namespace-aware:
 
 | Namespace | Accepted input | Lookup | Public `input_id` |
 | --- | --- | --- | --- |
-| `uniprot` | accession or pipe form | accession | accession |
+| `uniprot` | plain accession or complete `sp|accession|entry_name` / `tr|accession|entry_name` | accession | accession |
 | `ncbi` | any non-empty trimmed official text | same text | same text |
 | `chebi` | decimal or `CHEBI:<digits>` | decimal text | `CHEBI:<integer>` |
 | `gtop` | decimal text | same text | same text |
@@ -117,6 +117,8 @@ Input normalization is namespace-aware:
 Invalid non-empty ChEBI/GtoP inputs raise `ValueError`; they are not reported
 as unmatched. NCBI identifiers are deliberately not restricted to decimal Gene
 IDs, because the official snapshot also contains GenBank/RefSeq-style values.
+Any other pipe-bearing UniProt caller value raises `ValueError`; NCBI text is
+not passed through the UniProt representation parser.
 
 ## Human Relations And GMT
 
