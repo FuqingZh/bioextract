@@ -86,6 +86,14 @@ def test_only_published_github_releases_can_upload_to_pypi() -> None:
         assert any(
             "--dist dist" in str(step.get("run", "")) for step in verification_steps
         )
+        assert any(
+            step.get("name") == "Rebuild wheel from sdist"
+            and "scripts.rebuild_wheel_from_sdist" in str(step.get("run", ""))
+            for step in steps
+        )
+        assert any(
+            "build/sdist-wheel/*.whl" in str(step.get("run", "")) for step in steps
+        )
     assert "  release:" in publish
     assert "types: [published]" in publish
     assert "\n  push:" not in publish
@@ -98,7 +106,9 @@ def test_only_published_github_releases_can_upload_to_pypi() -> None:
     assert "github.event.release.prerelease" in publish
     assert publish.count("github.event.release.tag_name") >= 4
     assert publish.count("--expected-commit") == 2
-    assert publish.count("--dist dist") == 2
+    assert publish.count("--dist dist") == 4
+    assert publish.count("python -m scripts.rebuild_wheel_from_sdist") == 2
+    assert publish.count("build/sdist-wheel/*.whl") == 2
 
 
 def test_continuous_and_build_only_workflows_cannot_upload() -> None:
@@ -109,6 +119,10 @@ def test_continuous_and_build_only_workflows_cannot_upload() -> None:
         assert set(jobs) == {"py" if name == "py-ci.yml" else "build"}
         steps = _steps(next(iter(jobs.values())))
         assert any(step.get("name") == "Verify distribution identity" for step in steps)
+        assert any(step.get("name") == "Rebuild wheel from sdist" for step in steps)
+        assert any(
+            "build/sdist-wheel/*.whl" in str(step.get("run", "")) for step in steps
+        )
         assert "id-token: write" not in workflow
         assert "gh-action-pypi-publish" not in workflow
 
@@ -130,3 +144,5 @@ def test_ci_installs_project_and_verifies_exact_wheel() -> None:
     assert "pdm sync -G dev\n" in ci
     assert "--no-self" not in ci
     assert "scripts/verify_installed_wheel.py" in ci
+    assert "python -m scripts.rebuild_wheel_from_sdist" in ci
+    assert "--force-reinstall --no-deps build/sdist-wheel/*.whl" in ci

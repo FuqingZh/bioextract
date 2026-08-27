@@ -48,11 +48,22 @@ jobs:
       - name: Check built artifacts
         run: python -m twine check dist/*
 
-      - name: Verify installed wheel publication identity
+      - name: Rebuild wheel from sdist
+        run: >-
+          python -m scripts.rebuild_wheel_from_sdist
+          --dist dist
+          --output build/sdist-wheel
+
+      - name: Check rebuilt artifacts
+        run: python -m twine check build/sdist-wheel/*
+
+      - name: Verify installed wheel publication identities
         run: |
           python -m venv .wheel-smoke
           .wheel-smoke/bin/python -m pip install -U pip
           .wheel-smoke/bin/python -m pip install dist/*.whl
+          .wheel-smoke/bin/python scripts/verify_installed_wheel.py
+          .wheel-smoke/bin/python -m pip install --force-reinstall --no-deps build/sdist-wheel/*.whl
           .wheel-smoke/bin/python scripts/verify_installed_wheel.py
 
       - name: Retain finite-lived nightly artifacts

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 import tarfile
-from collections.abc import Sequence
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -15,6 +13,7 @@ from packaging.version import Version
 sys.path.insert(0, str(Path(__file__).parents[3]))
 
 from scripts.build_guard import require_clean_distribution_source
+from scripts.rebuild_wheel_from_sdist import rebuild_wheel_from_sdist
 from scripts.verify_release_candidate import verify_distribution_versions
 
 REPOSITORY_ROOT = Path(__file__).parents[3]
@@ -145,46 +144,15 @@ def _commit_build_project(path: Path, *, tag: str | None = None) -> None:
         subprocess.run(["git", "tag", tag], cwd=path, check=True)
 
 
-def _actual_pdm_build(
-    path: Path,
-    *,
-    extra_arguments: Sequence[str] = (),
-) -> subprocess.CompletedProcess[str]:
+def _actual_pdm_build(path: Path) -> subprocess.CompletedProcess[str]:
     with TemporaryDirectory(prefix="bioextract-pdm-state-") as state_root:
         environment = os.environ.copy()
         environment["XDG_STATE_HOME"] = state_root
         environment["XDG_CACHE_HOME"] = str(Path(state_root) / "cache")
         environment["UV_CACHE_DIR"] = str(Path(state_root) / "uv-cache")
         return subprocess.run(
-            ["pdm", "build", "--dest", "dist", *extra_arguments],
+            ["pdm", "build", "--dest", "dist"],
             cwd=path,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            env=environment,
-        )
-
-
-def _actual_wheel_build_from_sdist(
-    sdist: Path,
-    *,
-    destination: Path,
-) -> subprocess.CompletedProcess[str]:
-    with TemporaryDirectory(prefix="bioextract-uv-state-") as state_root:
-        environment = os.environ.copy()
-        environment["XDG_CACHE_HOME"] = str(Path(state_root) / "cache")
-        environment["UV_CACHE_DIR"] = str(Path(state_root) / "uv-cache")
-        return subprocess.run(
-            [
-                "uv",
-                "build",
-                "--wheel",
-                "--no-create-gitignore",
-                "--out-dir",
-                str(destination),
-                str(sdist),
-            ],
             check=False,
             capture_output=True,
             text=True,
@@ -215,7 +183,7 @@ def test_actual_untagged_pdm_build_has_consistent_scm_identity(tmp_path: Path) -
     _write_actual_build_project(tmp_path)
     _commit_build_project(tmp_path)
 
-    completed = _actual_pdm_build(tmp_path, extra_arguments=("--no-isolation",))
+    completed = _actual_pdm_build(tmp_path)
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     artifacts = verify_distribution_versions(
@@ -243,17 +211,11 @@ def test_actual_pdm_wheel_rebuilds_from_sdist_without_git(tmp_path: Path) -> Non
         assert all(".git" not in Path(member.name).parts for member in archive)
 
     rebuilt_dist = tmp_path / "rebuilt-dist"
-    wheel_build = _actual_wheel_build_from_sdist(
-        source_artifacts.sdist,
+    rebuilt_artifacts = rebuild_wheel_from_sdist(
+        source / "dist",
         destination=rebuilt_dist,
     )
 
-    assert wheel_build.returncode == 0, wheel_build.stdout + wheel_build.stderr
-    shutil.copy2(source_artifacts.sdist, rebuilt_dist)
-    rebuilt_artifacts = verify_distribution_versions(
-        rebuilt_dist,
-        expected_version="0.8.0rc1",
-    )
     assert rebuilt_artifacts.version == source_artifacts.version
 
 
@@ -272,7 +234,7 @@ def test_actual_pdm_build_rejects_dirty_checkout(
     else:
         (tmp_path / "untracked.py").write_text("dirty = True\n", encoding="utf-8")
 
-    completed = _actual_pdm_build(tmp_path, extra_arguments=("--no-isolation",))
+    completed = _actual_pdm_build(tmp_path)
 
     assert completed.returncode != 0
     assert "dirty source tree" in completed.stdout + completed.stderr
@@ -283,7 +245,7 @@ def test_actual_pdm_build_rejects_dirty_checkout(
 def test_actual_pdm_build_rejects_source_without_scm_checkout(tmp_path: Path) -> None:
     _write_actual_build_project(tmp_path)
 
-    completed = _actual_pdm_build(tmp_path, extra_arguments=("--no-isolation",))
+    completed = _actual_pdm_build(tmp_path)
 
     assert completed.returncode != 0
     assert not list((tmp_path / "dist").glob("*.whl"))
