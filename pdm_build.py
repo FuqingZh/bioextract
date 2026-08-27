@@ -18,6 +18,30 @@ def require_clean_distribution_source(root: Path, *, target: str) -> None:
         return
 
     try:
+        top_level = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        if target == "wheel" and _is_valid_sdist_source(root):
+            return
+        raise RuntimeError(
+            "Refusing to build a wheel or sdist because Git cannot identify "
+            "one source checkout. Build from a clean Git worktree."
+        ) from error
+
+    if Path(top_level).resolve() != root.resolve():
+        if target == "wheel" and _is_valid_sdist_source(root):
+            return
+        raise RuntimeError(
+            "Refusing to build a wheel or sdist because the build root does "
+            "not own its Git checkout. Build from the repository top level."
+        )
+
+    try:
         status = subprocess.run(
             ["git", "status", "--porcelain=v1", "--untracked-files=all"],
             cwd=root,
@@ -26,11 +50,9 @@ def require_clean_distribution_source(root: Path, *, target: str) -> None:
             text=True,
         ).stdout
     except (OSError, subprocess.CalledProcessError) as error:
-        if target == "wheel" and _is_valid_sdist_source(root):
-            return
         raise RuntimeError(
-            "Refusing to build a wheel or sdist because Git cannot identify "
-            "one source checkout. Build from a clean Git worktree."
+            "Refusing to build a wheel or sdist because Git cannot verify "
+            "the source checkout status."
         ) from error
     if status:
         raise RuntimeError(

@@ -10,6 +10,12 @@ import yaml
 REPOSITORY_ROOT = Path(__file__).parents[3]
 WORKFLOW_ROOT = REPOSITORY_ROOT / ".github" / "workflows"
 PYPI_ACTION = "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33"
+UPLOAD_ARTIFACT_ACTION = (
+    "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+)
+DOWNLOAD_ARTIFACT_ACTION = (
+    "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
+)
 
 
 def _workflow(name: str) -> str:
@@ -65,23 +71,34 @@ def test_only_published_github_releases_can_upload_to_pypi() -> None:
     assert set(events) == {"release"}
     assert _mapping(events["release"])["types"] == ["published"]
     jobs = _mapping(document["jobs"])
-    assert set(jobs) == {"final", "rc"}
-    for job_name, prerelease_expression in (
+    assert set(jobs) == {
+        "final_build",
+        "final_publish",
+        "rc_build",
+        "rc_publish",
+    }
+    for release_kind, prerelease_expression in (
         ("final", "!github.event.release.prerelease"),
         ("rc", "github.event.release.prerelease"),
     ):
-        job = _mapping(jobs[job_name])
-        assert prerelease_expression in cast("str", job["if"])
-        assert _mapping(job["permissions"]) == {
-            "contents": "read",
-            "id-token": "write",
-        }
-        assert _mapping(job["environment"])["name"] == "pypi"
-        steps = _steps(job)
-        upload_steps = [step for step in steps if step.get("uses") == PYPI_ACTION]
-        assert len(upload_steps) == 1
+        build_job_name = f"{release_kind}_build"
+        build_job = _mapping(jobs[build_job_name])
+        assert prerelease_expression in cast("str", build_job["if"])
+        assert _mapping(build_job["permissions"]) == {"contents": "read"}
+        assert "environment" not in build_job
+        build_steps = _steps(build_job)
+        assert all(step.get("uses") != PYPI_ACTION for step in build_steps)
+        artifact_steps = [
+            step for step in build_steps if step.get("uses") == UPLOAD_ARTIFACT_ACTION
+        ]
+        assert len(artifact_steps) == 1
+        artifact_with = _mapping(artifact_steps[0]["with"])
+        assert artifact_with["path"] == "dist/*"
+        assert "github.event.release.tag_name" in cast("str", artifact_with["name"])
         verification_steps = [
-            step for step in steps if str(step.get("name", "")).startswith("Verify ")
+            step
+            for step in build_steps
+            if str(step.get("name", "")).startswith("Verify ")
         ]
         assert any(
             "--dist dist" in str(step.get("run", "")) for step in verification_steps
@@ -89,11 +106,30 @@ def test_only_published_github_releases_can_upload_to_pypi() -> None:
         assert any(
             step.get("name") == "Rebuild wheel from sdist"
             and "scripts.rebuild_wheel_from_sdist" in str(step.get("run", ""))
-            for step in steps
+            for step in build_steps
         )
         assert any(
-            "build/sdist-wheel/*.whl" in str(step.get("run", "")) for step in steps
+            "build/sdist-wheel/*.whl" in str(step.get("run", ""))
+            for step in build_steps
         )
+
+        publish_job = _mapping(jobs[f"{release_kind}_publish"])
+        publish_condition = cast("str", publish_job["if"])
+        assert prerelease_expression in publish_condition
+        assert f"needs.{build_job_name}.result == 'success'" in publish_condition
+        assert publish_job["needs"] == build_job_name
+        assert _mapping(publish_job["permissions"]) == {"id-token": "write"}
+        assert _mapping(publish_job["environment"])["name"] == "pypi"
+        publish_steps = _steps(publish_job)
+        assert all("run" not in step for step in publish_steps)
+        assert [step.get("uses") for step in publish_steps] == [
+            DOWNLOAD_ARTIFACT_ACTION,
+            PYPI_ACTION,
+        ]
+        download_with = _mapping(publish_steps[0]["with"])
+        assert download_with["path"] == "dist"
+        assert download_with["name"] == artifact_with["name"]
+        assert _mapping(publish_steps[1]["with"])["packages-dir"] == "dist"
     assert "  release:" in publish
     assert "types: [published]" in publish
     assert "\n  push:" not in publish
@@ -109,6 +145,8 @@ def test_only_published_github_releases_can_upload_to_pypi() -> None:
     assert publish.count("--dist dist") == 4
     assert publish.count("python -m scripts.rebuild_wheel_from_sdist") == 2
     assert publish.count("build/sdist-wheel/*.whl") == 2
+    assert publish.count(UPLOAD_ARTIFACT_ACTION) == 2
+    assert publish.count(DOWNLOAD_ARTIFACT_ACTION) == 2
 
 
 def test_continuous_and_build_only_workflows_cannot_upload() -> None:
@@ -129,7 +167,11 @@ def test_continuous_and_build_only_workflows_cannot_upload() -> None:
     nightly_events = _mapping(_workflow_document("nightly.yml")["on"])
     assert set(nightly_events) == {"schedule", "workflow_dispatch"}
     assert isinstance(nightly_events["schedule"], list)
-    assert "retention-days: 14" in _workflow("nightly.yml")
+    nightly = _workflow("nightly.yml")
+    assert "retention-days: 14" in nightly
+    assert 'id: source\n        run: echo "sha=$(git rev-parse HEAD)"' in nightly
+    assert "bioextract-nightly-${{ steps.source.outputs.sha }}" in nightly
+    assert "bioextract-nightly-${{ github.sha }}" not in nightly
     release_build = _workflow("release-build.yml")
     release_events = _mapping(_workflow_document("release-build.yml")["on"])
     assert set(release_events) == {"push", "workflow_dispatch"}

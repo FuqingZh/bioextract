@@ -78,6 +78,35 @@ def test_distribution_guard_rejects_source_without_scm_checkout(
         require_clean_distribution_source(tmp_path, target="sdist")
 
 
+@pytest.mark.parametrize("target", ["wheel", "sdist"])
+def test_distribution_guard_rejects_source_nested_under_parent_checkout(
+    tmp_path: Path,
+    target: str,
+) -> None:
+    _initialize_repository(tmp_path)
+    nested_source = tmp_path / "build" / "copied-source"
+    nested_source.mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="does not own its Git checkout"):
+        require_clean_distribution_source(nested_source, target=target)
+
+
+def test_valid_sdist_source_can_rebuild_inside_parent_checkout(tmp_path: Path) -> None:
+    _initialize_repository(tmp_path)
+    nested_source = tmp_path / "build" / "bioextract-0.8.0"
+    nested_source.mkdir(parents=True)
+    nested_source.joinpath("pyproject.toml").write_text(
+        '[project]\nname = "bioextract"\nversion = "0.8.0"\n',
+        encoding="utf-8",
+    )
+    nested_source.joinpath("PKG-INFO").write_text(
+        "Metadata-Version: 2.4\nName: bioextract\nVersion: 0.8.0\n",
+        encoding="utf-8",
+    )
+
+    require_clean_distribution_source(nested_source, target="wheel")
+
+
 def _write_actual_build_project(path: Path) -> None:
     package = path / "src" / "bioextract"
     scripts = path / "scripts"

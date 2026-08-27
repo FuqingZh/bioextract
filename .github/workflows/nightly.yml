@@ -25,6 +25,10 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Record checked-out main commit
+        id: source
+        run: echo "sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
@@ -69,7 +73,7 @@ jobs:
       - name: Retain finite-lived nightly artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: bioextract-nightly-${{ github.sha }}
+          name: bioextract-nightly-${{ steps.source.outputs.sha }}
           path: dist/*
           if-no-files-found: error
           retention-days: 14
