@@ -1,0 +1,124 @@
+{
+  "schema": "bioextract-20260818-r2-go-catalog-repair-readback-v1",
+  "observed_at": "2026-08-27",
+  "release_id": "20260818-r2",
+  "manifest": {
+    "path": "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/meta/releases/20260818-r2/manifest.toml",
+    "before_bytes": 10527,
+    "before_sha256": "4e4ccbdace7d343187030322bdb41b4b13dd188ab4de6432128c87ad7697070b",
+    "after_bytes": 10543,
+    "after_sha256": "c84dac7316010dbd65000f2be57d2a1f468fa8c332b3a00c8e4ebf53fd785e7d",
+    "schema_version": "biofetch-manifest-v2",
+    "resource_root": "../../../resources",
+    "database_count": 16,
+    "snapshot_count": 30,
+    "file_count": 1364339,
+    "total_bytes": 369412700369,
+    "native_builder": "/home/fqzhang/project/biofetch/dist/biofetch manifest build RESOURCE_ROOT --output STAGE_DIR --formats toml --workers 1",
+    "strict_loader": "bioinfo_resource_tools.manifest.load_manifest: passed",
+    "snapshot_membership_added": 0,
+    "snapshot_membership_removed": 0,
+    "changed_snapshot_count": 1,
+    "changed_snapshot": "kegg/pathway/2026-04"
+  },
+  "catalog": {
+    "path": "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/meta/releases/20260818-r2/catalog.toml",
+    "before_bytes": 16006,
+    "before_sha256": "83e40c5e2b599ae690b3715b808ac509db0633f87e6418c7f1da41c677c571af",
+    "after_bytes": 16091,
+    "after_sha256": "e379cf789ed22b2aecfc4e434f0c27f8c004763695ff59f65c557a9292ac0266",
+    "schema_version": "bioinfo-publication-catalog-v1",
+    "publication_count": 10,
+    "publication_bytes": 54080167936,
+    "skipped_snapshot_count": 20,
+    "table_count": 99,
+    "validation_issue_count": 8,
+    "source_manifest_matches_final_manifest": true,
+    "non_go_publications_semantically_equal_to_before": true,
+    "changed_publication_count": 1,
+    "changed_publication": "go/ontology/2026-01-23/tidy/data.duckdb"
+  },
+  "go_publication": {
+    "path": "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/resources/go/ontology/2026-01-23/tidy/data.duckdb",
+    "bytes": 18362368,
+    "sha256": "5e692157a034f3a32f5a88feea4385263cc057ff11c66fe5ef47de03040c0826",
+    "resource_name": "go",
+    "resource_schema_version": "go-obo-tidy-v0.2",
+    "source_schema_profile": "gene-ontology-obo-v1",
+    "metadata_schema_version": "2",
+    "package_version": "0.6.0",
+    "generated_at": "2026-08-17T17:03:01.331483Z",
+    "validation_status": "passed",
+    "validation_issue_count": 0,
+    "table_counts_verified": true,
+    "table_counts": {
+      "subset_definition": 22,
+      "subset_membership": 3300,
+      "term": 48251,
+      "term_alternate_id": 3646,
+      "term_ancestor": 459025,
+      "term_depth": 48251,
+      "term_relation": 73004,
+      "term_synonym": 129379,
+      "term_xref": 26432
+    },
+    "source_file_count": 1,
+    "column_mapping_count": 0,
+    "provenance_table_count": 5,
+    "installed_inspector": "/home/fqzhang/project/joint_omics/.venv/bin/python; bioextract==0.6.0; inspect_publication(verify_table_counts=True)"
+  },
+  "go_snapshot_lock": {
+    "path": "go/ontology/2026-01-23/manifest.lock",
+    "bytes": 2128,
+    "sha256": "f434edeeef6230050e4527b5296366522ffb73adefc26e29813d85d66ae8348e",
+    "file_count": 9,
+    "total_bytes": 710896794,
+    "manifest_catalog_identity_closed": true
+  },
+  "species_registry": {
+    "path": "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/meta/releases/20260818-r2/species_registry.tsv",
+    "bytes": 804566,
+    "sha256": "79411dffe1a8e69ccc23af765a3b0ceaa69792c182d5ed93041b062d01b82194",
+    "changed": false
+  },
+  "recovery": {
+    "home_backup_directory": "/home/fqzhang/tmp/bioextract-49-r2-original",
+    "cephfs_hidden_rollback_directory": "/cephfs_data/genostack_v3/genostack_php/public_file_data/database/bioinfo/meta/releases/.20260818-r2-rollback-bioextract-49-83e40c5e",
+    "old_manifest_sha256": "4e4ccbdace7d343187030322bdb41b4b13dd188ab4de6432128c87ad7697070b",
+    "old_catalog_sha256": "83e40c5e2b599ae690b3715b808ac509db0633f87e6418c7f1da41c677c571af",
+    "species_registry_sha256": "79411dffe1a8e69ccc23af765a3b0ceaa69792c182d5ed93041b062d01b82194",
+    "retained": true
+  },
+  "publication_write": {
+    "scientific_publication_rebuilt": false,
+    "publication_artifact_modified": false,
+    "old_artifact_deleted": false,
+    "catalog_current_sha_precondition_enforced": true,
+    "candidate_files_fsynced_and_parsed": true,
+    "replacement": "manifest.toml and catalog.toml were installed by consecutive same-directory os.replace calls followed by release-directory fsync",
+    "directory_switch_not_used": "the three-file directory-switch preference arrived after the consecutive file replacement had completed; rollback was reconstructed from the pre-write backups instead of replaying a production rollback"
+  },
+  "joint_omics_admission": {
+    "source_commit": "73571441f2f2dd56d5196f3865c4bf19fc3c31a5",
+    "source_boundary": "/home/fqzhang/tmp/joint-omics-7357144-source",
+    "worktree_modified": false,
+    "profile": "proteome_metabolome-enrichment-v1",
+    "release": "20260818-r2",
+    "manifest_sha256": "c84dac7316010dbd65000f2be57d2a1f468fa8c332b3a00c8e4ebf53fd785e7d",
+    "catalog_sha256": "e379cf789ed22b2aecfc4e434f0c27f8c004763695ff59f65c557a9292ac0266",
+    "routed_selector_count": 5,
+    "artifact_sha256_verification": "passed",
+    "verdict": "passed"
+  },
+  "validation_selection": {
+    "claim": "the rolling 20260818-r2 release pair is closed and the sole stale GO catalog entry now describes the unchanged formal metadata-v2 publication",
+    "affected_seams": [
+      "biofetch aggregate manifest",
+      "release catalog to manifest pairing",
+      "GO publication identity and physical table counts",
+      "joint_omics rolling-release admission",
+      "repository audit evidence"
+    ],
+    "verdict": "verified_ready"
+  }
+}
