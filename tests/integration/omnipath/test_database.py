@@ -60,7 +60,9 @@ def test_extract_enzsub_minimal_round_trip(tmp_path: Path) -> None:
     file_enzsub = tmp_path / "enzsub.tsv"
     _write_demo_omnipath_files(enzsub=file_enzsub)
 
-    selection = OmniPathDatabase.from_files(enzsub=file_enzsub).select_ids(["P31749"])
+    selection = OmniPathDatabase.from_files(enzsub=file_enzsub).select_ids(
+        ["sp|P31749|AKT1_HUMAN", "P31749"]
+    )
 
     df_enzsub = selection.enzsub().collect()
     df_unmapped = selection.unmatched_ids().collect()
@@ -360,12 +362,18 @@ def test_extract_rejects_missing_required_resource_file(tmp_path: Path) -> None:
         interactions=file_interactions
     ).select_ids(["ERBB2"])
 
+    with pytest.raises(ValueError, match="interactions source is absent"):
+        selection_enzsub_only.dataset.scan_interactions()
+    with pytest.raises(ValueError, match="enzsub source is absent"):
+        selection_inter_only.dataset.scan_enzsub()
     with pytest.raises(
-        (ValueError, pl.exceptions.ComputeError), match="without interactions file"
+        (ValueError, pl.exceptions.ComputeError),
+        match="interactions source is absent from this snapshot",
     ):
         selection_enzsub_only.with_interactions().interactions().collect()
     with pytest.raises(
-        (ValueError, pl.exceptions.ComputeError), match="without enzsub file"
+        (ValueError, pl.exceptions.ComputeError),
+        match="enzsub source is absent from this snapshot",
     ):
         selection_inter_only.with_enzsub().enzsub().collect()
 
@@ -418,6 +426,18 @@ def test_selection_exposes_group_mode(tmp_path: Path) -> None:
 
     assert db.select_ids(["P31749"]).is_grouped is False
     assert db.select_groups({"G1": ["P31749"]}).is_grouped is True
+
+
+def test_omnipath_rejects_invalid_uniprot_pipe_input(tmp_path: Path) -> None:
+    file_enzsub = tmp_path / "enzsub.tsv"
+    _write_demo_omnipath_files(enzsub=file_enzsub)
+    database = OmniPathDatabase.from_files(enzsub=file_enzsub)
+
+    for invalid in ("db|P31749|AKT1", "sp||AKT1", "sp|P31749|"):
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_ids([invalid], namespace="protein")
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_groups({"case": [invalid]}, namespace="protein")
 
 
 def test_group_selection_matches_unique_ids_then_expands_membership(

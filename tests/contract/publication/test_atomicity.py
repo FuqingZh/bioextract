@@ -6,6 +6,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+import bioextract._publication as publication
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
 
 
@@ -66,6 +67,7 @@ def test_failed_replacement_preserves_existing_publication(
         source_schema_profile="bad-source-v1",
         build_id_prefix="bad",
         assets=(TidyAsset("relation.parquet", "canonical", "relation"),),
+        resource_name="bad",
     )
     with pytest.raises(pl.exceptions.InvalidOperationError):
         dataset.write_duckdb(path, if_exists="replace")
@@ -93,7 +95,56 @@ def test_duckdb_transfer_parquet_directory_is_cleaned_on_success_and_failure(
         source_schema_profile="bad-source-v1",
         build_id_prefix="bad",
         assets=(TidyAsset("relation.parquet", "canonical", "relation"),),
+        resource_name="bad",
     )
     with pytest.raises(pl.exceptions.InvalidOperationError):
         failing.write_duckdb(tmp_path / "failure.duckdb")
     assert not list(tmp_path.glob("bioextract-relations-*"))
+
+
+def test_unavailable_package_version_fails_before_output_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "not-created" / "publication.duckdb"
+
+    def unavailable() -> str:
+        raise RuntimeError("installed package metadata is unavailable")
+
+    monkeypatch.setattr(publication, "require_package_version", unavailable)
+    with pytest.raises(RuntimeError, match="metadata is unavailable"):
+        _dataset(tmp_path).write_duckdb(destination)
+
+    assert not destination.parent.exists()
+
+
+def test_unavailable_package_version_preserves_existing_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    destination = tmp_path / "publication.duckdb"
+    _dataset(tmp_path).write_duckdb(destination)
+    original = destination.read_bytes()
+
+    def unavailable() -> str:
+        raise RuntimeError("installed package metadata is unavailable")
+
+    monkeypatch.setattr(publication, "require_package_version", unavailable)
+    with pytest.raises(RuntimeError, match="metadata is unavailable"):
+        _dataset(tmp_path).write_duckdb(destination, if_exists="replace")
+
+    assert destination.read_bytes() == original
+    assert not list(tmp_path.glob(f".{destination.name}.*"))
+
+
+@pytest.mark.parametrize("package_version", ["unknown", "01.0.0", "not-a-version"])
+def test_package_version_must_be_resolved_canonical_pep440(
+    monkeypatch: pytest.MonkeyPatch,
+    package_version: str,
+) -> None:
+    def resolved_version(_name: str) -> str:
+        return package_version
+
+    monkeypatch.setattr(publication, "version", resolved_version)
+    with pytest.raises(RuntimeError, match="package version"):
+        publication.require_package_version()

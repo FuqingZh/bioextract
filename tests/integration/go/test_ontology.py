@@ -8,6 +8,7 @@ import polars as pl
 import pytest
 
 from bioextract import GODatabase
+from bioextract.errors import IntegrityError
 from bioextract.go.go import GoSubsetId
 
 
@@ -76,6 +77,20 @@ is_a: GO:0005575 ! cellular_component
     )
 
 
+def write_dangling_parent_obo(file_in: Path) -> None:
+    file_in.write_text(
+        """format-version: 1.2
+
+[Term]
+id: GO:0000001
+name: dangling child
+namespace: biological_process
+is_a: GO:9999999 ! missing parent
+""",
+        encoding="utf-8",
+    )
+
+
 @pytest.mark.parametrize("container", ["plain", "gzip", "zip", "tar", "directory"])
 def test_go_obo_container_is_detected_internally(
     tmp_path: Path,
@@ -106,6 +121,38 @@ def test_go_obo_container_is_detected_internally(
 
     tidy = GODatabase.from_obo(source).build_tidy()
     assert tidy.frames["term"].select(pl.len()).collect().item() == 6
+
+
+def test_go_directory_rejects_false_obo_suffix(tmp_path: Path) -> None:
+    source = tmp_path / "release"
+    source.mkdir()
+    write_minimal_obo(source / "go.obo.bak")
+
+    with pytest.raises(ValueError, match="found 0"):
+        GODatabase.from_obo(source)
+
+
+def test_go_directory_ignores_false_suffix_beside_supported_obo(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "release"
+    source.mkdir()
+    write_minimal_obo(source / "go.obo")
+    write_minimal_obo(source / "go.obo.bak")
+
+    tidy = GODatabase.from_obo(source).build_tidy()
+    assert tidy.frames["term"].select(pl.len()).collect().item() == 6
+
+
+def test_go_source_rejects_dangling_hierarchical_parent(tmp_path: Path) -> None:
+    source = tmp_path / "dangling.obo"
+    write_dangling_parent_obo(source)
+
+    with pytest.raises(
+        ValueError,
+        match="GO:0000001.*GO:9999999",
+    ):
+        GODatabase.from_obo(source).build_tidy()
 
 
 def test_go_db_build_tidy_exposes_frames_and_writes_duckdb(tmp_path: Path) -> None:
@@ -183,6 +230,23 @@ def test_go_duckdb_reopen_preserves_domain_and_native_sql_behavior(
     finally:
         first.close()
         second.close()
+
+
+def test_go_duckdb_reopen_rejects_dangling_hierarchical_parent(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "go-basic.obo"
+    publication = tmp_path / "go.duckdb"
+    write_minimal_obo(source)
+    GODatabase.from_obo(source).write_duckdb(publication)
+    with duckdb.connect(str(publication)) as connection:
+        connection.execute("DELETE FROM term WHERE go_id = 'GO:0000001'")
+
+    with pytest.raises(
+        IntegrityError,
+        match="GO:0000002.*GO:0000001",
+    ):
+        GODatabase.from_duckdb(publication)
 
 
 def test_go_duckdb_reopen_uses_declared_schemas_for_nullable_synonym_types(

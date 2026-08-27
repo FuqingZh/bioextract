@@ -1,7 +1,7 @@
 # GO And KEGG Tidy Test Standard
 
-Version: v1.1
-Date: 2026-08-10
+Version: v1.2
+Date: 2026-08-27
 Status: current
 
 ## Scope
@@ -26,7 +26,8 @@ verifies:
   ancestor selection, fresh native SQL connections, and read-only enforcement
 - publication domain queries that avoid complete-frame materialization and use
   parameterized DuckDB input relations
-- bounded metadata-v1 GO identity, profile, exact inventory, physical-schema,
+- supported-suffix directory discovery, hierarchical-endpoint rejection, and
+  bounded metadata-v2 GO identity, profile, exact inventory, physical-schema,
   and pinned-file validation
 
 [`tests/unit/kegg/brite/test_parser.py`](../../tests/unit/kegg/brite/test_parser.py)
@@ -36,7 +37,8 @@ verify:
 
 - pathway-level and entry/KO parsing variants
 - BRITE tidy frame schemas and one-table DuckDB output
-- metadata-v1 profile/table validation and fresh read-only native connections
+- metadata-v2 profile/table validation, pinned-file replacement rejection, and
+  fresh read-only native connections
 
 The tests use compact local fixtures. They do not call remote GO or KEGG
 services and do not calculate enrichment statistics.

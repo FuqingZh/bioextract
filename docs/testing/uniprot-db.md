@@ -5,7 +5,7 @@ The focused suite verifies:
 - raw plain/gzip, Parquet, and legacy hive idmapping scans;
 - exact 22-column `snake_case` schema validation and scoped eager reads;
 - atomic one-table idmapping DuckDB publication with no sidecar;
-- metadata-v1 exactness and idmapping/knowledgebase profile discrimination;
+- metadata-v2 exactness and idmapping/knowledgebase profile discrimination;
 - source/reopened mapping parity, taxon scoping, all-taxa safety, fresh
   caller-owned read-only connections, and native SQL;
 - role declaration independent of basename and compression suffix;
@@ -21,6 +21,10 @@ The focused suite verifies:
 - atomic DuckDB publication, inventory parity, and read-only native SQL;
 - primary/secondary/isoform-ID namespace selection, grouping, core extractors,
   and unmatched IDs.
+- strict complete UniProt pipe-form normalization for UniProtKB single/grouped
+  and idmapping single selection, malformed-pipe rejection, normalized public
+  input lineage, source/reopened idmapping parity, and trim-only negative
+  controls for non-UniProtKB namespaces.
 
 The canonical repository gate is `pdm run check`. The 2026_01 full snapshot
 smoke is non-publishing and must not write CephFS.

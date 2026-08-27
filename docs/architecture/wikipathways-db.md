@@ -1,15 +1,15 @@
 # WikiPathwaysDatabase Architecture
 
-Version: v1.0
-Date: 2026-07-14
+Version: v1.1
+Date: 2026-08-27
 Status: current
 
 ## Goal
 
 `bioextract.wikipathways.WikiPathwaysDatabase` provides source-first access to
 local WikiPathways GMT snapshots. The first version is a local enrichment-input
-layer: it reads one or more GMT files and emits pathway metadata plus
-`term2gene`/`term2name` frames.
+layer: it reads one or more GMT files and emits pathway metadata through
+`pathways()`, `pathway_genes()`, and `pathway_names()`.
 
 The MVP covers:
 
@@ -27,6 +27,11 @@ It intentionally does not cover:
 - pathway topology or interaction extraction
 - gene symbol, Ensembl, UniProt, or STRING ID conversion
 - enrichment p-value calculation
+
+Selected gene input is exact NCBI Entrez Gene text after surrounding whitespace
+is trimmed. Empty values are dropped and exact duplicates collapse.
+Pipe-bearing text is not treated as a UniProt representation and remains an
+ordinary unmatched WikiPathways input.
 
 ## Official Format Contract
 
@@ -78,13 +83,14 @@ with published.connect() as connection:
     pathway_count = connection.sql("SELECT count(*) FROM pathway").fetchone()[0]
 ```
 
-`from_duckdb()` accepts only the metadata-v1 `wikipathways-gmt-v1` profile with
-the current resource schema, official content-derived release identity, the
-exact `pathway` and `pathway_gene` canonical inventory, and their recorded
-roles, column provenance, and physical schemas. Validation is bounded to
-metadata and catalogs: recorded biological row counts must be non-negative but
-are not recounted during reopen. `connect()` returns a fresh caller-owned native
-DuckDB connection in read-only mode.
+`from_duckdb()` requires metadata schema v2, the `wikipathways-gmt-v1` source
+profile, and the current resource schema. It also requires official
+content-derived release identity, the exact `pathway` and `pathway_gene`
+canonical inventory, and their recorded roles, column provenance, and physical
+schemas. Validation is bounded to metadata and catalogs: recorded biological
+row counts must be non-negative but are not recounted during reopen.
+`connect()` returns a fresh caller-owned native DuckDB connection in read-only
+mode.
 
 The reopened handle is pinned to the file identity that passed validation.
 Every domain terminal, including a previously cached selection terminal,
@@ -206,8 +212,8 @@ Every resolved actual file is stored in `_bioextract` under a deterministic
 unique logical source name, including files that contribute no rows after
 filtering. The content-derived release Version, table roles, and row counts are
 stored there as before.
-`term2name` is not duplicated because the canonical `pathway` relation already
-owns pathway names.
+Pathway names are not duplicated into another physical relation because the
+canonical `pathway` relation already owns them.
 
 ## Species Filtering
 

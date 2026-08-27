@@ -1,7 +1,7 @@
 # RheaDatabase Architecture
 
-Version: v1
-Date: 2026-07-29
+Version: v1.1
+Date: 2026-08-27
 Status: current
 
 ## Purpose
@@ -137,6 +137,13 @@ One selection uses one explicit namespace. Supported namespaces are `rhea`,
 `chebi`, `uniprot`, `ec`, `go`, `ecocyc`, `kegg_reaction`, `macie`,
 `metacyc`, and `reactome`. ChEBI lookup is exact against participant compound
 identity; the pH 7.3 mapping is not applied implicitly.
+
+For the `uniprot` namespace only, caller input may be a trimmed plain
+accession or one complete `sp|accession|entry_name` /
+`tr|accession|entry_name` representation. The public `input_id` is the
+accession. Every other pipe-bearing UniProt caller value raises `ValueError`.
+This is representation normalization inside one namespace, not conversion
+between UniProt, Rhea, ChEBI, GO, or another Rhea-owned cross-reference.
 
 Selections are immutable deferred query plans. They normalize identifiers,
 validate capabilities, and retain query policy without executing DuckDB.

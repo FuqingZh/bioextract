@@ -1,7 +1,7 @@
 # KEGG Mapping Test Standard
 
-Version: v2.1
-Date: 2026-08-14
+Version: v2.3
+Date: 2026-08-27
 Status: current
 
 Changes to KEGG mapping access must verify:
@@ -22,6 +22,8 @@ Changes to KEGG mapping access must verify:
 8. direct gene pathways remain distinct from KO-mediated pathways;
 9. namespace-aware normalization, all three selection namespaces, grouped
    lineage, multi-species matches, scoped unmatched IDs, and capability errors;
+   UniProt requires a plain accession or complete sp/tr three-field pipe form,
+   while NCBI Gene and KEGG Gene retain their existing namespace rules;
 10. source/publication parity for all public LazyFrame relations and selections;
 11. declarative publication source membership, nullable bytes/digest fields,
     no provenance-only content/stat pass, and no duplicate JSON inventory or
@@ -31,7 +33,9 @@ Changes to KEGG mapping access must verify:
 13. tamper rejection for metadata, capabilities, tables, schemas, counts,
     source rows, null invariants, and cross-species keys;
 14. atomic `if_exists` behavior and staged-failure cleanup; and
-15. rejection of the old wide `mapping` table/profile and absence of
+15. stable validation-window identity plus replacement rejection for native
+    connections, scoped handles, selections, and replayable relations; and
+16. rejection of the old wide `mapping` table/profile and absence of
     `mappings()`, mapping `build_tidy()`, limit, batch, and compatibility APIs.
 
 Focused tests use temporary fixtures only. Real-scale validation is opt-in,

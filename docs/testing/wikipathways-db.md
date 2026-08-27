@@ -1,7 +1,7 @@
 # WikiPathwaysDatabase Test Standard
 
-Version: v1.0
-Date: 2026-07-14
+Version: v1.1
+Date: 2026-08-27
 Status: current
 
 ## Scope
@@ -45,16 +45,18 @@ Mouse pathway%WikiPathways_20260510%WP1%Mus musculus	https://www.wikipathways.or
 - Duplicate `WikiPathwaysId` values within one file or across files are
   rejected.
 - Malformed pathway headers raise a targeted `ValueError`.
-- `extract_pathway()` parses pathway name, collection, version, identifier,
+- `pathways()` parses pathway name, collection, version, identifier,
   species, URL, and gene count.
-- `extract_term2gene()` emits `wiki_pathways_id, gene_id`.
-- `extract_term2name()` emits pathway display metadata.
+- `pathway_genes()` emits `wiki_pathways_id, gene_id`.
+- `pathway_names()` emits pathway display metadata.
 - A single GMT may contain multiple species.
 - `species=` filters pathway metadata and `term2gene` by row content after
   whole-dataset validation.
 - `select_ids()` trims input IDs and drops blanks.
-- `extract_mapping()` returns selected Entrez IDs joined to pathway metadata.
-- `extract_unmatched_ids()` reports IDs not present in the GMT gene sets.
+- pipe-bearing caller text remains a trimmed exact Entrez lookup/unmatched
+  value in source and reopened single/grouped selection.
+- `mappings()` returns selected Entrez IDs joined to pathway metadata.
+- `unmatched_ids()` reports IDs not present in the GMT gene sets.
 - `select_groups()` preserves `group_id`.
 - `write_duckdb()` writes pathway and pathway-gene relations in one file.
 - `_bioextract` contains every resolved actual source under deterministic
@@ -68,14 +70,16 @@ Mouse pathway%WikiPathways_20260510%WP1%Mus musculus	https://www.wikipathways.or
 ## DuckDB Reopen
 
 - Build a representative species-scoped GMT source, publish it, reopen it with
-  `from_duckdb()`, and compare pathway, term2gene, term2name, single-selection,
-  and grouped-selection outputs with the source-backed handle.
+  `from_duckdb()`, and compare `pathways()`, `pathway_genes()`,
+  `pathway_names()`, single-selection, and grouped-selection outputs with the
+  source-backed handle.
 - `connect()` returns distinct caller-owned native read-only connections,
   permits arbitrary read SQL, and rejects writes. Source-backed `connect()`
   raises `CapabilityError` without changing existing source extraction errors.
-- Reject incompatible metadata-v1 resource identity, source profile, resource
-  schema, release identity, exact physical table/view inventory, table roles,
-  column provenance, and physical column schemas.
+- Reject metadata schema v1 and require metadata schema v2, source profile
+  `wikipathways-gmt-v1`, and the current resource schema. Reject incompatible
+  resource identity, release identity, exact physical table/view inventory,
+  table roles, column provenance, and physical column schemas.
 - Reopen validation accepts non-negative recorded biological row counts without
   recounting or scanning the biological tables.
 - Reopened handles and cached selection terminals reject vanished or atomically
@@ -91,7 +95,7 @@ Use:
 
 Check that:
 
-- `extract_pathway()` is non-empty.
-- `extract_term2gene()` is non-empty.
-- `extract_term2name()` is non-empty.
+- `pathways()` is non-empty.
+- `pathway_genes()` is non-empty.
+- `pathway_names()` is non-empty.
 - tidy writing succeeds under `/tmp`.

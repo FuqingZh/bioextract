@@ -4,7 +4,6 @@ import os
 import tempfile
 from collections.abc import Iterable, Iterator, Mapping
 from datetime import UTC, datetime
-from importlib import metadata
 from itertools import islice
 from pathlib import Path
 from typing import Literal
@@ -14,6 +13,7 @@ import polars as pl
 
 from bioextract._publication import (
     METADATA_SCHEMA_VERSION,
+    require_package_version,
     validate_duckdb_metadata_v2,
 )
 
@@ -46,6 +46,7 @@ def write_rhea_duckdb(
 
     if path.exists() and if_exists == "fail":
         raise FileExistsError(path)
+    package_version = require_package_version()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     descriptor, staging_name = tempfile.mkstemp(
@@ -105,6 +106,7 @@ def write_rhea_duckdb(
             scope=scope,
             release_number=release_number,
             release_date=release_date,
+            package_version=package_version,
         )
         row_counts = _record_table_inventory(connection)
         connection.close()
@@ -725,11 +727,8 @@ def _record_metadata(
     scope: str,
     release_number: int | None,
     release_date: str | None,
+    package_version: str,
 ) -> None:
-    try:
-        bioextract_version = metadata.version("bioextract")
-    except metadata.PackageNotFoundError:
-        bioextract_version = "unknown"
     source_rows = [
         (
             name,
@@ -747,7 +746,7 @@ def _record_metadata(
         "bioextract.source_schema_profile": SOURCE_SCHEMA_PROFILE,
         "bioextract.scope": scope,
         "bioextract.generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-        "bioextract.package_version": bioextract_version,
+        "bioextract.package_version": package_version,
         "bioextract.release_version": (
             None if release_number is None else str(release_number)
         ),

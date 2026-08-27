@@ -8,6 +8,7 @@ import polars as pl
 import pytest
 
 from bioextract._publication import DuckDBWriteResult
+from bioextract.errors import IntegrityError
 from bioextract.kegg import KEGGDatabase
 from bioextract.kegg.metabolic.core import (
     KEGGMetabolicNamespace,
@@ -151,6 +152,53 @@ def test_streaming_parser_and_canonical_relations(tmp_path: Path) -> None:
             "SELECT count(*) FROM _bioextract.validation_issue"
         ).fetchone() == (1,)
     assert path.is_file()
+
+
+def test_reopened_metabolic_handle_rejects_replaced_publication(
+    tmp_path: Path,
+) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    stale, target = publish(first_root)
+    selection = stale.select_ids(["CHEBI:15377"], namespace="chebi")
+    matches = selection.matches()
+    unmatched = selection.unmatched_ids()
+    reactions = selection.reactions()
+    assert matches.collect().height == 1
+    assert unmatched.collect().is_empty()
+    _, replacement = publish(second_root)
+
+    replacement.replace(target)
+
+    with pytest.raises(IntegrityError, match="metabolic publication was replaced"):
+        stale.connect()
+    with pytest.raises(
+        (IntegrityError, pl.exceptions.ComputeError),
+        match="metabolic publication was replaced",
+    ):
+        matches.collect()
+    with pytest.raises(
+        (IntegrityError, pl.exceptions.ComputeError),
+        match="metabolic publication was replaced",
+    ):
+        unmatched.collect()
+    with pytest.raises(
+        (IntegrityError, pl.exceptions.ComputeError),
+        match="metabolic publication was replaced",
+    ):
+        reactions.collect()
+    with pytest.raises(IntegrityError, match="metabolic publication was replaced"):
+        stale.evaluate_modules(["K00001"])
+    with pytest.raises(IntegrityError, match="metabolic publication was replaced"):
+        stale.select_ids(["CHEBI:15377"], namespace="chebi")
+
+    fresh = KEGGDatabase.from_duckdb(target)
+    assert (
+        fresh.select_ids(["CHEBI:15377"], namespace="chebi").matches().collect().height
+        == 1
+    )
 
 
 def test_read_only_open_selection_and_extractors(tmp_path: Path) -> None:

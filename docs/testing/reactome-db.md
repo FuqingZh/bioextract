@@ -1,7 +1,7 @@
 # ReactomeDatabase Test Standard
 
-Version: v1.2
-Date: 2026-08-18
+Version: v1.3
+Date: 2026-08-27
 Status: current
 
 ## Scope
@@ -49,6 +49,10 @@ tree.
 - NCBI non-decimal official identifiers remain selectable.
 - Existing UniProt selected output remains byte-compatible; reaction output is
   target-specific and source-column-specific.
+- UniProt single/grouped inputs accept only plain accessions or complete
+  sp/tr three-field pipe forms; malformed pipe values fail before lookup.
+  NCBI pipe-bearing text remains exact after trimming, and source/reopened
+  canonical input lineage is identical.
 - Human entity/GMT relations return all rows unscoped or for Homo sapiens and
   an empty stable-schema relation for other species.
 - Mapping closure, entity top-level ancestry, cycles, and metadata endpoint

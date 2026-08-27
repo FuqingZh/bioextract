@@ -1,7 +1,7 @@
 # InterProDatabase Architecture
 
-Version: v1.0
-Date: 2026-07-14
+Version: v1.1
+Date: 2026-08-27
 Status: current
 
 ## Goal
@@ -56,13 +56,20 @@ db = InterProDatabase.from_mapping_files(
 
 lf_mapping = db.mappings()
 
-selection = db.select_ids(["P04637"], namespace="uniprot")
+selection = db.select_ids(["P04637"])
 lf_selected = selection.mappings()
 lf_unmapped = selection.unmatched_ids()
 lf_pfam = selection.pfam_annotations()
 ```
 
 Grouped selections mirror the other DB contracts by prepending `group_id`.
+
+Selection input is caller-owned UniProt representation normalization.
+`select_ids()` and `select_groups()` accept a trimmed plain accession or one
+complete `sp|accession|entry_name` / `tr|accession|entry_name` value. The
+accession becomes public `input_id` and the unique lookup/membership key.
+Every other pipe-bearing caller value raises `ValueError`; official
+`protein2ipr.dat.gz` rows continue through the InterPro source parser.
 
 Publication writes every relation available from the constructed handle:
 
@@ -218,7 +225,8 @@ xref outputs remain lazy until the internal transfer step into staged DuckDB.
 
 ## Selection Contract
 
-Accepted `namespace` values:
+The selection namespace is fixed to UniProt; callers do not pass a namespace
+parameter. Published selection rows record:
 
 ```text
 uniprot

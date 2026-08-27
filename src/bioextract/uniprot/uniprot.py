@@ -15,6 +15,7 @@ from bioextract._lazy import (
     register_replayable_source,
 )
 from bioextract._publication import DuckDBWriteResult
+from bioextract._shared import normalize_uniprot_selection_id
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
 from bioextract.errors import CapabilityError, IntegrityError
 
@@ -265,6 +266,20 @@ class UniProtDatabase:
     ) -> UniProtSelection | UniProtMappingSelection:
         """Select proteins through one supported identifier namespace.
 
+        Args:
+            ids: Identifiers in the declared namespace. The uniprot namespace
+                accepts a plain accession or one complete
+                sp|accession|entry_name / tr|accession|entry_name value.
+                Other namespaces retain trimmed exact text.
+            namespace: UniProt accession for idmapping; UniProtKB additionally
+                supports its declared entry, gene, RefSeq, Ensembl, and isoform
+                namespaces.
+            taxon_ids: Optional NCBI taxonomy filter.
+
+        Raises:
+            ValueError: If a UniProt pipe-bearing caller value is not one
+                complete supported form.
+
         Examples:
             >>> database.select_ids(["P04637"], namespace="uniprot")  # doctest: +SKIP
             UniProtSelection(...)
@@ -277,9 +292,9 @@ class UniProtDatabase:
                 )
             input_ids = tuple(
                 dict.fromkeys(
-                    str(identifier).strip()
+                    normalized
                     for identifier in ids
-                    if str(identifier).strip()
+                    if (normalized := normalize_uniprot_selection_id(identifier))
                 )
             )
             return UniProtMappingSelection(
@@ -298,6 +313,19 @@ class UniProtDatabase:
         taxon_ids: Iterable[str | int] | None = None,
     ) -> UniProtSelection:
         """Select identifiers while preserving caller group labels.
+
+        The uniprot namespace applies the same strict pipe-form contract as
+        select_ids(). Idmapping products intentionally do not support grouped
+        selection.
+
+        Args:
+            ids_by_group: Non-empty group labels mapped to identifiers.
+            namespace: One UniProtKB selection namespace.
+            taxon_ids: Optional NCBI taxonomy filter.
+
+        Raises:
+            ValueError: If group labels collide after trimming or a UniProt
+                pipe-bearing caller value is malformed.
 
         Examples:
             >>> database.select_groups({"case": ["P04637"]}, namespace="uniprot")  # doctest: +SKIP

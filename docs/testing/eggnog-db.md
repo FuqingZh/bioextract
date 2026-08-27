@@ -1,7 +1,7 @@
 # EggNOGDatabase Test Standard
 
-Version: v1.0
-Date: 2026-07-14
+Version: v1.1
+Date: 2026-08-27
 Status: current
 
 ## Scope
@@ -26,10 +26,12 @@ It does not cover:
 - plain SQLite is queried directly without a warning.
 - `from_sqlite()` detects gzip transport by content and warns exactly once at
   the caller location.
-- `EggnogSelection.extract_mapping()` expands OGs and COG categories correctly.
+- `EggnogSelection.mappings()` expands OGs and COG categories correctly.
 - `select_ids()` returns filtered rows in the fixed `eggnog_protein` namespace.
 - `select_groups()` resolves one globally unique ID set and preserves `group_id`.
 - unmapped IDs are reported correctly.
+- pipe-bearing caller text remains a trimmed exact eggNOG protein input; it is
+  not parsed as a UniProt representation in single or grouped selection.
 - mapping and unmatched extractors reuse one Selection cache.
 - gzip SQLite snapshots use `temp_dir` only as scratch storage, clean up after
   success and failure, and create no persistent decompressed copy.

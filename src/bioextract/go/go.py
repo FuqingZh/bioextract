@@ -29,6 +29,7 @@ from ._query import (
 from .ontology.constant import (
     ASSET_SPECS,
     GO_SUBSET_GOSLIM_GENERIC,
+    HIERARCHICAL_RELATION_TYPES,
     MEDIA_TYPE_OBO,
     SCHEMA_ALT_ID,
     SCHEMA_ANCESTOR,
@@ -77,6 +78,14 @@ _GO_FRAME_SCHEMAS = {
     "ancestor_all": SCHEMA_ANCESTOR,
     "depth": SCHEMA_DEPTH,
 }
+_GO_DIRECTORY_INPUT_SUFFIXES = (
+    ".obo",
+    ".obo.gz",
+    ".zip",
+    ".tar",
+    ".tgz",
+    ".tar.gz",
+)
 
 
 class GoSubsetId(StrEnum):
@@ -252,6 +261,10 @@ class GODatabase:
             A `TidyDataset` with `term`, `edge`, `synonym`, `xref`, `alt_id`,
             `subset_membership`, `subset_definition`, `ancestor_all`, and
             `depth` frames.
+
+        Raises:
+            ValueError: If a source OBO hierarchical edge names a child or
+                parent that is absent from the term inventory.
 
         Examples:
             Inspect the frame names built from a local OBO snapshot:
@@ -606,10 +619,7 @@ def _resolve_obo_input(path: Path) -> Path:
         candidate
         for candidate in path.rglob("*")
         if candidate.is_file()
-        and (
-            ".obo" in candidate.name.lower()
-            or candidate.name.lower().endswith((".zip", ".tar", ".tgz"))
-        )
+        and candidate.name.lower().endswith(_GO_DIRECTORY_INPUT_SUFFIXES)
     ]
     if len(candidates) != 1:
         raise ValueError(
@@ -855,6 +865,25 @@ def _validate_go_publication(path: Path) -> None:
                 "SELECT count(*) FROM _bioextract.column_mapping"
             ).fetchone() != (0,):
                 raise ValueError("GO column provenance inventory is unsupported")
+            dangling = connection.execute(
+                """
+                SELECT relation.child_go_id, relation.parent_go_id
+                FROM term_relation AS relation
+                LEFT JOIN term AS child
+                  ON child.go_id = relation.child_go_id
+                LEFT JOIN term AS parent
+                  ON parent.go_id = relation.parent_go_id
+                WHERE relation.relation_type IN (?, ?)
+                  AND (child.go_id IS NULL OR parent.go_id IS NULL)
+                LIMIT 1
+                """,
+                sorted(HIERARCHICAL_RELATION_TYPES),
+            ).fetchone()
+            if dangling is not None:
+                raise ValueError(
+                    "GO hierarchical edge references missing term: "
+                    f"child {dangling[0]!r}, parent {dangling[1]!r}"
+                )
     except duckdb.Error as error:
         raise ValueError(f"Cannot open GO DuckDB publication: {path}") from error
 

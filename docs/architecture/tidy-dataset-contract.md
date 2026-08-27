@@ -1,7 +1,7 @@
 # Materialized Dataset Contract
 
-Version: v1.1
-Date: 2026-08-13
+Version: v1.2
+Date: 2026-08-27
 Status: current
 
 ## Purpose
@@ -34,6 +34,11 @@ Every writer requires `path`. Readers use `XDatabase.from_duckdb(path)`, and
 every `connect()` call returns a fresh caller-owned connection opened read-only.
 The library does not infer a semantic filename. The versioned CephFS convention
 is `tidy/data.duckdb`, but filenames are not schema identity.
+
+Every `TidyDataset` construction also requires an explicit, non-empty
+`resource_name`. That value is the publication's resource identity. An internal
+`build_id_prefix` is only a human-readable execution label and never supplies,
+defaults, or repairs `resource_name`.
 
 ## Naming
 
@@ -71,7 +76,10 @@ _bioextract.validation_issue
 ```
 
 `metadata` stores resource identity, resource schema version, metadata schema
-version, scope, package version, and generation time. `source_file` stores
+version, scope, package version, and generation time. A new publication records
+one resolved, canonical PEP 440 version from the installed `bioextract`
+distribution. If that identity is unavailable or unresolved, the writer fails
+before creating a destination parent, staging file, or database. `source_file` stores
 logical source name, display path, optional adapter-known bytes, media type,
 and optional SHA-256. Writers do not stat or reread a source solely to fill
 provenance fields.
@@ -93,6 +101,11 @@ are implementation details and never publication artifacts.
 `if_exists="fail"` is the default. `"replace"` preserves the previous target
 until a complete new staging file is ready.
 
+Package identity resolution and destination validation precede every staging
+or output mutation. Formal publication candidates run from a fresh installation
+of the exact wheel being delivered; editable installations may produce only
+temporary development publications.
+
 ## Publication boundary
 
 `TidyDataset` has no directory writer and resources expose no `write_tidy()`
@@ -107,4 +120,11 @@ v2 never falls back to or dual-writes `bioextract.schema_version`.
 `_bioextract.source_file` is the sole source inventory;
 `bioextract.sources` is neither written nor accepted.
 An internal `build_id_prefix` may include a path stem for a human-readable
-execution label, but that label is never release or source-schema evidence.
+execution label, but that label is never resource identity, release evidence,
+or source-schema evidence.
+
+Existing metadata-v2 publications whose literal package version is
+`"unknown"` remain readable and inspectable for compatibility. That literal is
+an observable unresolved sentinel, not a canonical package identity: it cannot
+satisfy package/publication compatibility or formal delivery preflight. This
+reader compatibility does not add another metadata field or schema version.

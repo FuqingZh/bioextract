@@ -1,97 +1,199 @@
 name: py-publish
 
 on:
-  push:
-    tags:
-      - "*.*.*"
-  workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: read
 
 concurrency:
-  group: py-publish-${{ github.ref }}
+  group: py-publish-${{ github.event.release.tag_name }}
   cancel-in-progress: false
 
 jobs:
-  build:
+  final_build:
+    if: ${{ github.event.action == 'published' && !github.event.release.prerelease }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     env:
       PDM_IGNORE_SAVED_PYTHON: "1"
       PDM_VENV_IN_PROJECT: "1"
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ github.event.release.tag_name }}
           fetch-depth: 0
           fetch-tags: true
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.13"
           cache: pip
 
       - name: Install tooling
-        run: python -m pip install -U pip uv pdm build twine packaging
-
-      - name: Verify tag is canonical PEP 440
-        if: github.ref_type == 'tag'
-        run: |
-          python - <<'PY'
-          from packaging.version import InvalidVersion, Version
-
-          raw_tag = "${{ github.ref_name }}"
-          try:
-              parsed = Version(raw_tag)
-          except InvalidVersion as exc:
-              raise SystemExit(f"Invalid PEP 440 tag: {raw_tag!r}") from exc
-
-          if str(parsed) != raw_tag:
-              raise SystemExit(
-                  f"Tag must already be canonical PEP 440, got {raw_tag!r}, canonical={str(parsed)!r}."
-              )
-
-          print(f"Tag check passed: {raw_tag}")
-          PY
-
-      - name: Sync package version from release tag
-        if: github.ref_type == 'tag'
-        run: python scripts/sync_release_version.py --version "${{ github.ref_name }}"
+        run: python -m pip install -U pip uv pdm build twine
 
       - name: Sync dependencies
-        run: pdm sync -G dev --no-self
+        run: pdm sync -G dev
 
       - name: Run code checks
         run: pdm run check
 
-      - name: Build distribution
+      - name: Build distributions
         run: pdm build
+
+      - name: Verify final release identity
+        run: >-
+          python scripts/verify_release_candidate.py
+          --kind final
+          --tag "${RELEASE_TAG}"
+          --expected-commit "${GITHUB_SHA}"
+          --dist dist
 
       - name: Check built artifacts
         run: python -m twine check dist/*
 
-      - name: Upload dist artifacts
-        uses: actions/upload-artifact@v7
+      - name: Rebuild wheel from sdist
+        run: >-
+          python -m scripts.rebuild_wheel_from_sdist
+          --dist dist
+          --output build/sdist-wheel
+
+      - name: Check rebuilt artifacts
+        run: python -m twine check build/sdist-wheel/*
+
+      - name: Verify installed wheel publication identities
+        run: |
+          python -m venv .wheel-smoke
+          .wheel-smoke/bin/python -m pip install -U pip
+          .wheel-smoke/bin/python -m pip install dist/*.whl
+          .wheel-smoke/bin/python scripts/verify_installed_wheel.py
+          .wheel-smoke/bin/python -m pip install --force-reinstall --no-deps build/sdist-wheel/*.whl
+          .wheel-smoke/bin/python scripts/verify_installed_wheel.py
+
+      - name: Retain verified final artifacts for publish job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: py-dist
+          name: bioextract-final-${{ github.event.release.tag_name }}
           path: dist/*
           if-no-files-found: error
+          retention-days: 1
 
-  publish:
-    needs: build
-    if: github.ref_type == 'tag'
+  final_publish:
+    if: >-
+      ${{ needs.final_build.result == 'success' &&
+      github.event.action == 'published' &&
+      !github.event.release.prerelease }}
+    needs: final_build
     runs-on: ubuntu-latest
     permissions:
       id-token: write
     environment:
       name: pypi
     steps:
-      - name: Download dist artifacts
-        uses: actions/download-artifact@v8
+      - name: Download verified final artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: py-dist
+          name: bioextract-final-${{ github.event.release.tag_name }}
           path: dist
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish final release to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
+        with:
+          packages-dir: dist
+
+  rc_build:
+    if: ${{ github.event.action == 'published' && github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      PDM_IGNORE_SAVED_PYTHON: "1"
+      PDM_VENV_IN_PROJECT: "1"
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install tooling
+        run: python -m pip install -U pip uv pdm build twine
+
+      - name: Sync dependencies
+        run: pdm sync -G dev
+
+      - name: Run code checks
+        run: pdm run check
+
+      - name: Build distributions
+        run: pdm build
+
+      - name: Verify release-candidate identity
+        run: >-
+          python scripts/verify_release_candidate.py
+          --kind rc
+          --tag "${RELEASE_TAG}"
+          --expected-commit "${GITHUB_SHA}"
+          --dist dist
+
+      - name: Check built artifacts
+        run: python -m twine check dist/*
+
+      - name: Rebuild wheel from sdist
+        run: >-
+          python -m scripts.rebuild_wheel_from_sdist
+          --dist dist
+          --output build/sdist-wheel
+
+      - name: Check rebuilt artifacts
+        run: python -m twine check build/sdist-wheel/*
+
+      - name: Verify installed wheel publication identities
+        run: |
+          python -m venv .wheel-smoke
+          .wheel-smoke/bin/python -m pip install -U pip
+          .wheel-smoke/bin/python -m pip install dist/*.whl
+          .wheel-smoke/bin/python scripts/verify_installed_wheel.py
+          .wheel-smoke/bin/python -m pip install --force-reinstall --no-deps build/sdist-wheel/*.whl
+          .wheel-smoke/bin/python scripts/verify_installed_wheel.py
+
+      - name: Retain verified release-candidate artifacts for publish job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bioextract-rc-${{ github.event.release.tag_name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  rc_publish:
+    if: >-
+      ${{ needs.rc_build.result == 'success' &&
+      github.event.action == 'published' &&
+      github.event.release.prerelease }}
+    needs: rc_build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment:
+      name: pypi
+    steps:
+      - name: Download verified release-candidate artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: bioextract-rc-${{ github.event.release.tag_name }}
+          path: dist
+
+      - name: Publish release candidate to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           packages-dir: dist

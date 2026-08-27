@@ -16,7 +16,7 @@ from bioextract._lazy import (
     register_replayable_source,
 )
 from bioextract._publication import validate_duckdb_metadata_v2
-from bioextract._shared import validate_group_ids
+from bioextract._shared import normalize_uniprot_selection_id, validate_group_ids
 from bioextract.errors import CapabilityError, IntegrityError
 
 from .constant import SCHEMA_VERSION, SOURCE_SCHEMA_PROFILE, RheaNamespace
@@ -1210,13 +1210,9 @@ def _normalize_ids(
                 raise ValueError(f"Invalid GO identifier: {value!r}")
             input_id = f"GO:{match.group(1)}"
             normalized.add((input_id, input_id))
-        elif namespace == "uniprot" and "|" in text:
-            parts = text.split("|")
-            if len(parts) >= 2 and parts[1].strip():
-                accession = parts[1].strip()
-                normalized.add((accession, accession))
-            else:
-                raise ValueError(f"Invalid UniProt identifier: {value!r}")
+        elif namespace == "uniprot":
+            accession = normalize_uniprot_selection_id(text)
+            normalized.add((accession, accession))
         else:
             normalized.add((text, text))
     return sorted(normalized)

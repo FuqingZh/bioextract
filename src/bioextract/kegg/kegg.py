@@ -16,8 +16,13 @@ from bioextract._publication import (
     validate_duckdb_metadata_v2,
 )
 from bioextract._tidy import TidyAsset, TidyDataset, TidySource
-from bioextract.errors import CapabilityError
+from bioextract.errors import CapabilityError, IntegrityError
 
+from ._publication_identity import (
+    FileIdentity,
+    assert_publication_current,
+    capture_file_identity,
+)
 from .brite.constant import (
     ASSET_SPECS as BRITE_ASSET_SPECS,
 )
@@ -131,6 +136,9 @@ class KEGGDatabase:
         default=None, init=False, repr=False
     )
     _publication_path: Path | None = field(default=None, init=False, repr=False)
+    _publication_identity: FileIdentity | None = field(
+        default=None, init=False, repr=False
+    )
 
     @classmethod
     def from_metabolic_files(
@@ -220,6 +228,11 @@ class KEGGDatabase:
     def from_duckdb(cls, path: os.PathLike[str] | str) -> KEGGDatabase:
         """Open a validated KEGG publication for domain and read-only access.
 
+        Raises:
+            FileNotFoundError: If ``path`` does not name a regular file.
+            ValueError: If the file is not a supported KEGG publication.
+            IntegrityError: If the file changes while it is being validated.
+
         Examples:
             >>> db = KEGGDatabase.from_duckdb("kegg.duckdb")  # doctest: +SKIP
             >>> db.snapshot.kind.value  # doctest: +SKIP
@@ -227,29 +240,57 @@ class KEGGDatabase:
             >>> with db.connect() as connection:  # doctest: +SKIP
             ...     count = connection.sql("SELECT count(*) FROM reaction").fetchone()[0]
         """
-        publication_path = Path(path)
-        profile = _read_publication_profile(publication_path)
-        if profile == "kegg-metabolic-flat-files-v1":
-            publication = open_metabolic_publication(publication_path)
-            result = cls(
-                snapshot=_KeggSnapshot(kind=_KeggSnapshotKind.METABOLIC_PUBLICATION)
+        publication_path = Path(path).absolute()
+        identity_before = capture_file_identity(publication_path)
+        try:
+            profile = _read_publication_profile(publication_path)
+            if profile == "kegg-metabolic-flat-files-v1":
+                publication = open_metabolic_publication(publication_path)
+                identity_after = _validated_publication_identity(
+                    publication_path, identity_before
+                )
+                result = cls(
+                    snapshot=_KeggSnapshot(kind=_KeggSnapshotKind.METABOLIC_PUBLICATION)
+                )
+                result._metabolic_publication = replace(
+                    publication,
+                    publication_identity=identity_after,
+                )
+                result._publication_path = publication_path
+                result._publication_identity = identity_after
+                return result
+            if profile == "kegg-organism-mapping-files-v2":
+                mapping = open_mapping_publication(publication_path)
+                identity_after = _validated_publication_identity(
+                    publication_path, identity_before
+                )
+                result = cls(
+                    snapshot=_KeggSnapshot(
+                        kind=_KeggSnapshotKind.MAPPING_PUBLICATION,
+                        mapping=replace(
+                            mapping,
+                            publication_identity=identity_after,
+                        ),
+                    ),
+                )
+                result._publication_path = publication_path
+                result._publication_identity = identity_after
+                return result
+            kind = _validate_tidy_publication(publication_path, profile=profile)
+            identity_after = _validated_publication_identity(
+                publication_path, identity_before
             )
-            result._metabolic_publication = publication
+            result = cls(snapshot=_KeggSnapshot(kind=kind))
             result._publication_path = publication_path
+            result._publication_identity = identity_after
             return result
-        if profile == "kegg-organism-mapping-files-v2":
-            result = cls(
-                snapshot=_KeggSnapshot(
-                    kind=_KeggSnapshotKind.MAPPING_PUBLICATION,
-                    mapping=open_mapping_publication(publication_path),
-                ),
+        except Exception as error:
+            _raise_if_publication_changed(
+                publication_path,
+                identity_before,
+                validation_error=error,
             )
-            result._publication_path = publication_path
-            return result
-        kind = _validate_tidy_publication(publication_path, profile=profile)
-        result = cls(snapshot=_KeggSnapshot(kind=kind))
-        result._publication_path = publication_path
-        return result
+            raise
 
     @classmethod
     def from_brite_json(
@@ -376,13 +417,17 @@ class KEGGDatabase:
             ['hsa']
         """
         mapping = self._require_mapping_snapshot("scope KEGG organisms")
-        return replace(
+        result = replace(
             self,
             snapshot=replace(
                 self.snapshot,
                 mapping=mapping.with_organisms(organism_codes),
             ),
         )
+        result._metabolic_publication = self._metabolic_publication
+        result._publication_path = self._publication_path
+        result._publication_identity = self._publication_identity
+        return result
 
     def organisms(self) -> pl.LazyFrame:
         """Return organism members and optional official metadata lazily.
@@ -481,6 +526,9 @@ class KEGGDatabase:
 
         Args:
             ids: Identifiers in the declared mapping or metabolic namespace.
+                Mapping uniprot accepts a plain accession or one complete
+                supported UniProt pipe form. NCBI Gene and KEGG Gene retain
+                their existing namespace-owned rules.
             namespace: Mapping namespaces are ``uniprot``, ``ncbi_gene``, and
                 ``kegg_gene``. Metabolic namespaces are validated against the
                 relations actually present in the opened publication.
@@ -492,7 +540,8 @@ class KEGGDatabase:
             A selection that can materialize matched rows and unmapped IDs.
 
         Raises:
-            ValueError: If this is a BRITE snapshot or the namespace is invalid.
+            ValueError: If this is a BRITE snapshot, the namespace is invalid,
+                or a mapping UniProt pipe-bearing value is malformed.
 
         Examples:
             Normalize a pipe-style UniProt ID before matching it:
@@ -559,7 +608,7 @@ class KEGGDatabase:
 
         Args:
             ids_by_group: Mapping from group name to IDs in one shared namespace.
-                Group names and IDs are normalized before limits are checked.
+                Group names and IDs are normalized by that namespace's rule.
             namespace: Shared mapping or metabolic namespace. Metabolic
                 namespaces are validated against the opened publication's
                 actual relation inventory.
@@ -571,7 +620,8 @@ class KEGGDatabase:
 
         Raises:
             ValueError: If this is a BRITE snapshot, the namespace or a group
-                name is invalid.
+                name is invalid, or a mapping UniProt pipe-bearing value is
+                malformed.
 
         Examples:
             Retain the group name on matched mapping rows:
@@ -699,6 +749,10 @@ class KEGGDatabase:
     def connect(self) -> duckdb.DuckDBPyConnection:
         """Return a new caller-owned native read-only DuckDB connection.
 
+        Raises:
+            IntegrityError: If the validated publication path was replaced or
+                became unavailable; reopen it with :meth:`from_duckdb`.
+
         Examples:
             >>> with db.connect() as connection:  # doctest: +SKIP
             ...     count = connection.sql("SELECT count(*) FROM reaction").fetchone()[0]
@@ -706,9 +760,30 @@ class KEGGDatabase:
             True
         """
         if self._publication_path is not None:
-            return duckdb.connect(str(self._publication_path), read_only=True)
-        publication = self._require_metabolic_publication()
-        return duckdb.connect(str(publication.path), read_only=True)
+            path = self._publication_path
+            identity = self._publication_identity
+        else:
+            publication = self._require_metabolic_publication()
+            path = publication.path
+            identity = publication.publication_identity
+        label = {
+            _KeggSnapshotKind.BRITE_PUBLICATION: "BRITE",
+            _KeggSnapshotKind.MAPPING_PUBLICATION: "mapping",
+            _KeggSnapshotKind.METABOLIC_PUBLICATION: "metabolic",
+        }.get(self.snapshot.kind, "publication")
+        assert_publication_current(path, identity, profile_label=label)
+        try:
+            connection = duckdb.connect(str(path), read_only=True)
+        except duckdb.Error as error:
+            raise IntegrityError(
+                f"Cannot reopen KEGG {label} publication: {path}"
+            ) from error
+        try:
+            assert_publication_current(path, identity, profile_label=label)
+        except BaseException:
+            connection.close()
+            raise
+        return connection
 
     def evaluate_modules(self, ko_ids: Iterable[str]) -> pl.DataFrame:
         """Evaluate exact KEGG module top-level blocks for the supplied KOs.
@@ -775,6 +850,37 @@ def _read_publication_profile(path: Path) -> str:
     if row is None:
         raise ValueError("KEGG publication is missing source schema profile")
     return str(row[0])
+
+
+def _validated_publication_identity(
+    path: Path,
+    identity_before: FileIdentity,
+) -> FileIdentity:
+    try:
+        identity_after = capture_file_identity(path)
+    except OSError as error:
+        raise IntegrityError("KEGG publication changed during validation") from error
+    if identity_after != identity_before:
+        raise IntegrityError("KEGG publication changed during validation")
+    return identity_after
+
+
+def _raise_if_publication_changed(
+    path: Path,
+    identity_before: FileIdentity,
+    *,
+    validation_error: Exception,
+) -> None:
+    try:
+        identity_after = capture_file_identity(path)
+    except OSError:
+        raise IntegrityError(
+            "KEGG publication changed during validation"
+        ) from validation_error
+    if identity_after != identity_before:
+        raise IntegrityError(
+            "KEGG publication changed during validation"
+        ) from validation_error
 
 
 def _validate_tidy_publication(

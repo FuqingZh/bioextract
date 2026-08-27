@@ -24,10 +24,11 @@ from bioextract._publication import (
     _connect_publication,  # pyright: ignore[reportPrivateUsage]  # shared publication boundary
     _create_metadata_schema,  # pyright: ignore[reportPrivateUsage]  # shared publication boundary
     _create_stage_path,  # pyright: ignore[reportPrivateUsage]  # shared publication boundary
-    _prepare_destination,  # pyright: ignore[reportPrivateUsage]  # shared publication boundary
     _publication_metadata,  # pyright: ignore[reportPrivateUsage]  # shared publication boundary
     _validate_duckdb_publication,  # pyright: ignore[reportPrivateUsage]  # shared publication boundary
     _write_duckdb_metadata,  # pyright: ignore[reportPrivateUsage]  # shared publication boundary
+    preflight_publication_destination,
+    require_package_version,
 )
 from bioextract.errors import IntegrityError
 
@@ -97,7 +98,9 @@ def write_native_mapping_publication(
     if_exists: Literal["fail", "replace"],
 ) -> DuckDBWriteResult:
     """Build one mapping publication with native DuckDB scans and SQL joins."""
-    destination = _prepare_destination(path, if_exists=if_exists)
+    destination = preflight_publication_destination(path, if_exists=if_exists)
+    package_version = require_package_version()
+    destination.parent.mkdir(parents=True, exist_ok=True)
     stage = _create_stage_path(destination, suffix=".duckdb")
     stage.unlink()
     connection: duckdb.DuckDBPyConnection | None = None
@@ -160,6 +163,7 @@ def write_native_mapping_publication(
             for table_name in TABLE_SCHEMAS
         }
         metadata = _publication_metadata(
+            package_version=package_version,
             resource_name="kegg",
             resource_schema_version=SCHEMA_VERSION,
             source_schema_profile=SOURCE_SCHEMA_PROFILE,

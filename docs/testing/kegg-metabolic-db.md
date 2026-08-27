@@ -1,7 +1,7 @@
 # KEGG Metabolic Database Test Standard
 
-Version: v0.1
-Date: 2026-08-07
+Version: v0.2
+Date: 2026-08-27
 Status: current
 
 The focused suites are `tests/unit/kegg/test_metabolic_parsers.py`,
@@ -24,13 +24,15 @@ only and verify:
 - module `--` placeholders, M-number references, reference cycles, and blank
   reaction separators;
 - normalized ChEBI and Rhea cross-references;
-- all canonical global relation roles and metadata schema v1;
+- all canonical global relation roles and metadata schema v2;
 - validated read-only reopening and rejection of wrong resource identity;
 - reaction-centered single and grouped selections, extraction terminals, and
   unmatched-ID accounting;
 - partial-publication capability failures and namespace availability based on
   actual cross-reference values;
 - exact module block evaluation;
+- stable validation-window identity and replacement rejection for native SQL,
+  namespace probes, selections, lazy extractors, and module evaluation;
 - preservation of existing KEGG BRITE and organism-mapping behavior.
 
 Run the focused standard with:

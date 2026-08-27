@@ -1,7 +1,7 @@
 # GO and KEGG Tidy Architecture
 
-Version: v1.1
-Date: 2026-08-10
+Version: v1.2
+Date: 2026-08-27
 Status: current
 
 ## Goal
@@ -82,13 +82,22 @@ The `edge` frame preserves parsed OBO parent and relationship edges. Derived
 (`is_a`, `part_of`) so non-hierarchical relationships such as `has_part` do not
 create graph cycles in subset OBO snapshots.
 
+Before graph derivation, a source build requires both endpoints of every
+`is_a` and `part_of` edge to exist in the parsed term inventory. A dangling
+edge raises contextual `ValueError` naming its child and parent. The equivalent
+semantic defect in a reopened DuckDB is a publication-integrity failure and
+`from_duckdb()` raises `IntegrityError`.
+
 `select_terms()` and `list_subsets()` on a reopened publication execute their
 resource-owned filters and aggregation in DuckDB. `select_ancestors()` also
 pushes canonical/alternate ID resolution, hierarchical joins, optional self
-rows, subset membership, and obsolete policy into DuckDB, then materializes
-only the final eager Polars results. `build_tidy()` remains the explicit
-complete-frame path. Source-backed and publication-backed handles expose the
-same result schemas and ordering even though their execution mechanisms differ.
+rows, subset membership, and obsolete policy into DuckDB, then exposes the
+bounded result through replayable Polars `LazyFrame` terminals. Source tidy
+construction materializes the transitive ontology closure as the documented
+global-context exception before wrapping its frames as replayable lazy
+relations. `build_tidy()` remains the explicit complete-frame path. Source-
+backed and publication-backed handles expose the same result schemas and
+ordering even though their execution mechanisms differ.
 
 KEGG BRITE JSON currently uses the standard library JSON parser, so the JSON
 tree is loaded before row traversal. The traversal and frame construction are
@@ -111,17 +120,41 @@ term_ancestor
 term_depth
 ```
 
+The stable `build_tidy().frames` to physical-table mapping is intentional:
+
+| Frame | DuckDB table |
+| --- | --- |
+| `term` | `term` |
+| `edge` | `term_relation` |
+| `synonym` | `term_synonym` |
+| `xref` | `term_xref` |
+| `alt_id` | `term_alternate_id` |
+| `subset_membership` | `subset_membership` |
+| `subset_definition` | `subset_definition` |
+| `ancestor_all` | `term_ancestor` |
+| `depth` | `term_depth` |
+
+Both name sets are contract surfaces; changing either side requires a successor
+resource schema rather than an incidental rename.
+
 KEGG BRITE DuckDB tables:
 
 ```text
 pathway
 ```
 
-GO and KEGG provenance and table counts are stored in the metadata-v1
+GO and KEGG provenance and table counts are stored in the metadata-v2
 `_bioextract` relations. A reopened KEGG BRITE publication validates resource
 identity, the `kegg-brite-json-v1` profile, the BRITE resource schema version,
 the `brite` scope, and the exact `pathway` table/role/count before exposing
 read-only SQL. Neither output requires a sidecar.
+
+`from_duckdb()` captures the KEGG BRITE file identity before profile
+inspection and confirms the same identity after full validation. The reopened
+handle checks that identity around each later `connect()` open. Replacing or
+removing the path invalidates the old handle and requires an explicit
+`from_duckdb()` reopen; it never silently changes the publication represented
+by the handle.
 
 A reopened GO publication validates the GO resource identity,
 `gene-ontology-obo-v1` profile, ontology schema version, exact nine-table

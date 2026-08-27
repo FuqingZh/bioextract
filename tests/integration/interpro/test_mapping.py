@@ -151,7 +151,10 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     )
 
     grouped = db.select_groups(
-        {"up": ["P12345"], "down": ["P12345", "MISSING"]},
+        {
+            "up": ["sp|P12345|TEST_HUMAN"],
+            "down": ["P12345", "MISSING"],
+        },
     )
 
     df_mapping = grouped.mappings().collect()
@@ -170,6 +173,19 @@ def test_select_groups_preserves_group_id(tmp_path: Path) -> None:
     assert grouped.unmatched_ids().collect().to_dicts() == [
         {"group_id": "down", "input_id": "MISSING"}
     ]
+
+
+def test_interpro_rejects_invalid_uniprot_pipe_input(tmp_path: Path) -> None:
+    files = write_interpro_fixture(tmp_path)
+    database = InterProDatabase.from_mapping_files(
+        protein_to_interpro=files["protein2ipr"]
+    )
+
+    for invalid in ("db|P12345|TEST", "sp||TEST", "sp|P12345|"):
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_ids([invalid])
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_groups({"case": [invalid]})
 
 
 def test_mapping_only_duckdb_round_trip_preserves_domain_selection(

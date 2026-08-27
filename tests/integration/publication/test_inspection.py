@@ -96,6 +96,21 @@ def test_inspection_preserves_provenance_and_deterministic_order(
     assert result.validation_issues[0].message == "fixture warning"
 
 
+def test_legacy_unknown_package_version_remains_observable(
+    tmp_path: Path,
+) -> None:
+    path = _publication(tmp_path)
+    with duckdb.connect(str(path)) as connection:
+        connection.execute(
+            "UPDATE _bioextract.metadata SET value='unknown' "
+            "WHERE key='bioextract.package_version'"
+        )
+
+    result = publication.inspect_publication(path)
+
+    assert result.package_version == "unknown"
+
+
 def test_default_inspection_opens_read_only_closes_and_does_not_count_domain_rows(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

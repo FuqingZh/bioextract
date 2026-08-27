@@ -82,12 +82,18 @@ def test_mapping_publication_preserves_selection_semantics(tmp_path: Path) -> No
     path = tmp_path / "mapping.duckdb"
     source = _mapping_source(tmp_path)
     expected = source.select_groups(
-        {"case": ["P12345", "missing"], "repeat": ["P12345"]},
+        {
+            "case": ["sp|P12345|TEST", "missing"],
+            "repeat": ["P12345"],
+        },
         namespace="uniprot",
     )
     source.write_duckdb(path)
     actual = KEGGDatabase.from_duckdb(path).select_groups(
-        {"case": ["P12345", "missing"], "repeat": ["P12345"]},
+        {
+            "case": ["tr|P12345|TEST", "missing"],
+            "repeat": ["P12345"],
+        },
         namespace="uniprot",
     )
 

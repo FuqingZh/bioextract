@@ -1,9 +1,17 @@
 import json
+from importlib import import_module
 from pathlib import Path
+from typing import Protocol, cast
 
 import polars as pl
+import pytest
 
+from bioextract.errors import IntegrityError
 from bioextract.kegg import KEGGDatabase
+
+
+class _TidyValidator(Protocol):
+    def __call__(self, path: Path, *, profile: str) -> object: ...
 
 
 def write_minimal_brite_json(file_in: Path, *, has_leaf: bool = True) -> None:
@@ -92,3 +100,85 @@ def test_kegg_db_build_tidy_exposes_frames_and_writes_duckdb(tmp_path: Path) -> 
         "ko_id": "K00845",
         "ko_name": "glk; glucokinase [EC:2.7.1.2]",
     }
+
+
+def test_reopened_brite_handle_rejects_replaced_publication(tmp_path: Path) -> None:
+    first_source = tmp_path / "first.json"
+    second_source = tmp_path / "second.json"
+    target = tmp_path / "kegg.duckdb"
+    replacement = tmp_path / "replacement.duckdb"
+    write_minimal_brite_json(first_source)
+    write_minimal_brite_json(second_source)
+    KEGGDatabase.from_brite_json(first_source).write_duckdb(target)
+    stale = KEGGDatabase.from_duckdb(target)
+    KEGGDatabase.from_brite_json(second_source).write_duckdb(replacement)
+
+    replacement.replace(target)
+
+    with pytest.raises(IntegrityError, match="BRITE publication was replaced"):
+        stale.connect()
+    fresh = KEGGDatabase.from_duckdb(target)
+    with fresh.connect() as connection:
+        assert connection.execute("SELECT count(*) FROM pathway").fetchone() == (2,)
+
+
+def test_from_duckdb_rejects_replacement_during_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_source = tmp_path / "first.json"
+    second_source = tmp_path / "second.json"
+    target = tmp_path / "kegg.duckdb"
+    replacement = tmp_path / "replacement.duckdb"
+    write_minimal_brite_json(first_source)
+    write_minimal_brite_json(second_source)
+    KEGGDatabase.from_brite_json(first_source).write_duckdb(target)
+    KEGGDatabase.from_brite_json(second_source).write_duckdb(replacement)
+    implementation = import_module("bioextract.kegg.kegg")
+    original = cast(
+        "_TidyValidator",
+        implementation.__dict__["_validate_tidy_publication"],
+    )
+
+    def replace_after_validation(path: Path, *, profile: str) -> object:
+        validated = original(path, profile=profile)
+        replacement.replace(path)
+        return validated
+
+    monkeypatch.setattr(
+        implementation,
+        "_validate_tidy_publication",
+        replace_after_validation,
+    )
+
+    with pytest.raises(IntegrityError, match="changed during validation"):
+        KEGGDatabase.from_duckdb(target)
+
+
+def test_from_duckdb_classifies_interrupted_replacement_as_integrity_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_source = tmp_path / "first.json"
+    second_source = tmp_path / "second.json"
+    target = tmp_path / "kegg.duckdb"
+    replacement = tmp_path / "replacement.duckdb"
+    write_minimal_brite_json(first_source)
+    write_minimal_brite_json(second_source)
+    KEGGDatabase.from_brite_json(first_source).write_duckdb(target)
+    KEGGDatabase.from_brite_json(second_source).write_duckdb(replacement)
+    implementation = import_module("bioextract.kegg.kegg")
+
+    def interrupt_validation(path: Path, *, profile: str) -> object:
+        del path, profile
+        replacement.replace(target)
+        raise ValueError("simulated validator interruption")
+
+    monkeypatch.setattr(
+        implementation,
+        "_validate_tidy_publication",
+        interrupt_validation,
+    )
+
+    with pytest.raises(IntegrityError, match="changed during validation"):
+        KEGGDatabase.from_duckdb(target)

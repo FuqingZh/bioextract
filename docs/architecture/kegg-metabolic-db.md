@@ -1,7 +1,7 @@
 # KEGG Metabolic Database
 
-Version: v0.1
-Date: 2026-08-07
+Version: v0.2
+Date: 2026-08-27
 Status: current
 
 ## Purpose
@@ -36,7 +36,7 @@ caller-declared official release identity with
 supply or validate release identity.
 Entry batches are streamed record by record; excluded large fields are not
 published. The writer stages locally beside the requested destination,
-publishes metadata schema v1, verifies inventory and row counts read-only, and
+publishes metadata schema v2, verifies inventory and row counts read-only, and
 then atomically commits the requested DuckDB destination.
 
 Directory-backed provenance contains only the final retained or replacement
@@ -84,4 +84,9 @@ outcomes, and missing replacement targets are persisted as validation issues.
 `KEGGDatabase.from_duckdb(path)` validates identity, supported metadata and
 resource schema versions, table inventory, and row-count parity.
 `connect()` returns a new caller-owned native DuckDB connection opened with
-`read_only=True`; arbitrary SQL remains a DuckDB concern.
+`read_only=True`; arbitrary SQL remains a DuckDB concern. The handle pins the
+filesystem identity that stayed stable across profile and full publication
+validation. Native connections, namespace probes, selection matches and
+extractors, unmatched-status reads, and module evaluation check the identity
+around every later open. Replacing or removing the path invalidates the old
+handle and requires an explicit `from_duckdb()` reopen.

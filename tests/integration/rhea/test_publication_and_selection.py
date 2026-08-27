@@ -583,6 +583,32 @@ def test_supported_namespaces_resolve_official_mappings(
     )
 
     assert 10000 in matches["rhea_id"].to_list()
+    if namespace == "uniprot":
+        assert matches["input_id"].unique().to_list() == ["P00001"]
+
+
+def test_uniprot_pipe_grammar_is_strict_for_rhea_selections(tmp_path: Path) -> None:
+    release = _write_release(tmp_path / "release")
+    path = tmp_path / "rhea.duckdb"
+    RheaDatabase.from_files(release).write_duckdb(path)
+    database = RheaDatabase.from_duckdb(path)
+
+    for invalid in ("db|P00001|TEST", "sp||TEST", "sp|P00001|"):
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_reactions([invalid], namespace="uniprot")
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_groups({"case": [invalid]}, namespace="uniprot")
+
+    exact_external = database.select_reactions(
+        [" sp|RXN-1|SOURCE_TEXT "],
+        namespace="ecocyc",
+    )
+    assert exact_external.unmatched_ids().collect().to_dicts() == [
+        {
+            "input_id": "sp|RXN-1|SOURCE_TEXT",
+            "input_namespace": "ecocyc",
+        }
+    ]
 
 
 def test_obsolete_policy_is_explicit(tmp_path: Path) -> None:

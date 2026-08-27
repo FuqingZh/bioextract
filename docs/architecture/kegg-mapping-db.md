@@ -1,7 +1,7 @@
 # KEGG Mapping Database Architecture
 
-Version: v2.1
-Date: 2026-08-14
+Version: v2.3
+Date: 2026-08-27
 Status: current
 
 ## Boundary
@@ -69,6 +69,19 @@ or `mappings()` compatibility method. Callers use native Polars `collect()`,
 Direct gene-pathway observations and gene-to-KO-to-pathway traversal are
 separate relations. The latter retains `ko_id` inside every evidence struct.
 
+## Selection Input Identity
+
+The mapping `uniprot` namespace accepts a trimmed plain accession, its
+existing `up:` form, or one complete `sp|accession|entry_name` /
+`tr|accession|entry_name` representation. The resulting accession is public
+`input_id` and the deduplicated membership key. Any other pipe-bearing
+UniProt caller value raises `ValueError`.
+
+`ncbi_gene` retains its existing optional `ncbi-geneid:` rule and otherwise
+preserves trimmed text. `kegg_gene` still requires a full organism prefix.
+Neither non-UniProt namespace uses the UniProt representation parser, and
+official mapping-file rows continue through their resource-owned parsers.
+
 ## Aggregate Schemas
 
 Every mapping publication contains exactly:
@@ -133,3 +146,11 @@ written.
 
 Old wide-table mapping publications and metadata v1 are intentionally rejected
 without aliases or migration views.
+
+A reopened mapping handle pins the filesystem identity that remained stable
+across profile and publication validation. Every native `connect()`, selection
+match, and replayable publication relation checks that identity before opening
+DuckDB and after a successful read. `with_organisms()` retains the same pinned
+identity. If the path is removed or atomically replaced, the old handle fails
+with `IntegrityError` and the caller must explicitly reopen it with
+`from_duckdb()`.

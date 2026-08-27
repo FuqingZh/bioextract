@@ -180,15 +180,23 @@ def test_idmapping_selected_access_pushes_ids_and_reports_unmatched(
 ) -> None:
     source = _write_idmapping(tmp_path / "selected.tab.gz")
     database = UniProtDatabase.from_idmapping(source)
-    selected = _mapping_selection(
+    inputs = [
+        "sp|P12345|TEST_HUMAN",
+        "tr|P12345|TEST_HUMAN",
+        "P12345",
+        "MISSING",
+    ]
+    selected_source = _mapping_selection(
         database,
-        ["P12345", "MISSING"],
+        inputs,
         taxon_ids=["9606"],
     )
-    assert selected.mappings().select(
-        "input_id", "uniprot_id"
-    ).collect().to_dicts() == [{"input_id": "P12345", "uniprot_id": "P12345"}]
-    assert selected.unmatched_ids().collect().to_dicts() == [
+    source_mappings = selected_source.mappings().collect()
+    source_unmatched = selected_source.unmatched_ids().collect()
+    assert source_mappings.select("input_id", "uniprot_id").to_dicts() == [
+        {"input_id": "P12345", "uniprot_id": "P12345"}
+    ]
+    assert source_unmatched.to_dicts() == [
         {
             "input_id": "MISSING",
             "input_namespace": "uniprot",
@@ -201,12 +209,16 @@ def test_idmapping_selected_access_pushes_ids_and_reports_unmatched(
     reopened = UniProtDatabase.from_duckdb(publication)
     selected_reopened = _mapping_selection(
         reopened,
-        ["P12345", "MISSING"],
+        inputs,
         taxon_ids=["9606"],
     )
-    assert selected_reopened.mappings().select(
-        "input_id", "tax_id"
-    ).collect().to_dicts() == [{"input_id": "P12345", "tax_id": "9606"}]
+    reopened_mappings = selected_reopened.mappings().collect()
+    reopened_unmatched = selected_reopened.unmatched_ids().collect()
+    assert reopened_mappings.equals(source_mappings)
+    assert reopened_unmatched.equals(source_unmatched)
+    assert reopened_mappings.select("input_id", "tax_id").to_dicts() == [
+        {"input_id": "P12345", "tax_id": "9606"}
+    ]
 
 
 def test_idmapping_selected_access_uses_relation_for_large_input_sets(
@@ -315,7 +327,7 @@ def test_knowledgebase_publication_selection_and_metadata(tmp_path: Path) -> Non
     assert database.release_version == "2026_01"
     matches = _knowledgebase_selection(
         database,
-        ["Q11111", "TEST", "missing"],
+        ["sp|Q11111|TEST_HUMAN", "TEST", "missing"],
         namespace="uniprot",
     )
     assert matches.proteins().collect()["primary_accession"].to_list() == ["P12345"]
@@ -633,7 +645,7 @@ def test_group_selection_resolves_each_identifier_once(
     )
     selection = database.select_groups(
         {
-            "case": [" P12345 ", "P12345", "missing"],
+            "case": [" sp|P12345|TEST_HUMAN ", "P12345", "missing"],
             "control": ["P12345", "missing"],
             "empty": [],
         },
@@ -671,7 +683,26 @@ def test_selection_and_fasta_inputs_reject_empty_values(tmp_path: Path) -> None:
         database.select_groups(
             {" A ": ["P12345"], "A": ["Q11111"]}, namespace="uniprot"
         )
+    for invalid in ("db|P12345|TEST", "sp||TEST", "sp|P12345|"):
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_ids([invalid], namespace="uniprot")
+        with pytest.raises(ValueError, match="UniProt pipe-form"):
+            database.select_groups({"case": [invalid]}, namespace="uniprot")
 
+    exact_entry_name = database.select_ids(
+        ["sp|P12345|TEST_HUMAN"], namespace="entry_name"
+    )
+    assert isinstance(exact_entry_name, uniprot_query.UniProtSelection)
+    assert exact_entry_name.unmatched_ids().collect().select("input_id").to_dicts() == [
+        {"input_id": "sp|P12345|TEST_HUMAN"}
+    ]
+    exact_grouped_entry_name = database.select_groups(
+        {"case": ["sp|P12345|TEST_HUMAN"]},
+        namespace="entry_name",
+    )
+    assert exact_grouped_entry_name.unmatched_ids().collect().select(
+        "group_id", "input_id"
+    ).to_dicts() == [{"group_id": "case", "input_id": "sp|P12345|TEST_HUMAN"}]
     empty_fasta = tmp_path / "empty-sequence.fasta"
     empty_fasta.write_text(">sp|P12345|TEST_HUMAN\n   \n\t\n", encoding="utf-8")
     with pytest.raises(ValueError, match="invalid sequence characters"):
@@ -708,6 +739,15 @@ def test_selection_and_fasta_inputs_reject_empty_values(tmp_path: Path) -> None:
         UniProtDatabase.from_knowledgebase(
             entries=entries, isoform_sequences=invalid_fasta
         ).write_duckdb(tmp_path / "invalid-characters.duckdb")
+
+
+def test_idmapping_rejects_invalid_uniprot_pipe_input(tmp_path: Path) -> None:
+    database = UniProtDatabase.from_idmapping(
+        _write_idmapping(tmp_path / "selected.tab.gz")
+    )
+
+    with pytest.raises(ValueError, match="UniProt pipe-form"):
+        database.select_ids(["db|P12345|TEST"], namespace="uniprot")
 
 
 def test_dat_crc64_must_match_sequence(tmp_path: Path) -> None:

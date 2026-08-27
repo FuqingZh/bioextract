@@ -30,7 +30,7 @@
 `XDatabase.from_duckdb(path)`，每次调用 `connect()` 都会返回一个全新、由调用方
 管理的只读 DuckDB 连接。写入器先在暂存文件中完成验证，只有成功后才原子发布。
 发布来源信息恰好存放在 DuckDB `_bioextract` schema 的五个关系中；生物学关系
-存放在 `main`。Metadata v1 是目前唯一受支持的发布元数据契约。Parquet 只作为
+存放在 `main`。Metadata v2 是目前唯一受支持的发布元数据契约。Parquet 只作为
 上游格式、内部传输格式或通用交换格式使用，绝不是 bioextract 的规范发布格式。
 
 在添加资源、公共查询方法或存储策略之前，请先阅读
@@ -90,10 +90,10 @@ selection = database.select_compounds(
     namespace="chebi",
 )
 
-df_compounds = selection.extract_compounds()
-df_names = selection.extract_names()
-df_relations = selection.extract_relations()
-df_unmatched = selection.extract_unmatched_ids()
+lf_compounds = selection.compounds()
+lf_names = selection.names()
+lf_relations = selection.relations()
+lf_unmatched = selection.unmatched_ids()
 
 with database.connect() as connection:
     prefixes = connection.execute(
@@ -142,15 +142,16 @@ selection = database.select_reactions(
     namespace="chebi",
 )
 
-df_matches = selection.extract_matches()
-df_reactions = selection.extract_reactions()
-df_participants = selection.extract_participants()
-df_cross_references = selection.extract_cross_references()
-df_unmatched = selection.extract_unmatched_ids()
+lf_matches = selection.matches()
+lf_reactions = selection.reactions()
+lf_participants = selection.participants()
+lf_cross_references = selection.cross_references()
+lf_unmatched = selection.unmatched_ids()
 ```
 
-`select_reactions()` 和 `select_groups()` 是延迟执行的领域查询计划；其
-`extract_*()` 终端返回立即求值的 Polars `DataFrame`。参与物输出会保留准确的
+`select_reactions()` 和 `select_groups()` 是延迟执行的领域查询计划；其名词终端
+返回可重放的 Polars `LazyFrame`。在需要立即求值 `DataFrame` 的应用边界调用
+`.collect()`。参与物输出会保留准确的
 Rhea ID、主反应 ID、方向、反应侧和化合物字段。ChEBI 字段使用完整的
 `CHEBI:<number>` CURIE，无需拼接前缀或类型转换即可与 ChEBI 发布产物等值连接。
 `directional_role` 只为 `LR` 和 `RL` 填充值；方向未定义或双向的反应保留空值，
@@ -174,8 +175,8 @@ selection = go.select_ancestors(
     target_subset_id="goslim_generic",
     include_self=True,
 )
-df_ancestors = selection.extract_ancestors()
-df_unmatched = selection.extract_unmatched_ids()
+lf_ancestors = selection.ancestors()
+lf_unmatched = selection.unmatched_ids()
 result = go.write_duckdb("out/go.duckdb")
 ```
 
@@ -212,9 +213,9 @@ database.write_duckdb("out/kegg.duckdb")
 published = KEGGDatabase.from_duckdb("out/kegg.duckdb")
 selection = published.select_ids(["CHEBI:15377"], namespace="chebi")
 
-df_reactions = selection.extract_reactions()
-df_pathways = selection.extract_pathway_memberships()
-df_unmatched = selection.extract_unmatched_ids()
+lf_reactions = selection.reactions()
+lf_pathways = selection.pathway_memberships()
+lf_unmatched = selection.unmatched_ids()
 
 with published.connect() as connection:
     relation = connection.sql(
@@ -264,7 +265,7 @@ db = EggNOGDatabase.from_sqlite(
     "eggnog.db",
     cog_functions="cog-24.fun.tab",
 )
-mapping = db.select_ids(["9606.ENSP00000369497"]).extract_mapping()
+mapping = db.select_ids(["9606.ENSP00000369497"]).mappings()
 ```
 
 选择操作直接查询未压缩 SQLite，无需发布衍生产物。可以传入 gzip 封装的 SQLite，
@@ -307,7 +308,7 @@ UniProtDatabase.from_idmapping(
 )
 
 mapping = UniProtDatabase.from_duckdb("out/uniprot_idmapping.duckdb")
-human = mapping.read_mapping(taxon_ids=["9606"])
+human = mapping.scan_mapping(taxon_ids=["9606"])
 with mapping.connect() as connection:
     print(connection.sql("SELECT count(*) FROM mapping").fetchone())
 ```
@@ -327,7 +328,7 @@ proteins = db.select_ids(
     ["P04637"],
     namespace="uniprot",
     taxon_ids=["9606"],
-).extract_proteins()
+).proteins()
 with db.connect() as connection:
     relation_count = connection.execute(
         "SELECT count(*) FROM protein"
@@ -358,12 +359,17 @@ selection = (
     .with_min_combined_score(400)
 )
 
-df_mapping = selection.extract_string_mapping()
-df_unmapped = selection.extract_unmatched_ids()
-df_edges = selection.extract_edges()
+lf_mapping = selection.mappings()
+lf_unmapped = selection.unmatched_ids()
+lf_edges = selection.edges()
 ```
 
 `combined_score` 是 STRING 置信分数，而不是相互作用强度的度量。
+
+STRING 的别名选择接受普通的非 pipe 别名文本，或完整的 UniProt
+`sp|accession|entry_name` / `tr|accession|entry_name` 表示。非法的含 pipe
+别名会抛出 `ValueError`；`namespace="string"` 的输入只在去除两端空白后
+按 STRING protein ID 原文匹配。
 
 ## OmniPath
 
@@ -379,9 +385,12 @@ selection = (
     .with_enzsub()
 )
 
-df_enzsub = selection.extract_enzsub()
-df_unmapped = selection.extract_unmatched_ids()
+lf_enzsub = selection.enzsub()
+lf_unmapped = selection.unmatched_ids()
 ```
+
+OmniPath 的 protein 选择接受普通 protein ID 或相同的完整 UniProt pipe
+表示；非法的含 pipe 调用方输入会在查找前被拒绝。
 
 ## 命名与兼容性
 

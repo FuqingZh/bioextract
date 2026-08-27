@@ -1,7 +1,7 @@
 # UniProtDatabase Architecture
 
-Version: v1.0
-Date: 2026-07-30
+Version: v1.1
+Date: 2026-08-27
 Status: current
 
 `UniProtDatabase` exposes independent idmapping and reviewed UniProtKB
@@ -86,6 +86,21 @@ entry's canonical sequence. `External` and `Not described` remain unresolved.
 Varsplic headers resolve through the identifier relation and update only the
 unique `Alternative` owner product.
 
+## Caller Identifier Representations
+
+For both UniProtKB and idmapping single selection, `namespace="uniprot"`
+accepts either a trimmed non-pipe accession or one complete
+`sp|accession|entry_name` / `tr|accession|entry_name` representation. The
+accession becomes the canonical public `input_id`, deduplication key, and
+unmatched-accounting key. Any other pipe-bearing caller value raises
+`ValueError`.
+
+UniProtKB grouped selection applies the same rule. Idmapping remains
+single-selection only. UniProtKB `entry_name`, `gene_name`, `gene_id`,
+`refseq`, `ensembl`, and `isoform_id` retain their trimmed exact-text
+rules and are not passed through the UniProt pipe parser. This caller-input
+contract is separate from DAT and FASTA source parsing.
+
 ## Selection And Lazy Relation Schemas
 
 Every matched relation begins with the stable selection prefix
@@ -120,7 +135,7 @@ the same frame can instead use `collect_batches()` or a Polars `sink_*()`
 method. The physical idmapping scan remains explicitly named:
 `database.scan_mapping(taxon_ids=...).collect()`.
 
-`from_duckdb()` validates the shared exact five-table metadata-v1 provenance
+`from_duckdb()` validates the shared exact five-table metadata-v2 provenance
 schema, resource/source profile, capabilities, exact table inventories, and
 physical column order/types/nullability. Reopening does not scan large domain
 tables to recount them; staged publication validation owns bounded row-count
