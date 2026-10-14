@@ -1,9 +1,12 @@
 """Direct, validated access to official curated ComplexTab snapshots."""
 
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import polars as pl
+
+from bioextract._lazy import register_replayable_source
 
 __all__ = ["ComplexPortalDatabase"]
 
@@ -28,13 +31,16 @@ COLUMNS = (
     "Source",
     "Expanded participant list",
 )
-_ACCESSION = r"[A-Z0-9]{6,10}(?:-(?:[0-9]+|PRO_[0-9]+))?"
+_ACCESSION = (
+    r"(?:[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9](?:[A-Z][A-Z0-9]{2}[0-9]){1,2})"
+    r"(?:-(?:[0-9]+|PRO_[0-9]+))?"
+)
 _MEMBER = rf"^({_ACCESSION}|EBI-[0-9]+|\[{_ACCESSION}(?:,{_ACCESSION})*\])\([0-9]+\)$"
 
 
-def _identity(path: Path) -> tuple[int, int, int, int]:
+def _identity(path: Path) -> tuple[int, int, int, int, int]:
     info = path.stat()
-    return info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
 def _scan(path: Path) -> pl.LazyFrame:
@@ -57,7 +63,7 @@ class ComplexPortalDatabase:
 
     path: Path
     release_version: str
-    _identity: tuple[int, int, int, int]
+    _identity: tuple[int, int, int, int, int]
     taxon_id: str | None = None
 
     @classmethod
@@ -107,21 +113,68 @@ class ComplexPortalDatabase:
             raise ValueError(
                 "invalid expanded ComplexTab protein/set/stoichiometry token"
             )
-        if tokens.select("#Complex ac", "token").is_duplicated().any():
-            raise ValueError("duplicate expanded protein member token")
+        if (
+            tokens.select(
+                pl.col("token")
+                .str.extract(r"\(([0-9]+)\)$", 1)
+                .cast(pl.Int64, strict=False)
+            )
+            .to_series()
+            .null_count()
+        ):
+            raise ValueError("expanded ComplexTab stoichiometry exceeds Int64 range")
+        participants = tokens.select(
+            "#Complex ac",
+            pl.col("token")
+            .str.extract(r"^(.+)\([0-9]+\)$", 1)
+            .str.strip_chars("[]")
+            .str.split(",")
+            .alias("participant_id"),
+        ).explode("participant_id")
+        if participants.is_duplicated().any():
+            raise ValueError("duplicate expanded protein member identity in token")
         if _identity(path) != before:
             raise ValueError("ComplexTab mutated during validation")
         return cls(path, release_version, before)
 
-    def _validated_scan(self) -> pl.LazyFrame:
+    def _check_identity(self) -> None:
         if _identity(self.path) != self._identity:
             raise ValueError("ComplexTab changed; reopen the source")
-        frame = _scan(self.path)
-        return (
-            frame
-            if self.taxon_id is None
-            else frame.filter(pl.col("Taxonomy identifier") == self.taxon_id)
+
+    def _validated_scan(self) -> pl.LazyFrame:
+        self._check_identity()
+        return register_replayable_source(
+            schema=dict.fromkeys(COLUMNS, pl.String),
+            batches=lambda request: self._checked_batches(
+                columns=request.columns,
+                predicate=request.predicate,
+                n_rows=request.n_rows,
+                chunk_size=request.effective_batch_size,
+            ),
         )
+
+    def _checked_batches(
+        self,
+        *,
+        columns: tuple[str, ...] | None,
+        predicate: pl.Expr | None,
+        n_rows: int | None,
+        chunk_size: int,
+    ) -> Iterator[pl.DataFrame]:
+        self._check_identity()
+        frame = _scan(self.path)
+        if self.taxon_id is not None:
+            frame = frame.filter(pl.col("Taxonomy identifier") == self.taxon_id)
+        if predicate is not None:
+            frame = frame.filter(predicate)
+        if columns is not None:
+            frame = frame.select(columns)
+        if n_rows is not None:
+            frame = frame.head(n_rows)
+        for batch in frame.collect_batches(chunk_size=chunk_size):
+            self._check_identity()
+            yield batch
+        self._check_identity()
 
     def with_taxon(self, taxon_id: str) -> "ComplexPortalDatabase":
         """Return a taxon-scoped view; no species-name or orthology inference."""

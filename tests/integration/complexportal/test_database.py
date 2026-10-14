@@ -1,6 +1,7 @@
 """Official-format fixtures exercise complex membership and integrity boundaries."""
 
 import csv
+from collections.abc import Iterator
 from pathlib import Path
 
 import polars as pl
@@ -98,3 +99,104 @@ def test_unresolved_intact_participant_is_preserved_without_uniprot_inference(
     row = db.expanded_members().collect().row(0, named=True)
     assert row["participant_id"] == "EBI-25775462"
     assert row["identifier_namespace"] == "intact"
+
+
+@pytest.mark.parametrize("accession", ["ABCDEF", "P123456", "A12345", "A0A023GPIX"])
+def test_invalid_uniprot_accession_is_rejected(tmp_path: Path, accession: str) -> None:
+    with pytest.raises(ValueError, match="token"):
+        ComplexPortalDatabase.from_files(
+            complextab=_file(tmp_path, f"{accession}(1)"), release_version="test"
+        )
+
+
+@pytest.mark.parametrize("accession", ["A2BC19", "P12345", "A0A023GPI8", "Q12345-2"])
+def test_official_uniprot_accession_forms_are_retained(
+    tmp_path: Path, accession: str
+) -> None:
+    db = ComplexPortalDatabase.from_files(
+        complextab=_file(tmp_path, f"{accession}(1)"), release_version="test"
+    )
+    assert db.expanded_members().collect()["participant_id"].to_list() == [accession]
+
+
+@pytest.mark.parametrize(
+    "members",
+    ["P12345(1)|P12345(2)", "[P12345,P12345](1)", "P12345(1)|[P12345,Q12345](1)"],
+)
+def test_duplicate_participant_identity_is_rejected(
+    tmp_path: Path, members: str
+) -> None:
+    with pytest.raises(ValueError, match="duplicate"):
+        ComplexPortalDatabase.from_files(
+            complextab=_file(tmp_path, members), release_version="test"
+        )
+
+
+def test_stoichiometry_range_is_validated_before_returning_handle(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="stoichiometry"):
+        ComplexPortalDatabase.from_files(
+            complextab=_file(tmp_path, "P12345(9223372036854775808)"),
+            release_version="test",
+        )
+    db = ComplexPortalDatabase.from_files(
+        complextab=_file(tmp_path, "P12345(9223372036854775807)"),
+        release_version="test",
+    )
+    assert db.expanded_members().collect()["stoichiometry"][0] == 9223372036854775807
+
+
+@pytest.mark.parametrize("relation", ["complexes", "expanded_members"])
+@pytest.mark.parametrize("replay", [False, True])
+def test_lazy_execution_rejects_changed_source(
+    tmp_path: Path, relation: str, replay: bool
+) -> None:
+    path = _file(tmp_path)
+    db = ComplexPortalDatabase.from_files(complextab=path, release_version="test")
+    plan = getattr(db.with_taxon("9606"), relation)().head(2)
+    if replay:
+        assert plan.collect().height > 0
+    path.write_text(path.read_text().replace("CPX-17", "CPX-18"))
+    with pytest.raises(
+        (ValueError, pl.exceptions.ComputeError), match="ComplexTab changed"
+    ):
+        plan.collect()
+
+
+def test_replay_preserves_filter_projection_and_limit(tmp_path: Path) -> None:
+    path = _file(tmp_path)
+    text = path.read_text()
+    row = text.splitlines()[-1].replace("CPX-17", "CPX-18").replace("9606", "10090")
+    path.write_text(text + row + "\n")
+    db = ComplexPortalDatabase.from_files(complextab=path, release_version="test")
+    plan = (
+        db.complexes()
+        .filter(pl.col("Taxonomy identifier") == "10090")
+        .select("#Complex ac")
+        .head(1)
+    )
+    assert plan.collect().to_dicts() == [{"#Complex ac": "CPX-18"}]
+    assert plan.collect().to_dicts() == [{"#Complex ac": "CPX-18"}]
+
+
+def test_source_change_during_native_scan_cannot_emit_new_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _file(tmp_path)
+    db = ComplexPortalDatabase.from_files(complextab=path, release_version="test")
+    plan = db.complexes()
+    original_batches = pl.LazyFrame.collect_batches
+
+    def changed_batches(
+        frame: pl.LazyFrame, *, chunk_size: int
+    ) -> Iterator[pl.DataFrame]:
+        for batch in original_batches(frame, chunk_size=chunk_size):
+            path.write_text(path.read_text().replace("CPX-17", "CPX-18"))
+            yield batch
+
+    monkeypatch.setattr(pl.LazyFrame, "collect_batches", changed_batches)
+    with pytest.raises(
+        (ValueError, pl.exceptions.ComputeError), match="ComplexTab changed"
+    ):
+        plan.collect()
