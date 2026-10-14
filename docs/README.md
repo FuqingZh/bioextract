@@ -87,6 +87,7 @@ publication, clean-source distribution, canonical final/RC tag, and legacy
 | UniProt | [UniProtDatabase](architecture/uniprot-db.md) | [UniProtDatabase](testing/uniprot-db.md) | [KB 2026_01 baseline](benchmarks/20260731-uniprot-kb-2026_01-benchmark.md); [idmapping scan decision](benchmarks/20260812-uniprot-idmapping-scan-benchmark.md) |
 | Rhea | [RheaDatabase](architecture/rhea-db.md) | [RheaDatabase](testing/rhea-db.md) | — |
 | STRINGdb | Root [README](../README.md), source code, and tests | [`STRINGdb integration`](../tests/integration/stringdb/test_database.py) | — |
+| Complex Portal | [ComplexTab domain contract](architecture/20261014-v1.0-complexportal-domain-contract.md) | `tests/integration/complexportal/` | fixed 2026-01-09 curated snapshot |
 | OmniPath | [OmniPath architecture](architecture/omnipath-db.md) | [OmniPath test standard](testing/omnipath-db.md) | — |
 
 ## Plans And History

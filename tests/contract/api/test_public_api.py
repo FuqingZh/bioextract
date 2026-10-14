@@ -10,6 +10,7 @@ from bioextract.errors import BioextractError, CapabilityError, IntegrityError
 
 DATABASE_MODULES = {
     "ChEBIDatabase": "bioextract.chebi",
+    "ComplexPortalDatabase": "bioextract.complexportal",
     "EggNOGDatabase": "bioextract.eggnog",
     "GODatabase": "bioextract.go",
     "InterProDatabase": "bioextract.interpro",
