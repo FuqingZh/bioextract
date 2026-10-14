@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 __all__ = [
     "ChEBIDatabase",
+    "ComplexPortalDatabase",
     "EggNOGDatabase",
     "GODatabase",
     "InterProDatabase",
@@ -26,6 +27,7 @@ __all__ = [
 
 if TYPE_CHECKING:
     from bioextract.chebi import ChEBIDatabase
+    from bioextract.complexportal import ComplexPortalDatabase
     from bioextract.eggnog import EggNOGDatabase
     from bioextract.go import GODatabase
     from bioextract.interpro import InterProDatabase
@@ -40,6 +42,7 @@ if TYPE_CHECKING:
 
 _DATABASE_MODULES: dict[str, str] = {
     "ChEBIDatabase": "bioextract.chebi",
+    "ComplexPortalDatabase": "bioextract.complexportal",
     "EggNOGDatabase": "bioextract.eggnog",
     "GODatabase": "bioextract.go",
     "InterProDatabase": "bioextract.interpro",
